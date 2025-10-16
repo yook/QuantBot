@@ -13,6 +13,7 @@
     "isolatedModules": true,
     "noEmit": true,
     "jsx": "preserve",
+    "types": ["vite/client"],
 
     /* Linting */
     "strict": true,
@@ -20,6 +21,13 @@
     "noUnusedParameters": true,
     "noFallthroughCasesInSwitch": true
   },
-  "include": ["src/**/*.ts", "src/**/*.tsx", "src/**/*.vue", "electron"],
+  "include": [
+    "src/**/*.ts",
+    "src/**/*.tsx",
+    "src/**/*.vue",
+    "src/**/*.d.ts",
+    "electron/**/*.ts",
+    "electron/**/*.d.ts"
+  ],
   "references": [{ "path": "./tsconfig.node.json" }]
 }

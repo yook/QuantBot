@@ -1,0 +1,24 @@
+{
+  "settings": [
+    { "name": "URL", "prop": "url", "width": 600 },
+    { "name": "Referrer", "prop": "referrer" },
+    { "name": "Depth", "prop": "depth", "width": 110 },
+    { "name": "Code", "prop": "code", "width": 100 },
+    { "name": "Location", "prop": "location" },
+    { "name": "Content type", "prop": "contentType", "width": 140 },
+    { "name": "Protocol", "prop": "protocol", "width": 140 },
+    { "name": "Data size, bytes", "prop": "actualDataSize", "width": 220 },
+    { "name": "Request time, ms", "prop": "requestTime", "width": 220 },
+    {
+      "name": "Waiting for server response, ms",
+      "prop": "requestLatency",
+      "width": 300
+    },
+    { "name": "Download time, ms", "prop": "downloadTime", "width": 220 },
+    { "name": "Status", "prop": "status" },
+    { "name": "Date", "prop": "date" },
+    { "name": "Error type", "prop": "error_type" },
+    { "name": "Error message", "prop": "error_message" },
+    { "name": "Created at", "prop": "created_at" }
+  ]
+}

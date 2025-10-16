@@ -1,79 +1,141 @@
+/* Global typography setup: Inter/Roboto/PT Sans (Cyrillic) */
+
+/* Element Plus dark variables (enable when html has class `dark`) */
+@import 'element-plus/theme-chalk/dark/css-vars.css';
+
+/* Prefer preconnects in index.html for performance if desired:
+	 <link rel="preconnect" href="https://fonts.googleapis.com">
+	 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+*/
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@300..800&family=Roboto:wght@300;400;500;700&family=PT+Sans:wght@400;700&display=swap&subset=latin,cyrillic");
+
 :root {
-  font-family: Inter, system-ui, Avenir, Helvetica, Arial, sans-serif;
-  line-height: 1.5;
-  font-weight: 400;
+	/* App-wide sans font stack */
+	--app-font-sans: "Inter", "Roboto", "PT Sans", "Arial", sans-serif;
 
-  color-scheme: light dark;
-  color: rgba(255, 255, 255, 0.87);
-  background-color: #242424;
-
-  font-synthesis: none;
-  text-rendering: optimizeLegibility;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
+	/* Wire Element Plus to use the same family */
+	--el-font-family: var(--app-font-sans);
+	
+	/* Base font size for the app */
+	--el-font-size-base: 14px;
 }
 
-a {
-  font-weight: 500;
-  color: #646cff;
-  text-decoration: inherit;
-}
-a:hover {
-  color: #535bf2;
+html,
+body,
+#app {
+	font-family: var(--app-font-sans);
+	font-size: 14px;
+	font-synthesis-weight: none;
+	-webkit-font-smoothing: antialiased;
+	-moz-osx-font-smoothing: grayscale;
+	text-rendering: optimizeLegibility;
+	line-height: 1.45;
+	letter-spacing: 0.011em; /* subtle tracking for readability */
 }
 
-body {
-  margin: 0;
-  display: flex;
-  place-items: center;
-  min-width: 320px;
-  min-height: 100vh;
+/* Headings */
+h1, h2, h3, h4, h5, h6 {
+	font-family: var(--app-font-sans);
+	font-weight: 600;
+	line-height: 1;
+	margin: 0;
+	color: var(--el-text-color-primary);
 }
 
 h1 {
-  font-size: 3.2em;
-  line-height: 1.1;
+	font-size: 1.286rem; /* 18px at 14px base */
+	font-weight: 700;
+	letter-spacing: -0.02em;
 }
 
-button {
-  border-radius: 8px;
-  border: 1px solid transparent;
-  padding: 0.6em 1.2em;
-  font-size: 1em;
-  font-weight: 500;
-  font-family: inherit;
-  background-color: #1a1a1a;
-  cursor: pointer;
-  transition: border-color 0.25s;
-}
-button:hover {
-  border-color: #646cff;
-}
-button:focus,
-button:focus-visible {
-  outline: 4px auto -webkit-focus-ring-color;
+h2 {
+	font-size: 1.143rem; /* 16px at 14px base */
+	font-weight: 600;
+	letter-spacing: -0.01em;
 }
 
-.card {
-  padding: 2em;
+h3 {
+	font-size: 1rem; /* 14px at 14px base */
+	font-weight: 600;
 }
 
-#app {
-  max-width: 1280px;
-  margin: 0 auto;
-  padding: 2rem;
-  text-align: center;
+/* Dark theme globals */
+html.dark,
+html.dark body,
+html.dark #app {
+	background-color: var(--el-bg-color-page, #0f1115) !important;
+	color: var(--el-text-color-primary, #e5e7eb) !important;
 }
 
-@media (prefers-color-scheme: light) {
-  :root {
-    color: #213547;
-    background-color: #ffffff;
-  }
-  a:hover {
-    color: #747bff;
-  }
-  button {
-    background-color: #f9f9f9;
-  }
+/* Force dark background to the requested color */
+html.dark {
+	--el-bg-color-page: #262c36;
+	--el-bg-color: #262c36;
 }
+
+/* App layout surfaces in dark */
+html.dark .app-aside {
+	border-right: 1px solid var(--el-border-color, #2b2f36) !important;
+	background-color: var(--el-bg-color, #111418) !important;
+}
+
+html.dark .app-content {
+	background-color: var(--el-bg-color, #111418) !important;
+}
+
+/* Nice dark scrollbars */
+html.dark ::-webkit-scrollbar {
+	width: 10px;
+	height: 10px;
+}
+html.dark ::-webkit-scrollbar-track {
+	background: var(--el-fill-color-darker);
+}
+html.dark ::-webkit-scrollbar-thumb {
+	background: var(--el-fill-color);
+	border: 1px solid var(--el-border-color);
+	border-radius: 6px;
+}
+html.dark ::-webkit-scrollbar-thumb:hover {
+	background: var(--el-color-primary-light-5);
+}
+
+/* Ensure common form controls inherit the global font */
+input,
+button,
+select,
+textarea,
+.el-button,
+.el-input__inner,
+.el-select__selected-item,
+.el-select-dropdown__item {
+	font-family: inherit;
+}
+
+/* El-main padding override */
+.el-main {
+	--el-main-padding: 2px !important;
+	padding: 2px !important;
+}
+
+/* Global Element Plus dialog styles */
+/* Increase dialog width by ~30% vs default 50% (use 65vw) and unify paddings */
+.el-overlay .el-dialog {
+	width: 65vw !important;
+	max-width: 1200px;
+}
+
+.el-dialog__header,
+.el-dialog__body,
+.el-dialog__footer {
+	padding: 20px !important;
+}
+
+/* Optional: tighter width on small screens */
+@media (max-width: 768px) {
+	.el-overlay .el-dialog {
+		width: 90vw !important;
+		max-width: none;
+	}
+}
+

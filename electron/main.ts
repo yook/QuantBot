@@ -1,9 +1,8 @@
 import { app, BrowserWindow } from 'electron'
-import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
+import { spawn, type ChildProcess } from 'node:child_process'
 
-const require = createRequire(import.meta.url)
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
 // The built directory structure
@@ -25,6 +24,36 @@ export const RENDERER_DIST = path.join(process.env.APP_ROOT, 'dist')
 process.env.VITE_PUBLIC = VITE_DEV_SERVER_URL ? path.join(process.env.APP_ROOT, 'public') : RENDERER_DIST
 
 let win: BrowserWindow | null
+let socketServerProcess: ChildProcess | null = null
+
+// Start socket server
+function startSocketServer() {
+  const socketPath = path.join(process.env.APP_ROOT, 'socket', 'server.cjs')
+  console.log('Starting socket server from:', socketPath)
+  
+  socketServerProcess = spawn('node', [socketPath], {
+    cwd: path.join(process.env.APP_ROOT, 'socket'),
+    stdio: ['inherit', 'inherit', 'inherit']
+  })
+
+  socketServerProcess.on('error', (error) => {
+    console.error('Socket server error:', error)
+  })
+
+  socketServerProcess.on('exit', (code) => {
+    console.log(`Socket server exited with code ${code}`)
+    socketServerProcess = null
+  })
+}
+
+// Stop socket server
+function stopSocketServer() {
+  if (socketServerProcess) {
+    console.log('Stopping socket server...')
+    socketServerProcess.kill('SIGTERM')
+    socketServerProcess = null
+  }
+}
 
 function createWindow() {
   win = new BrowserWindow({
@@ -53,6 +82,7 @@ function createWindow() {
 // for applications and their menu bar to stay active until the user quits
 // explicitly with Cmd + Q.
 app.on('window-all-closed', () => {
+  stopSocketServer() // Stop socket server when app closes
   if (process.platform !== 'darwin') {
     app.quit()
     win = null
@@ -67,4 +97,11 @@ app.on('activate', () => {
   }
 })
 
-app.whenReady().then(createWindow)
+app.on('before-quit', () => {
+  stopSocketServer() // Ensure socket server is stopped before quit
+})
+
+app.whenReady().then(() => {
+  startSocketServer() // Start socket server first
+  createWindow() // Then create window
+})

@@ -1,0 +1,19 @@
+{
+  "reports": [
+    {
+      "label": "",
+      "options": [
+        {
+          "value": "urls",
+          "label": "Проверено",
+          "status": "2XX"
+        },
+        {
+          "value": "disallow",
+          "label": "Запрещено",
+          "status": "disallow"
+        }
+      ]
+    }
+  ]
+}
