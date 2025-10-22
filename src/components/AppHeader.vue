@@ -1,6 +1,6 @@
 <template>
   <div id="custom-titlebar">
-    <div class="header-content">
+    <div class="head-content">
       <el-select
         v-model="project.currentProjectId"
         class="header-select no-drag"
@@ -115,12 +115,12 @@ function openIntegrations() {
   border-bottom: 1px solid #e5e7eb;
 }
 
-.header-content {
+.head-content {
   display: flex;
   align-items: center;
   justify-content: flex-start;
   gap: 12px;
-  padding: 0 16px 0 81px; /* left padding = 65px menu + 16px gap */
+  padding: 0 16px 0 81px;
   height: 100%;
 }
 
@@ -161,14 +161,14 @@ html.dark #custom-titlebar {
 }
 
 html.dark .header-select .el-select__wrapper {
-  background-color: #1a1f28 !important;
-  border-color: #3a4555 !important;
+  background-color: var(--el-bg-color) !important;
+  border-color: var(--el-border-color) !important;
   color: var(--el-text-color-primary) !important;
 }
 
 html.dark .header-select .el-select__wrapper:hover {
-  border-color: #4a5565 !important;
-  background-color: #1f2530 !important;
+  border-color: var(--el-border-color-light) !important;
+  background-color: var(--el-bg-color) !important;
 }
 
 html.dark .header-select .el-select__wrapper.is-focused {
@@ -187,39 +187,52 @@ html.dark .header-select .el-input__inner::placeholder {
 
 /* Extra dark theme adjustments for header visuals */
 html.dark #custom-titlebar,
-html.dark #custom-titlebar .header-content,
+html.dark #custom-titlebar .head-content,
 html.dark #custom-titlebar .header-actions {
   color: var(--el-text-color-primary) !important;
 }
 
 html.dark .header-actions .el-switch .el-switch__core {
-  background-color: #1a1f28 !important;
-  border-color: #3a4555 !important;
+  background-color: var(--el-bg-color) !important;
+  border: 1px solid var(--el-border-color) !important;
 }
 
 html.dark .header-actions .el-switch.is-checked .el-switch__core {
-  background-color: var(--el-color-primary) !important;
+  background-color: var(--el-bg-color) !important;
+  border: 1px solid var(--el-border-color) !important;
 }
 
 html.dark .header-actions .el-switch .el-switch__action {
-  background-color: #ffffff !important;
+  background-color: var(--el-bg-color) !important;
+  border: 1px solid var(--el-border-color) !important;
+}
+
+/* Hover эффект для switch в темной теме */
+html.dark .header-actions .el-switch:hover .el-switch__core {
+  background-color: var(--el-fill-color) !important;
+  border-color: var(--el-border-color-light) !important;
+}
+
+html.dark .header-actions .el-switch:hover .el-switch__action {
+  background-color: var(--el-fill-color) !important;
+  border-color: var(--el-border-color-light) !important;
 }
 
 /* Dark theme button styles */
 html.dark .add-project-btn {
-  background-color: #1a1f28 !important;
-  border-color: #3a4555 !important;
+  background-color: var(--el-fill-color) !important;
+  border-color: var(--el-border-color) !important;
   color: var(--el-text-color-primary) !important;
 }
 
 html.dark .add-project-btn:hover {
-  background-color: #1f2530 !important;
-  border-color: #4a5565 !important;
+  background-color: var(--el-fill-color-light) !important;
+  border-color: var(--el-border-color-light) !important;
 }
 
 html.dark .add-project-btn:active,
 html.dark .add-project-btn:focus {
-  background-color: #252b38 !important;
+  background-color: var(--el-fill-color-darker) !important;
   border-color: var(--el-color-primary) !important;
 }
 
@@ -246,20 +259,41 @@ html.dark .add-project-btn:focus {
   padding: 6px;
 }
 
-/* Light theme: make the header theme switch gray */
+/* Light theme: make the header theme switch lighter with border */
 html:not(.dark) .header-actions .el-switch {
-  /* Set gray tones for on/off colors in light mode */
-  --el-switch-on-color: #cfd3dc; /* light gray when ON (light theme active) */
-  --el-switch-off-color: #e5e7eb; /* pale gray when OFF */
+  /* Set lighter gray tones for on/off colors in light mode */
+  --el-switch-on-color: #ffffff; /* белый фон когда включен (светлая тема) */
+  --el-switch-off-color: #ffffff; /* белый фон когда выключен */
 }
 
 html:not(.dark) .header-actions .el-switch .el-switch__core {
   background-color: var(--el-switch-off-color) !important;
-  border-color: #dcdfe6 !important;
+  border: 1px solid var(--el-border-color) !important; /* обводка цветом border */
 }
 
 html:not(.dark) .header-actions .el-switch.is-checked .el-switch__core {
   background-color: var(--el-switch-on-color) !important;
-  border-color: #cfd3dc !important;
+  border: 1px solid var(--el-border-color) !important; /* обводка цветом border */
+}
+
+html:not(.dark) .header-actions .el-switch .el-switch__action {
+  background-color: #ffffff !important; /* белый цвет для кружка */
+  border: 1px solid var(--el-border-color) !important; /* обводка для кружка */
+}
+
+/* Цвет иконки в переключателе для светлой темы */
+html:not(.dark) .header-actions .el-switch .el-switch__action .el-icon {
+  color: var(--el-text-color-regular) !important;
+}
+
+/* Hover эффект для switch в светлой теме */
+html:not(.dark) .header-actions .el-switch:hover .el-switch__core {
+  background-color: var(--el-fill-color-light) !important;
+  border-color: var(--el-border-color-hover) !important;
+}
+
+html:not(.dark) .header-actions .el-switch:hover .el-switch__action {
+  background-color: #ffffff !important;
+  border-color: var(--el-border-color-hover) !important;
 }
 </style>

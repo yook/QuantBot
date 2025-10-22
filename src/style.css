@@ -59,6 +59,27 @@ h3 {
 	font-weight: 600;
 }
 
+/* Более нейтральные цвета для светлой темы */
+html:not(.dark) {
+	--el-text-color-primary: #4a5568;
+	--el-text-color-regular: #718096;
+	--el-text-color-secondary: #a0aec0;
+}
+
+html:not(.dark) h1,
+html:not(.dark) h2,
+html:not(.dark) h3,
+html:not(.dark) h4,
+html:not(.dark) h5,
+html:not(.dark) h6 {
+	color: #2d3748;
+}
+
+html:not(.dark) body,
+html:not(.dark) #app {
+	color: #4a5568;
+}
+
 /* Dark theme globals */
 html.dark,
 html.dark body,
@@ -76,11 +97,11 @@ html.dark {
 /* App layout surfaces in dark */
 html.dark .app-aside {
 	border-right: 1px solid var(--el-border-color, #2b2f36) !important;
-	background-color: var(--el-bg-color, #111418) !important;
+	background-color: var(--el-bg-color) !important;
 }
 
 html.dark .app-content {
-	background-color: var(--el-bg-color, #111418) !important;
+	background-color: var(--el-bg-color) !important;
 }
 
 /* Nice dark scrollbars */
@@ -98,6 +119,24 @@ html.dark ::-webkit-scrollbar-thumb {
 }
 html.dark ::-webkit-scrollbar-thumb:hover {
 	background: var(--el-color-primary-light-5);
+}
+
+/* Стили для кнопок без type в темной теме */
+html.dark .el-button:not(.el-button--primary):not(.el-button--success):not(.el-button--info):not(.el-button--warning):not(.el-button--danger):not(.el-button--text) {
+	background-color: var(--el-bg-color) !important;
+	border-color: var(--el-border-color) !important;
+	color: var(--el-text-color-primary) !important;
+}
+
+html.dark .el-button:not(.el-button--primary):not(.el-button--success):not(.el-button--info):not(.el-button--warning):not(.el-button--danger):not(.el-button--text):hover {
+	background-color: var(--el-fill-color) !important;
+	border-color: var(--el-border-color-light) !important;
+	color: var(--el-text-color-primary) !important;
+}
+
+/* Стили для input в темной теме */
+html.dark .el-input--large .el-input__wrapper {
+	padding: 1px 15px !important;
 }
 
 /* Ensure common form controls inherit the global font */
@@ -137,5 +176,465 @@ textarea,
 		width: 90vw !important;
 		max-width: none;
 	}
+}
+
+/* Tailwind-inspired utility classes */
+.flex {
+	display: flex;
+}
+
+.flex-1 {
+	flex: 1 1 0%;
+}
+
+.flex-row {
+	flex-direction: row;
+}
+
+.flex-col {
+	flex-direction: column;
+}
+
+.flex-wrap {
+	flex-wrap: wrap;
+}
+
+.flex-nowrap {
+	flex-wrap: nowrap;
+}
+
+.items-start {
+	align-items: flex-start;
+}
+
+.items-center {
+	align-items: center;
+}
+
+.items-end {
+	align-items: flex-end;
+}
+
+.justify-start {
+	justify-content: flex-start;
+}
+
+.justify-center {
+	justify-content: center;
+}
+
+.justify-end {
+	justify-content: flex-end;
+}
+
+.justify-between {
+	justify-content: space-between;
+}
+
+.gap-1 {
+	gap: 0.25rem;
+}
+
+.gap-2 {
+	gap: 0.5rem;
+}
+
+.gap-3 {
+	gap: 0.75rem;
+}
+
+.gap-4 {
+	gap: 1rem;
+}
+
+.m-0 {
+	margin: 0;
+}
+
+.m-1 {
+	margin: 0.25rem;
+}
+
+.m-2 {
+	margin: 0.5rem;
+}
+
+.m-3 {
+	margin: 0.75rem;
+}
+
+.m-4 {
+	margin: 1rem;
+}
+
+/* Tailwind-like margin utility */
+.m-10 {
+	margin: 2.5rem; /* 40px */
+}
+
+.mt-1 {
+	margin-top: 0.25rem;
+}
+
+.mt-2 {
+	margin-top: 0.5rem;
+}
+
+.mt-3 {
+	margin-top: 0.75rem;
+}
+
+.mt-4 {
+	margin-top: 1rem;
+}
+
+.mt-6 {
+	margin-top: 1.5rem; /* 24px */
+}
+
+.mr-1 {
+	margin-right: 0.25rem;
+}
+
+.mr-2 {
+	margin-right: 0.5rem;
+}
+
+.mr-3 {
+	margin-right: 0.75rem;
+}
+
+.mr-4 {
+	margin-right: 1rem;
+}
+
+.mb-1 {
+	margin-bottom: 0.25rem;
+}
+
+.mb-2 {
+	margin-bottom: 0.5rem;
+}
+
+.mb-3 {
+	margin-bottom: 0.75rem;
+}
+
+.mb-4 {
+	margin-bottom: 1rem;
+}
+
+.ml-1 {
+	margin-left: 0.25rem;
+}
+
+.ml-2 {
+	margin-left: 0.5rem;
+}
+
+.ml-3 {
+	margin-left: 0.75rem;
+}
+
+.ml-4 {
+	margin-left: 1rem;
+}
+
+.ml-auto {
+	margin-left: auto;
+}
+
+/* Horizontal margin utility */
+.mx-3 {
+	margin-left: 0.75rem;
+	margin-right: 0.75rem;
+}
+
+.p-0 {
+	padding: 0;
+}
+
+.p-1 {
+	padding: 0.25rem;
+}
+
+.p-2 {
+	padding: 0.5rem;
+}
+
+.p-3 {
+	padding: 0.75rem;
+}
+
+.p-4 {
+	padding: 1rem;
+}
+
+.pt-1 {
+	padding-top: 0.25rem;
+}
+
+.pt-2 {
+	padding-top: 0.5rem;
+}
+
+.pt-3 {
+	padding-top: 0.75rem;
+}
+
+.pt-4 {
+	padding-top: 1rem;
+}
+
+.pr-1 {
+	padding-right: 0.25rem;
+}
+
+.pr-2 {
+	padding-right: 0.5rem;
+}
+
+.pr-3 {
+	padding-right: 0.75rem;
+}
+
+.pr-4 {
+	padding-right: 1rem;
+}
+
+.pb-1 {
+	padding-bottom: 0.25rem;
+}
+
+.pb-2 {
+	padding-bottom: 0.5rem;
+}
+
+.pb-3 {
+	padding-bottom: 0.75rem;
+}
+
+.pb-4 {
+	padding-bottom: 1rem;
+}
+
+/* Tailwind-like vertical padding utility */
+.py-2 {
+	padding-top: 0.5rem;
+	padding-bottom: 0.5rem;
+}
+
+.pl-1 {
+	padding-left: 0.25rem;
+}
+
+.pl-2 {
+	padding-left: 0.5rem;
+}
+
+.pl-3 {
+	padding-left: 0.75rem;
+}
+
+.pl-4 {
+	padding-left: 1rem;
+}
+
+.w-full {
+	width: 100%;
+}
+
+.h-full {
+	height: 100%;
+}
+
+.text-left {
+	text-align: left;
+}
+
+.text-center {
+	text-align: center;
+}
+
+.text-right {
+	text-align: right;
+}
+
+.text-xs {
+	font-size: 0.75rem !important;
+	line-height: 1rem !important;
+}
+
+.text-sm {
+	font-size: 0.875rem !important;
+	line-height: 1.25rem !important;
+}
+
+.text-base {
+	font-size: 1rem !important;
+	line-height: 1.5rem !important;
+}
+
+.text-lg {
+	font-size: 1.125rem !important;
+	line-height: 1.75rem !important;
+}
+
+.text-xl {
+	font-size: 1.25rem !important;
+	line-height: 1.75rem !important;
+}
+
+.text-2xl {
+	font-size: 1.5rem !important;
+	line-height: 2rem !important;
+}
+
+.text-3xl {
+	font-size: 1.875rem !important;
+	line-height: 2.25rem !important;
+}
+
+.font-thin {
+	font-weight: 100 !important;
+}
+
+.font-extralight {
+	font-weight: 200 !important;
+}
+
+.font-light {
+	font-weight: 300 !important;
+}
+
+.font-normal {
+	font-weight: 400 !important;
+}
+
+.font-medium {
+	font-weight: 500 !important;
+}
+
+.font-semibold {
+	font-weight: 600 !important;
+}
+
+.font-bold {
+	font-weight: 700 !important;
+}
+
+.font-extrabold {
+	font-weight: 800 !important;
+}
+
+.font-black {
+	font-weight: 900 !important;
+}
+
+.italic {
+	font-style: italic;
+}
+
+.not-italic {
+	font-style: normal;
+}
+
+.underline {
+	text-decoration: underline;
+}
+
+.line-through {
+	text-decoration: line-through;
+}
+
+.no-underline {
+	text-decoration: none;
+}
+
+.uppercase {
+	text-transform: uppercase;
+}
+
+.lowercase {
+	text-transform: lowercase;
+}
+
+.capitalize {
+	text-transform: capitalize;
+}
+
+.normal-case {
+	text-transform: none;
+}
+
+.truncate {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.whitespace-normal {
+	white-space: normal;
+}
+
+.whitespace-nowrap {
+	white-space: nowrap;
+}
+
+.whitespace-pre {
+	white-space: pre;
+}
+
+.whitespace-pre-line {
+	white-space: pre-line;
+}
+
+.whitespace-pre-wrap {
+	white-space: pre-wrap;
+}
+
+.break-normal {
+	overflow-wrap: normal;
+	word-break: normal;
+}
+
+.break-words {
+	overflow-wrap: break-word;
+}
+
+.break-all {
+	word-break: break-all;
+}
+
+.hidden {
+	display: none;
+}
+
+.block {
+	display: block;
+}
+
+.inline-block {
+	display: inline-block;
+}
+
+.rounded {
+	border-radius: 0.25rem;
+}
+
+.rounded-md {
+	border-radius: 0.375rem;
+}
+
+.rounded-lg {
+	border-radius: 0.5rem;
+}
+
+.overflow-hidden {
+	overflow: hidden;
+}
+
+.overflow-auto {
+	overflow: auto;
 }
 

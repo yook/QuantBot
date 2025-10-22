@@ -75,11 +75,11 @@ if (!wAny.__socketBaseListenersRegistered) {
   socket.on("disconnect", (reason: string) => {
     console.log("Socket disconnected:", reason);
   });
-  // Using raw socket for system events that aren't in our typed interface
-  (socket as any).on("reconnect", (attemptNumber: number) => {
+  // System events
+  socket.on("reconnect", (attemptNumber: number) => {
     console.log("Socket reconnected after", attemptNumber, "attempts");
   });
-  (socket as any).on("reconnect_error", (error: Error) => {
+  socket.on("reconnect_error", (error: Error) => {
     console.error("Socket reconnection failed:", error.message);
   });
 } else {
@@ -217,6 +217,11 @@ class TypedSocketClient {
     return () => this.socket.off("deleted", callback);
   }
 
+  onCrawlerDataCleared(callback: (data: { projectId: string | number }) => void) {
+    this.socket.on("crawler-data-cleared", callback);
+    return () => this.socket.off("crawler-data-cleared", callback);
+  }
+
   onDeleteError(callback: (errorMessage: string) => void) {
     this.socket.on("delete-error", callback);
     return () => this.socket.off("delete-error", callback);
@@ -243,47 +248,47 @@ class TypedSocketClient {
     return () => this.socket.off("disallow", callback);
   }
 
-  onStatHtml(callback: (count: number) => void) {
+  onStatHtml(callback: (data: { count: number; projectId: string | number }) => void) {
     this.socket.on("stat-html", callback);
     return () => this.socket.off("stat-html", callback);
   }
 
-  onStatJscss(callback: (count: number) => void) {
+  onStatJscss(callback: (data: { count: number; projectId: string | number }) => void) {
     this.socket.on("stat-jscss", callback);
     return () => this.socket.off("stat-jscss", callback);
   }
 
-  onStatImage(callback: (count: number) => void) {
+  onStatImage(callback: (data: { count: number; projectId: string | number }) => void) {
     this.socket.on("stat-image", callback);
     return () => this.socket.off("stat-image", callback);
   }
 
-  onStatRedirect(callback: (count: number) => void) {
+  onStatRedirect(callback: (data: { count: number; projectId: string | number }) => void) {
     this.socket.on("stat-redirect", callback);
     return () => this.socket.off("stat-redirect", callback);
   }
 
-  onStatError(callback: (count: number) => void) {
+  onStatError(callback: (data: { count: number; projectId: string | number }) => void) {
     this.socket.on("stat-error", callback);
     return () => this.socket.off("stat-error", callback);
   }
 
-  onStatDepth3(callback: (count: number) => void) {
+  onStatDepth3(callback: (data: { count: number; projectId: string | number }) => void) {
     this.socket.on("stat-depth3", callback);
     return () => this.socket.off("stat-depth3", callback);
   }
 
-  onStatDepth5(callback: (count: number) => void) {
+  onStatDepth5(callback: (data: { count: number; projectId: string | number }) => void) {
     this.socket.on("stat-depth5", callback);
     return () => this.socket.off("stat-depth5", callback);
   }
 
-  onStatDepth6(callback: (count: number) => void) {
+  onStatDepth6(callback: (data: { count: number; projectId: string | number }) => void) {
     this.socket.on("stat-depth6", callback);
     return () => this.socket.off("stat-depth6", callback);
   }
 
-  onStatOther(callback: (count: number) => void) {
+  onStatOther(callback: (data: { count: number; projectId: string | number }) => void) {
     this.socket.on("stat-other", callback);
     return () => this.socket.off("stat-other", callback);
   }

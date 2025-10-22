@@ -162,3 +162,132 @@ export interface TableUpdate {
   projectId: number | string;
   tableName: string;
 }
+
+// ===== Domain models for keywords/categories/typing =====
+
+export interface Category {
+  id?: number | string;
+  name: string;
+  [key: string]: any;
+}
+
+export interface Keyword {
+  id?: number | string;
+  keyword: string;
+  [key: string]: any;
+}
+
+export interface Sample {
+  id?: number | string;
+  label: string;
+  text: string;
+  [key: string]: any;
+}
+
+// ===== Socket payloads for categories =====
+
+export interface CategoriesListResponse {
+  projectId: number | string;
+  categories: Category[];
+  totalCount: number;
+  skip: number;
+  hasMore: boolean;
+}
+
+export interface CategoriesProgressPayload {
+  projectId: number | string;
+  progress: number; // 0..100
+  processed: number;
+  total: number;
+}
+
+export interface CategoriesAddedPayload {
+  projectId: number | string;
+  added: number;
+}
+
+export interface SimpleProjectPayload {
+  projectId: number | string;
+  [key: string]: any;
+}
+
+export interface ErrorPayload {
+  message: string;
+  projectId?: number | string;
+  [key: string]: any;
+}
+
+// ===== Socket payloads for keywords =====
+
+export interface KeywordsListResponse {
+  projectId: number | string;
+  keywords: Keyword[];
+  totalCount: number;
+  skip: number;
+  hasMore: boolean;
+  searchQuery?: string;
+  timeoutId?: number;
+  promiseResolve?: () => void;
+}
+
+export type KeywordsLoadedMoreResponse = KeywordsListResponse;
+
+export interface KeywordUpdatedPayload {
+  projectId: number | string;
+  keyword: Keyword;
+}
+
+export interface KeywordsProgressPayload {
+  projectId: number | string;
+  progress: number; // 0..100
+  processed?: number;
+  total?: number;
+}
+
+export interface PercentageProgressPayload {
+  projectId: number | string;
+  percentage?: number; // 0..100
+}
+
+// ===== Socket payloads for typing samples =====
+
+export interface TypingSamplesListResponse {
+  projectId?: number | string;
+  samples: Sample[];
+  total?: number;
+}
+
+// Project stats data structure returned by `get-project-stats`
+export interface ProjectStatsData {
+  totalUrls: number;
+  statusCounts: Record<string, number>;
+  dailyStats: Record<string, number>;
+  lastUpdated: string;
+}
+
+// Keywords export response (full keyword objects for export)
+export interface KeywordsExportResponse {
+  projectId: number | string;
+  keywords: Keyword[];
+}
+
+// ===== Shared options (centralized) =====
+
+export interface LoadCategoriesOptions {
+  skip?: number;
+  limit?: number;
+  sort?: Record<string, number>;
+}
+
+export interface LoadKeywordsOptions {
+  skip?: number;
+  limit?: number;
+  sort?: Record<string, number>;
+  resetSearch?: boolean;
+}
+
+export interface LoadSamplesOptions {
+  skip?: number;
+  limit?: number;
+}
+

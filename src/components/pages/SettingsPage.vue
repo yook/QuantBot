@@ -154,9 +154,8 @@ const deleteProject = () => {
 }
 
 /* Темная тема */
-html.dark {
-  --el-bg-color: #1a1a1a;
-  --el-bg-color-page: #0a0a0a;
+/* Не переопределяем --el-bg-color и --el-bg-color-page, чтобы использовать значения из style.css (#262c36) */
+html.dark .settings-page {
   --el-bg-color-overlay: #1d1e1f;
   --el-text-color-primary: #e5eaf3;
   --el-text-color-regular: #cfd3dc;
@@ -204,7 +203,7 @@ html.dark .el-card {
 }
 
 html.dark .el-card__header {
-  background-color: var(--el-fill-color-light);
+  background-color: var(--el-bg-color) !important;
   border-color: var(--el-border-color);
   color: var(--el-text-color-primary);
 }
@@ -318,9 +317,8 @@ html.dark .el-button--danger.is-plain:hover {
 
 /* Стили для поля названия проекта в темной теме */
 html.dark .el-input .el-input__wrapper {
-  background-color: var(--el-fill-color) !important;
+  background-color: var(--el-bg-color) !important;
   border-color: var(--el-border-color) !important;
-  padding: 1px !important;
 }
 
 html.dark .el-input .el-input__inner {

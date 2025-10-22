@@ -484,6 +484,20 @@ const getProjectStats = async (projectId) => {
   try {
     const stats = {};
 
+    // Получаем общее количество URLs (fetched)
+    const fetchedCount = await dbGet(
+      "SELECT COUNT(*) as count FROM urls WHERE project_id = ?",
+      [projectId]
+    );
+    stats.fetched = fetchedCount.count;
+
+    // Получаем размер очереди из таблицы projects
+    const queueInfo = await dbGet(
+      "SELECT queue_size FROM projects WHERE id = ?",
+      [projectId]
+    );
+    stats.queue = queueInfo ? queueInfo.queue_size : 0;
+
     // Получаем количество disallowed URLs
     const disallowedCount = await dbGet(
       "SELECT COUNT(*) as count FROM disallowed WHERE project_id = ?",
@@ -500,6 +514,25 @@ const getProjectStats = async (projectId) => {
       );
       stats[type] = typeCount.count;
     }
+
+    // Получаем статистику по глубине для HTML
+    const depth3Count = await dbGet(
+      "SELECT COUNT(*) as count FROM urls WHERE project_id = ? AND type = 'html' AND depth <= 3",
+      [projectId]
+    );
+    stats.depth3 = depth3Count.count;
+
+    const depth5Count = await dbGet(
+      "SELECT COUNT(*) as count FROM urls WHERE project_id = ? AND type = 'html' AND depth > 3 AND depth <= 5",
+      [projectId]
+    );
+    stats.depth5 = depth5Count.count;
+
+    const depth6Count = await dbGet(
+      "SELECT COUNT(*) as count FROM urls WHERE project_id = ? AND type = 'html' AND depth >= 6",
+      [projectId]
+    );
+    stats.depth6 = depth6Count.count;
 
     return stats;
   } catch (error) {
@@ -1254,6 +1287,12 @@ const saveData = async (tableName, projectId, data, socket) => {
           "SELECT COUNT(*) as count FROM urls WHERE project_id = ? AND type = ?",
           [projectId, type]
         );
+
+        // Отправляем обновления статистики по типам с projectId
+        socket.emit(`stat-${type}`, {
+          count: typeCount[0].count,
+          projectId: projectId,
+        });
       }
 
       // Статистика по глубине для HTML
@@ -1263,16 +1302,28 @@ const saveData = async (tableName, projectId, data, socket) => {
             "SELECT COUNT(*) as count FROM urls WHERE project_id = ? AND type = 'html' AND depth <= 3",
             [projectId]
           );
+          socket.emit("stat-depth3", {
+            count: depth3Count[0].count,
+            projectId: projectId,
+          });
         } else if (depth > 3 && depth < 6) {
           const depth5Count = await dbAll(
             "SELECT COUNT(*) as count FROM urls WHERE project_id = ? AND type = 'html' AND depth <= 5",
             [projectId]
           );
+          socket.emit("stat-depth5", {
+            count: depth5Count[0].count,
+            projectId: projectId,
+          });
         } else {
           const depth6Count = await dbAll(
             "SELECT COUNT(*) as count FROM urls WHERE project_id = ? AND type = 'html' AND depth >= 6",
             [projectId]
           );
+          socket.emit("stat-depth6", {
+            count: depth6Count[0].count,
+            projectId: projectId,
+          });
         }
       }
     }

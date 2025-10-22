@@ -386,7 +386,55 @@ module.exports = (io, socket) => {
         `✅ Удалено ${disallowedDeleted.changes || 0} URL из таблицы disallowed`
       );
 
-      // 3. Обнуляем статистику проекта
+      // 3. Обнуляем статистику проекта - отправляем обновленную статистику
+      const { getProjectStats } = require("./db-sqlite.cjs");
+      const updatedStats = await getProjectStats(Number(id));
+
+      // Отправляем обновленную статистику
+      if (updatedStats) {
+        socket.emit("stat-html", {
+          count: updatedStats.html || 0,
+          projectId: Number(id),
+        });
+        socket.emit("stat-jscss", {
+          count: updatedStats.jscss || 0,
+          projectId: Number(id),
+        });
+        socket.emit("stat-image", {
+          count: updatedStats.image || 0,
+          projectId: Number(id),
+        });
+        socket.emit("stat-redirect", {
+          count: updatedStats.redirect || 0,
+          projectId: Number(id),
+        });
+        socket.emit("stat-error", {
+          count: updatedStats.error || 0,
+          projectId: Number(id),
+        });
+        socket.emit("stat-other", {
+          count: updatedStats.other || 0,
+          projectId: Number(id),
+        });
+        socket.emit("stat-depth3", {
+          count: updatedStats.depth3 || 0,
+          projectId: Number(id),
+        });
+        socket.emit("stat-depth5", {
+          count: updatedStats.depth5 || 0,
+          projectId: Number(id),
+        });
+        socket.emit("stat-depth6", {
+          count: updatedStats.depth6 || 0,
+          projectId: Number(id),
+        });
+        socket.emit("fetched", {
+          projectId: Number(id),
+          fetched: updatedStats.fetched || 0,
+        });
+        socket.emit("disallow", updatedStats.disallow || 0);
+        console.log(`📊 Статистика обновлена для проекта ${id}:`, updatedStats);
+      }
 
       // 4. Размораживаем проект (устанавливаем freezed = false)
       await dbRun(
@@ -415,7 +463,7 @@ module.exports = (io, socket) => {
       console.log(`📊 Счетчик очереди очищен для проекта ${id}`);
 
       // 7. Обновляем размер очереди в базе данных
-      const { updateProjectQueueStats } = require("./db-sqlite");
+      const { updateProjectQueueStats } = require("./db-sqlite.cjs");
       await updateProjectQueueStats(Number(id), 0, socket);
       console.log(`💾 Размер очереди в БД обновлен до 0 для проекта ${id}`);
 
@@ -439,7 +487,8 @@ module.exports = (io, socket) => {
         }
       }
 
-      socket.emit("deleted");
+      // Отправляем событие очистки данных краулера вместо deleted
+      socket.emit("crawler-data-cleared", { projectId: id });
     } catch (err) {
       console.error("delete-all error:", err);
       socket.emit("delete-error", err.message);

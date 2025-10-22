@@ -1,16 +1,19 @@
 <template>
   <el-container class="body-page">
     <el-main class="body-main">
-      <!-- <div class="flex mb-1">
+      <div class="flex mb-1">
         <KeywordsAdd class="flex-1 mr-1" />
         <KeywordsMenu />
       </div>
-      <KeywordsMain /> -->
+      <KeywordsTable />
     </el-main>
   </el-container>
 </template>
 
 <script setup>
+import KeywordsAdd from "../keywords/KeywordsAdd.vue";
+import KeywordsMenu from "../keywords/KeywordsMenu.vue";
+import KeywordsTable from "../keywords/KeywordsTable.vue";
 // import { useI18n } from "vue-i18n";
 // import { useKeywordsStore } from "../../stores/keywords";
 // import { useProjectStore } from "../../stores/project";
@@ -18,25 +21,24 @@
 // import KeywordsMain from "../components/keywords/KeywordsMain.vue";
 // import KeywordsMenu from "../components/keywords/KeywordsMenu.vue";
 
-const { t } = useI18n();
-const keywordsStore = useKeywordsStore();
-const project = useProjectStore();
+// const keywordsStore = useKeywordsStore();
+// const project = useProjectStore();
 
-onMounted(() => {
-  if (project.currentProjectId) {
-    keywordsStore.loadKeywords(project.currentProjectId);
-  }
-});
+// onMounted(() => {
+//   if (project.currentProjectId) {
+//     keywordsStore.loadKeywords(project.currentProjectId);
+//   }
+// });
 
-// Слушаем изменения currentProjectId и загружаем ключевые запросы для нового проекта
-watch(
-  () => project.currentProjectId,
-  (newProjectId) => {
-    if (newProjectId) {
-      keywordsStore.loadKeywords(newProjectId);
-    }
-  }
-);
+// // Слушаем изменения currentProjectId и загружаем ключевые запросы для нового проекта
+// watch(
+//   () => project.currentProjectId,
+//   (newProjectId) => {
+//     if (newProjectId) {
+//       keywordsStore.loadKeywords(newProjectId);
+//     }
+//   }
+// );
 </script>
 
 <style scoped>
