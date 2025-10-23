@@ -52,7 +52,9 @@
                 <div
                   :class="[
                     'header-content',
-                    column.prop === '_rowNumber' || column.prop === '_actions'
+                    column.prop === '_rowNumber' ||
+                    column.prop === '_actions' ||
+                    column.prop === 'target_query'
                       ? 'center-header'
                       : '',
                   ]"
@@ -127,7 +129,11 @@
               >
                 <div
                   class="cell-content"
-                  :class="{ 'center-cell': column.prop === '_actions' }"
+                  :class="{
+                    'center-cell':
+                      column.prop === '_actions' ||
+                      column.prop === 'target_query',
+                  }"
                   :style="{
                     textAlign: column.prop === '_rowNumber' ? 'center' : 'left',
                   }"
@@ -188,6 +194,25 @@
                           >
                         </el-tooltip>
                       </span>
+                    </template>
+                    <template v-else-if="column.prop === 'target_query'">
+                      <el-icon
+                        v-if="
+                          row.target_query === 1 || row.target_query === true
+                        "
+                        style="color: var(--el-color-success); font-size: 18px"
+                      >
+                        <Check />
+                      </el-icon>
+                      <el-icon
+                        v-else-if="
+                          row.target_query === 0 || row.target_query === false
+                        "
+                        style="color: var(--el-color-danger); font-size: 18px"
+                      >
+                        <Close />
+                      </el-icon>
+                      <span v-else>{{ row.target_query }}</span>
                     </template>
                     <template v-else>
                       {{ formatCellValue(row[column.prop], column.prop) }}
@@ -250,7 +275,7 @@
 import moment from "moment";
 import { ref, computed, onMounted, onUnmounted, watch, nextTick } from "vue";
 import { useProjectStore } from "../stores/project";
-import { Delete, DeleteFilled } from "@element-plus/icons-vue";
+import { Delete, DeleteFilled, Check, Close } from "@element-plus/icons-vue";
 
 const emit = defineEmits(["delete-row", "delete-all"]);
 

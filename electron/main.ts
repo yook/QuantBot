@@ -1,4 +1,4 @@
-import { app, BrowserWindow } from 'electron'
+import { app, BrowserWindow, shell } from 'electron'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 import { spawn, type ChildProcess } from 'node:child_process'
@@ -64,6 +64,24 @@ function createWindow() {
       preload: path.join(__dirname, 'preload.mjs'),
     },
   })
+
+  // Handle file downloads and reveal in Finder/Explorer after completion
+  const ses = win.webContents.session;
+  ses.on("will-download", (_event, downloadItem, _webContents) => {
+    console.log("Starting download:", downloadItem.getFilename());
+    console.log("Total bytes:", downloadItem.getTotalBytes());
+
+    downloadItem.on("done", (_event, state) => {
+      const itemPath = downloadItem.getSavePath();
+      if (state === "completed") {
+        console.log("Download successfully completed:", itemPath);
+        // Automatically reveal the downloaded file in Finder/Explorer
+        shell.showItemInFolder(itemPath);
+      } else {
+        console.log(`Download failed: ${state}`);
+      }
+    });
+  });
 
   // Test active push message to Renderer-process.
   win.webContents.on('did-finish-load', () => {

@@ -81,7 +81,7 @@
       dbKey="keywords"
       @delete-row="handleDeleteRow"
       @delete-all="handleDeleteAll"
-      :heightOffset="250"
+      :heightOffset="257"
     />
   </el-card>
 </template>

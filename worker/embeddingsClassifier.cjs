@@ -41,14 +41,52 @@ async function fetchEmbeddings(texts, opts = {}) {
   // texts: array of strings
   if (!Array.isArray(texts) || texts.length === 0) return [];
   const model = opts.model || DEFAULT_MODEL;
-  const key = await getApiKey();
-  const resp = await axios.post(
-    OPENAI_EMBED_URL,
-    { model, input: texts },
-    { headers: { Authorization: `Bearer ${key}` } }
-  );
-  if (!resp.data || !resp.data.data) return [];
-  return resp.data.data.map((d) => d.embedding);
+
+  // Prepare result array and determine which inputs are missing from cache
+  const results = new Array(texts.length).fill(null);
+  const missing = [];
+  const missingIdxs = [];
+
+  for (let i = 0; i < texts.length; i++) {
+    const text = texts[i];
+    try {
+      const row = await db.embeddingsCacheGet(text);
+      if (row && Array.isArray(row.embedding) && row.embedding.length) {
+        results[i] = row.embedding;
+        continue;
+      }
+    } catch (_) {
+      // ignore cache read errors
+    }
+    missing.push(text);
+    missingIdxs.push(i);
+  }
+
+  // Fetch only the missing ones from OpenAI, if any
+  if (missing.length > 0) {
+    const key = await getApiKey();
+    const resp = await axios.post(
+      OPENAI_EMBED_URL,
+      { model, input: missing },
+      { headers: { Authorization: `Bearer ${key}` } }
+    );
+    const data = (resp && resp.data && resp.data.data) || [];
+    for (let j = 0; j < data.length; j++) {
+      const emb = data[j] && data[j].embedding;
+      const idx = missingIdxs[j];
+      const text = missing[j];
+      if (Array.isArray(emb) && emb.length) {
+        results[idx] = emb;
+        try {
+          await db.embeddingsCachePut(text, emb);
+        } catch (_) {
+          // ignore cache write errors
+        }
+      }
+    }
+  }
+
+  return results;
 }
 
 // Numeric helpers

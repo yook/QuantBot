@@ -84,6 +84,7 @@ export async function downloadDataFromProject(req: ExportRequest) {
 
         const fileName = `${currentDb}-report.xlsx`;
         xlsx.writeFile(book, fileName);
+        console.log('[Export] Saved file:', fileName);
 
         resolve();
       });
@@ -216,6 +217,7 @@ export function downloadKeywords(exportColumns: any[]) {
 
     // Use SheetJS writeFile to trigger download (browser) / write file (electron)
     xlsx.writeFile(wb, filename);
+    console.log('[Export] Saved keywords file:', filename);
   });
 }
 

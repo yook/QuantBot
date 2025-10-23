@@ -300,6 +300,36 @@ export const useProjectStore = defineStore("project", {
         if (!this.data.stats) this.data.stats = (newProjectJson as NewProjectFile).stats;
         this.data.stats.disallow = count;
       });
+
+      // Обработчик успешного удаления проекта
+      socket.on("projectDeleted", (deletedProjectId: number) => {
+        console.log(`Project ${deletedProjectId} deleted successfully`);
+        
+        // Удаляем проект из списка
+        const deletedIndex = this.projects.findIndex((p) => String(p.id) === String(deletedProjectId));
+        if (deletedIndex !== -1) {
+          this.projects.splice(deletedIndex, 1);
+        }
+
+        // Если удалили текущий проект
+        if (String(this.currentProjectId) === String(deletedProjectId)) {
+          // Переключаемся на первый проект в списке или показываем форму создания
+          if (this.projects.length > 0) {
+            this.currentProjectId = String(this.projects[0].id);
+            localStorage.setItem("currentProjectId", String(this.currentProjectId));
+            socket.emit("get-project", this.currentProjectId);
+          } else {
+            this.currentProjectId = null;
+            localStorage.removeItem("currentProjectId");
+            this.newProjectForm = true;
+          }
+        }
+      });
+
+      // Обработчик ошибки удаления проекта
+      socket.on("projectDeleteError", (errorMessage: string) => {
+        console.error("Error deleting project:", errorMessage);
+      });
     },
 
     updateProject() {

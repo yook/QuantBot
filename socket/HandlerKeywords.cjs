@@ -15,45 +15,6 @@ const {
 const { fetchEmbeddings } = require("../worker/embeddingsClassifier.cjs");
 const db = require("./db-sqlite.cjs");
 const path = require("path");
-// Load repo-level env file (created at project root) so OPENAI_API_KEY is available
-try {
-  const dotenv = require("dotenv");
-  dotenv.config({ path: path.join(__dirname, "..", "env") });
-} catch (e) {
-  // If dotenv isn't installed, try to load the env file manually so OPENAI_API_KEY
-  // is still available to spawned workers. This avoids a hard dependency on dotenv.
-  try {
-    const fs = require("fs");
-    const envPath = path.join(__dirname, "..", "env");
-    if (fs.existsSync(envPath)) {
-      const txt = fs.readFileSync(envPath, "utf8");
-      txt.split(/\r?\n/).forEach((line) => {
-        line = line.trim();
-        if (!line || line.startsWith("#")) return;
-        const idx = line.indexOf("=");
-        if (idx <= 0) return;
-        const key = line.slice(0, idx).trim();
-        let val = line.slice(idx + 1).trim();
-        if (
-          (val.startsWith('"') && val.endsWith('"')) ||
-          (val.startsWith("'") && val.endsWith("'"))
-        ) {
-          val = val.slice(1, -1);
-        }
-        if (!(key in process.env)) process.env[key] = val;
-      });
-    }
-  } catch (e2) {
-    // ignore
-  }
-}
-
-// Informative log if OPENAI key is missing at this point
-if (!process.env.OPENAI_API_KEY) {
-  console.warn(
-    "OPENAI_API_KEY not found in environment; categorization worker will fail unless it's exported or placed in the repo 'env' file."
-  );
-}
 
 async function attachEmbeddingsToKeywords(keywords, opts = {}) {
   const chunkSize = opts.chunkSize || 50;
@@ -814,22 +775,50 @@ const registerKeywords = (io, socket) => {
       }));
 
       // If there are no keywords for this project, emit an error and skip spawning.
-      if (
-        !keywordsAll ||
-        !Array.isArray(keywordsAll) ||
-        keywordsAll.length === 0
-      ) {
+      if (!Array.isArray(keywords) || keywords.length === 0) {
         console.warn(
-          `Clustering: no keywords found for project ${projectId}; aborting clustering run.`
+          `Categorization: no keywords found for project ${projectId}; aborting.`
         );
-        socket.emit("keywords:clustering-error", {
+        socket.emit("keywords:categorization-error", {
           projectId,
-          message: "No keywords found for project; clustering aborted.",
+          message: "No keywords found for project; categorization aborted.",
         });
-        socket.to(`project_${projectId}`).emit("keywords:clustering-error", {
-          projectId,
-          message: "No keywords found for project; clustering aborted.",
+        socket
+          .to(`project_${projectId}`)
+          .emit("keywords:categorization-error", {
+            projectId,
+            message: "No keywords found for project; categorization aborted.",
+          });
+        return;
+      }
+
+      // Ensure keyword embeddings are prepared before spawning worker
+      let embeddingStats;
+      try {
+        embeddingStats = await attachEmbeddingsToKeywords(keywords, {
+          chunkSize: 40,
         });
+      } catch (embErr) {
+        console.error(
+          "[categorization] Failed to prepare embeddings:",
+          embErr && embErr.message ? embErr.message : embErr
+        );
+        const message =
+          "Не удалось получить эмбеддинги для категоризации. Проверьте OpenAI ключ.";
+        socket.emit("keywords:categorization-error", { projectId, message });
+        socket
+          .to(`project_${projectId}`)
+          .emit("keywords:categorization-error", { projectId, message });
+        return;
+      }
+
+      if (!embeddingStats.embedded) {
+        const message =
+          "Не удалось подготовить эмбеддинги для категоризации. Проверьте OpenAI ключ и доступность embeddings.";
+        socket.emit("keywords:categorization-error", { projectId, message });
+        socket
+          .to(`project_${projectId}`)
+          .emit("keywords:categorization-error", { projectId, message });
         return;
       }
 
@@ -978,7 +967,7 @@ const registerKeywords = (io, socket) => {
           let msg = `Categorization worker failed with exit code ${code}`;
           if (apiKeyErrorSent) {
             msg =
-              "Ошибка: неверный или недействительный OpenAI API ключ (OPENAI_API_KEY).";
+              "Ошибка: неверный или недействительный OpenAI API ключ. Ключ должен быть сохранён в системном хранилище (keytar) под service 'site-analyzer', account 'openai'.";
           }
           socket.emit("keywords:categorization-error", {
             projectId,
@@ -1091,7 +1080,6 @@ const registerKeywords = (io, socket) => {
           const obj = JSON.parse(line);
           // Persist result to DB: write class_* always
           try {
-            const db = require("./db-sqlite");
             const cname = obj.bestCategoryName ?? null;
             const csim = obj.similarity ?? null;
 
@@ -1189,7 +1177,7 @@ const registerKeywords = (io, socket) => {
           let msg = `Typing worker failed with exit code ${code}`;
           if (typingApiKeyErrorSent) {
             msg =
-              "Ошибка: неверный или недействительный OpenAI API ключ (OPENAI_API_KEY).";
+              "Ошибка: неверный или недействительный OpenAI API ключ. Ключ должен быть сохранён в системном хранилище (keytar) под service 'site-analyzer', account 'openai'.";
           }
           console.error(msg);
           socket.emit("keywords:typing-error", {
@@ -1278,12 +1266,9 @@ const registerKeywords = (io, socket) => {
         .emit("keywords:clustering-started", { projectId });
 
       // Load keywords to process
-      const keywordsAll = await require("./db-sqlite").keywordsFindByProject(
-        projectId,
-        {
-          limit: 100000,
-        }
-      );
+      const keywordsAll = await db.keywordsFindByProject(projectId, {
+        limit: 100000,
+      });
 
       if (!Array.isArray(keywordsAll) || keywordsAll.length === 0) {
         console.warn(
@@ -1360,11 +1345,21 @@ const registerKeywords = (io, socket) => {
         __dirname,
         "..",
         "worker",
-        "clusterСomponents.js"
+        "clusterСomponents.cjs"
       );
 
       const args = [`--projectId=${projectId}`, `--inputFile=${inputPath}`];
-      if (typeof data.eps !== "undefined") args.push(`--threshold=${data.eps}`);
+      if (typeof data.eps !== "undefined") {
+        let thr = parseFloat(String(data.eps));
+        if (!isFinite(thr)) thr = 0.5;
+        // Clamp to sensible range to avoid degenerate giant clusters
+        if (thr < 0.05) thr = 0.05;
+        if (thr > 0.99) thr = 0.99;
+        args.push(`--threshold=${thr}`);
+        console.log(`[clustering] Using threshold: ${thr}`);
+      } else {
+        console.log(`[clustering] Using default threshold: 0.5`);
+      }
 
       console.log(
         `[clustering] Threshold argument: ${
@@ -1430,13 +1425,46 @@ const registerKeywords = (io, socket) => {
             const lines = fullOutput.trim().split("\n");
             for (const line of lines) {
               if (!line.trim()) continue;
-              const obj = JSON.parse(line);
-              if (obj.id && obj.cluster_label) {
-                await db.dbRun(
-                  `UPDATE keywords SET cluster_label = ? WHERE id = ?`,
-                  [obj.cluster_label, obj.id]
-                );
-                processed++;
+              const cluster = JSON.parse(line);
+              // Expected format from worker: { id: string, items: [{ id, text, vector, ...}, ...] }
+              if (!cluster || !cluster.id || !Array.isArray(cluster.items)) {
+                continue;
+              }
+              const label = String(cluster.id);
+              for (const item of cluster.items) {
+                if (!item || typeof item.id === "undefined") continue;
+                try {
+                  await db.dbRun(
+                    `UPDATE keywords SET cluster_label = ? WHERE id = ?`,
+                    [label, item.id]
+                  );
+                  processed++;
+                  // Emit per-row update so UI refreshes immediately
+                  try {
+                    const updated = await db.dbGet(
+                      `SELECT * FROM keywords WHERE id = ?`,
+                      [item.id]
+                    );
+                    if (updated) {
+                      socket.emit("keywords:updated", {
+                        projectId,
+                        keyword: updated,
+                      });
+                      socket
+                        .to(`project_${projectId}`)
+                        .emit("keywords:updated", {
+                          projectId,
+                          keyword: updated,
+                        });
+                    }
+                  } catch (_) {}
+                } catch (e2) {
+                  console.error(
+                    "Failed to update cluster_label for id",
+                    item.id,
+                    e2 && e2.message ? e2.message : e2
+                  );
+                }
               }
             }
             console.log(`Updated ${processed} keywords with cluster labels`);

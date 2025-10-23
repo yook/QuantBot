@@ -5,7 +5,7 @@
         <el-collapse-item name="1">
           <template #title="{ isActive }">
             <div :class="['title-wrapper', { 'is-active': isActive }]">
-              Классификация по ближайшему соседу (kNN, Cosine Similarity)
+              Классификация по ближайшему соседу (косинусное сходство)
               <el-icon class="header-icon">
                 <InfoFilled />
               </el-icon>
@@ -334,5 +334,16 @@ html.dark .el-progress--line.el-progress--striped .el-progress-bar__inner {
 
 .title-wrapper.is-active {
   color: var(--el-color-primary);
+}
+</style>
+
+<style scoped>
+/* Ограничение ширины таблицы и горизонтальная прокрутка — как в StopWords.vue */
+:deep(.table-container) {
+  position: relative;
+  width: 100%;
+  max-width: 100% !important;
+  overflow-x: auto !important;
+  box-sizing: border-box;
 }
 </style>

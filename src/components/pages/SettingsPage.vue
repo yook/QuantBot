@@ -55,11 +55,12 @@
 </template>
 
 <script setup>
-import { ref, markRaw, onMounted, watch, computed } from "vue";
+import { ref, markRaw, onMounted, onUnmounted, watch, computed } from "vue";
 import { Delete } from "@element-plus/icons-vue";
-import { ElMessageBox } from "element-plus";
+import { ElMessageBox, ElMessage } from "element-plus";
 import { useI18n } from "vue-i18n";
 import { useProjectStore } from "../../stores/project";
+import socket from "../../stores/socket-client";
 
 const { t } = useI18n();
 const project = useProjectStore();
@@ -120,6 +121,34 @@ const deleteProject = () => {
       // Пользователь отменил удаление
     });
 };
+
+// Обработчик успешного удаления проекта
+const handleProjectDeleted = (deletedProjectId) => {
+  ElMessage.success({
+    message: t("settings.projectDeletedSuccess"),
+    duration: 3000,
+  });
+};
+
+// Обработчик ошибки удаления проекта
+const handleProjectDeleteError = (errorMessage) => {
+  ElMessage.error({
+    message: t("settings.projectDeletedError") + ": " + errorMessage,
+    duration: 5000,
+  });
+};
+
+// Подписываемся на события сокета
+onMounted(() => {
+  socket.on("projectDeleted", handleProjectDeleted);
+  socket.on("projectDeleteError", handleProjectDeleteError);
+});
+
+// Отписываемся при размонтировании
+onUnmounted(() => {
+  socket.off("projectDeleted", handleProjectDeleted);
+  socket.off("projectDeleteError", handleProjectDeleteError);
+});
 </script>
 
 <style scoped>

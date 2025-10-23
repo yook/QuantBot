@@ -7,8 +7,10 @@
 // - Support incremental addition: addNewsToExistingClusters(enrichedHeadlines, clusters, opts)
 // This file exports two functions for use by workers or other modules.
 
+let __clusterCounter = 0;
 function generateClusterId() {
-  return `cluster_${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
+  __clusterCounter += 1;
+  return `cluster-${__clusterCounter}`;
 }
 
 /* ---------------- math helpers ---------------- */

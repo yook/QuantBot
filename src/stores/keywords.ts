@@ -49,6 +49,21 @@ export const useKeywordsStore = defineStore("keywords", () => {
   const categorizationFinished = ref(false);
   const typingFinished = ref(false);
   const clusteringFinished = ref(false);
+  // Individual progress percentages (0..100) for each process
+  const categorizationPercent = ref(0);
+  const typingPercent = ref(0);
+  const clusteringPercent = ref(0);
+
+  function updateOverallProgress() {
+    // Weighted equally: each of the 3 processes contributes 1/3 to overall percentage
+    const parts = [categorizationPercent.value, typingPercent.value, clusteringPercent.value];
+    const sum = parts.reduce((a, b) => a + (isFinite(b) ? b : 0), 0);
+    percentage.value = Math.round(sum / 3);
+    // running if any process is running and not all finished
+    running.value =
+      (categorizationRunning.value || typingRunning.value || clusteringRunning.value) &&
+      !(categorizationFinished.value && typingFinished.value && clusteringFinished.value);
+  }
 
   // Getters
   const keywordCount = computed(() => keywords.value?.length || 0);
@@ -387,14 +402,17 @@ export const useKeywordsStore = defineStore("keywords", () => {
     }
 
     // Сбрасываем состояние процессов
-    categorizationRunning.value = false;
-    typingRunning.value = false;
-    clusteringRunning.value = false;
-    categorizationFinished.value = false;
-    typingFinished.value = false;
-    clusteringFinished.value = false;
-    running.value = true;
-    percentage.value = 0;
+  categorizationRunning.value = false;
+  typingRunning.value = false;
+  clusteringRunning.value = false;
+  categorizationFinished.value = false;
+  typingFinished.value = false;
+  clusteringFinished.value = false;
+  categorizationPercent.value = 0;
+  typingPercent.value = 0;
+  clusteringPercent.value = 0;
+  running.value = true;
+  percentage.value = 0;
 
     // Emit старт процессов категоризации и типизации
     console.log(
@@ -430,9 +448,14 @@ export const useKeywordsStore = defineStore("keywords", () => {
       typingFinished.value &&
       clusteringFinished.value
     ) {
-      percentage.value = 100;
+      categorizationPercent.value = 100;
+      typingPercent.value = 100;
+      clusteringPercent.value = 100;
+      updateOverallProgress();
       running.value = false;
       console.log("Все процессы завершены успешно");
+    } else {
+      updateOverallProgress();
     }
   }
 
@@ -659,16 +682,17 @@ export const useKeywordsStore = defineStore("keywords", () => {
       if (data.projectId === currentProjectId.value) {
         categorizationRunning.value = true;
         categorizationFinished.value = false;
+        categorizationPercent.value = 0;
         running.value = true;
-        percentage.value = 0;
+        updateOverallProgress();
       }
     });
 
   socket.on("keywords:categorization-progress", (data) => {
       if (data.projectId === currentProjectId.value) {
         if (typeof data.percentage !== "undefined") {
-          // Показываем прогресс категоризации (0-50%)
-          percentage.value = Math.round(data.percentage / 2);
+          categorizationPercent.value = Math.max(0, Math.min(100, Math.round(data.percentage)));
+          updateOverallProgress();
         }
       }
     });
@@ -677,6 +701,7 @@ export const useKeywordsStore = defineStore("keywords", () => {
       if (data.projectId === currentProjectId.value) {
         categorizationRunning.value = false;
         categorizationFinished.value = true;
+        categorizationPercent.value = 100;
         checkBothProcessesFinished();
       }
     });
@@ -694,16 +719,17 @@ export const useKeywordsStore = defineStore("keywords", () => {
       if (data.projectId === currentProjectId.value) {
         typingRunning.value = true;
         typingFinished.value = false;
+        typingPercent.value = 0;
         running.value = true;
-        // Не сбрасываем percentage, так как categorization уже мог начать
+        updateOverallProgress();
       }
     });
 
   socket.on("keywords:typing-progress", (data) => {
       if (data.projectId === currentProjectId.value) {
         if (typeof data.percentage !== "undefined") {
-          // Показываем прогресс типизации (50-100%)
-          percentage.value = 50 + Math.round(data.percentage / 2);
+          typingPercent.value = Math.max(0, Math.min(100, Math.round(data.percentage)));
+          updateOverallProgress();
         }
       }
     });
@@ -712,6 +738,7 @@ export const useKeywordsStore = defineStore("keywords", () => {
       if (data.projectId === currentProjectId.value) {
         typingRunning.value = false;
         typingFinished.value = true;
+        typingPercent.value = 100;
         checkBothProcessesFinished();
       }
     });
@@ -729,14 +756,17 @@ export const useKeywordsStore = defineStore("keywords", () => {
       if (data.projectId === currentProjectId.value) {
         clusteringRunning.value = true;
         clusteringFinished.value = false;
+        clusteringPercent.value = 0;
         running.value = true;
+        updateOverallProgress();
       }
     });
 
   socket.on("keywords:clustering-progress", (data) => {
       if (data.projectId === currentProjectId.value) {
         if (typeof data.percentage !== "undefined") {
-          percentage.value = 50 + Math.round(data.percentage / 2); // 50-100% for clustering
+          clusteringPercent.value = Math.max(0, Math.min(100, Math.round(data.percentage)));
+          updateOverallProgress();
         }
       }
     });
@@ -745,6 +775,7 @@ export const useKeywordsStore = defineStore("keywords", () => {
       if (data.projectId === currentProjectId.value) {
         clusteringRunning.value = false;
         clusteringFinished.value = true;
+        clusteringPercent.value = 100;
         checkBothProcessesFinished();
         // Refresh the current window to ensure cluster_label changes (if any) are visible.
         // Small delay lets the server complete any final writes.

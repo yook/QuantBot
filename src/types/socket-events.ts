@@ -72,7 +72,7 @@ export interface ServerToClientEvents {
   deleted: (count: number) => void;
   "crawler-data-cleared": (data: { projectId: string | number }) => void;
   "delete-error": (errorMessage: string) => void;
-  projectDeleted: () => void;
+  projectDeleted: (deletedProjectId: number) => void;
   projectDeleteError: (errorMessage: string) => void;
   "project-save-error": (errorMessage: string) => void;
 

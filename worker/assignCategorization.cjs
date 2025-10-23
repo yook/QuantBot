@@ -11,7 +11,6 @@
   - Updates keywords with the best-matching category
 
   Requirements:
-  - Set OPENAI_API_KEY environment variable
   - axios is a dependency in the project
 
 */
@@ -104,7 +103,7 @@ async function fetchEmbeddings(texts) {
       }
       if (!key) {
         console.error(
-          "OPENAI API key not found in system keychain (keytar). Please save the key under service 'site-analyzer' account 'openai'."
+          "OpenAI API key not found in system keychain (keytar). Please save the key under service 'site-analyzer' account 'openai'."
         );
         process.exit(1);
       }
@@ -135,7 +134,7 @@ async function fetchEmbeddings(texts) {
         const status = err && err.response && err.response.status;
         if (code === "invalid_api_key" || status === 401) {
           console.error(
-            "\nОшибка: неверный или недействительный OpenAI API ключ (OPENAI_API_KEY).\nПроверьте значение OPENAI_API_KEY в файле 'env' в корне проекта или экспортируйте переменную окружения перед запуском приложения.\nСсылка: https://platform.openai.com/account/api-keys\n"
+            "\nОшибка: неверный или недействительный OpenAI API ключ.\nКлюч должен храниться в системном хранилище (keytar) под service 'site-analyzer', account 'openai'.\nСсылка: https://platform.openai.com/account/api-keys\n"
           );
         }
       } catch (e) {

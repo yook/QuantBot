@@ -43,6 +43,8 @@ const messages = {
       confirmButton: 'Delete project',
       cancel: 'Cancel',
       inDevelopment: 'Settings in development',
+      projectDeletedSuccess: 'Project deleted successfully',
+      projectDeletedError: 'Error deleting project',
     },
     parser: {
       name: 'Name',
@@ -183,6 +185,8 @@ const messages = {
       confirmButton: 'Удалить проект',
       cancel: 'Отмена',
       inDevelopment: 'Настройки в разработке',
+      projectDeletedSuccess: 'Проект успешно удален',
+      projectDeletedError: 'Ошибка при удалении проекта',
     },
     parser: {
       name: 'Название',
