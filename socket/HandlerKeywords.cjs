@@ -1265,22 +1265,29 @@ const registerKeywords = (io, socket) => {
         .to(`project_${projectId}`)
         .emit("keywords:clustering-started", { projectId });
 
-      // Load keywords to process
+      // Load only target keywords (target_query = 1) for clustering
       const keywordsAll = await db.keywordsFindByProject(projectId, {
         limit: 100000,
+        targetOnly: true, // Load only target_query = 1 or NULL
       });
+
+      console.log(
+        `[clustering] Loaded ${
+          keywordsAll?.length || 0
+        } target keywords for clustering`
+      );
 
       if (!Array.isArray(keywordsAll) || keywordsAll.length === 0) {
         console.warn(
-          `Clustering: no keywords found for project ${projectId}; aborting clustering run.`
+          `Clustering: no target keywords found for project ${projectId}; aborting clustering run.`
         );
         socket.emit("keywords:clustering-error", {
           projectId,
-          message: "No keywords found for project; clustering aborted.",
+          message: "No target keywords (target_query=1) found for clustering.",
         });
         socket.to(`project_${projectId}`).emit("keywords:clustering-error", {
           projectId,
-          message: "No keywords found for project; clustering aborted.",
+          message: "No target keywords (target_query=1) found for clustering.",
         });
         return;
       }
@@ -1349,23 +1356,43 @@ const registerKeywords = (io, socket) => {
       );
 
       const args = [`--projectId=${projectId}`, `--inputFile=${inputPath}`];
-      if (typeof data.eps !== "undefined") {
-        let thr = parseFloat(String(data.eps));
-        if (!isFinite(thr)) thr = 0.5;
-        // Clamp to sensible range to avoid degenerate giant clusters
-        if (thr < 0.05) thr = 0.05;
-        if (thr > 0.99) thr = 0.99;
-        args.push(`--threshold=${thr}`);
-        console.log(`[clustering] Using threshold: ${thr}`);
-      } else {
-        console.log(`[clustering] Using default threshold: 0.5`);
-      }
 
+      // Определяем алгоритм кластеризации
+      const algorithm = data.algorithm || "components"; // 'components' or 'dbscan'
       console.log(
-        `[clustering] Threshold argument: ${
-          typeof data.eps !== "undefined" ? data.eps : "default (0.5)"
-        }`
+        `[clustering] Received algorithm: ${algorithm}, data.eps: ${data.eps}, data.minPts: ${data.minPts}`
       );
+      args.push(`--algorithm=${algorithm}`);
+
+      if (algorithm === "dbscan") {
+        // Параметры для DBSCAN
+        let eps = parseFloat(String(data.eps || 0.3));
+        if (!isFinite(eps)) eps = 0.3;
+        if (eps < 0.05) eps = 0.05;
+        if (eps > 0.95) eps = 0.95;
+        args.push(`--eps=${eps}`);
+
+        let minPts = parseInt(String(data.minPts || 2), 10);
+        if (!isFinite(minPts) || minPts < 1) minPts = 2;
+        args.push(`--minPts=${minPts}`);
+
+        console.log(`[clustering] Using DBSCAN: eps=${eps}, minPts=${minPts}`);
+      } else {
+        // Параметры для связных компонент (threshold)
+        if (typeof data.eps !== "undefined") {
+          let thr = parseFloat(String(data.eps));
+          if (!isFinite(thr)) thr = 0.5;
+          // Clamp to sensible range to avoid degenerate giant clusters
+          if (thr < 0.05) thr = 0.05;
+          if (thr > 0.99) thr = 0.99;
+          args.push(`--threshold=${thr}`);
+          console.log(
+            `[clustering] Using connected components with threshold: ${thr}`
+          );
+        } else {
+          console.log(`[clustering] Using default threshold: 0.5`);
+        }
+      }
 
       const child = spawn("node", [workerPath, ...args], {
         env: Object.assign({}, process.env),

@@ -421,12 +421,15 @@ export const useKeywordsStore = defineStore("keywords", () => {
     );
     // Determine clustering parameters from project settings (persisted by ClusteringConfig)
     const epsFromProject = Number((projectStore?.data as any)?.clustering_eps ?? 0.5);
-    const method = "components";
+    const algorithm = String((projectStore?.data as any)?.clustering_algorithm ?? "components");
+    const dbscanEps = Number((projectStore?.data as any)?.clustering_dbscan_eps ?? 0.3);
+    const dbscanMinPts = Number((projectStore?.data as any)?.clustering_dbscan_minPts ?? 2);
 
     console.log("Emitting keywords:start-clustering for project", {
       projectId: currentProjectId.value,
-      eps: epsFromProject,
-      method,
+      algorithm,
+      eps: algorithm === "components" ? epsFromProject : dbscanEps,
+      minPts: algorithm === "dbscan" ? dbscanMinPts : undefined,
     });
   socket.emit("keywords:start-categorization", {
       projectId: currentProjectId.value,
@@ -436,8 +439,9 @@ export const useKeywordsStore = defineStore("keywords", () => {
     });
   socket.emit("keywords:start-clustering", {
       projectId: currentProjectId.value,
-      eps: epsFromProject,
-      method,
+      algorithm,
+      eps: algorithm === "components" ? epsFromProject : dbscanEps,
+      minPts: algorithm === "dbscan" ? dbscanMinPts : undefined,
     });
   }
 

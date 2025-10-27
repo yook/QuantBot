@@ -168,7 +168,12 @@ export interface ClientToServerEvents {
   "keywords:delete": (data: { projectId: string | number; id: string | number }) => void;
   "keywords:start-categorization": (data: { projectId: string | number }) => void;
   "keywords:start-typing": (data: { projectId: string | number }) => void;
-  "keywords:start-clustering": (data: { projectId: string | number; eps: number; method: string }) => void;
+  "keywords:start-clustering": (data: { 
+    projectId: string | number; 
+    algorithm: string;
+    eps: number; 
+    minPts?: number;
+  }) => void;
 
   // typing samples (client -> server)
   "typing:samples:get": (data: { projectId: string | number; skip?: number; limit?: number }) => void;

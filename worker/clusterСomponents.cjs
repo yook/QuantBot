@@ -35,6 +35,10 @@ function cosineSimilarity(a, b) {
   return dot / (na * nb);
 }
 
+function cosineDistance(a, b) {
+  return 1 - cosineSimilarity(a, b);
+}
+
 function normalize(v) {
   if (!Array.isArray(v)) return v;
   let s = 0;
@@ -235,10 +239,117 @@ async function addNewsToExistingClusters(
   return clusters;
 }
 
+/* ---------------- DBSCAN algorithm ---------------- */
+/**
+ * DBSCAN clustering for embeddings
+ * @param {Array} enrichedHeadlines - array of items with .vector
+ * @param {number} eps - neighborhood radius (cosine distance, e.g., 0.3 = 0.7 similarity)
+ * @param {number} minPts - minimum points to form a dense region (default: 2)
+ * @returns {Array} clusters in same format as buildInitialClustersWithVectors
+ */
+function buildClustersWithDBSCAN(enrichedHeadlines, eps = 0.3, minPts = 2) {
+  if (!Array.isArray(enrichedHeadlines) || enrichedHeadlines.length === 0)
+    return [];
+
+  // Deduplicate exact text+source
+  const dedupMap = new Map();
+  for (const h of enrichedHeadlines) {
+    const source = h.source || h.publisher || "unknown";
+    const text = (h.text || h.title || "").trim();
+    const key = `${text}|||${source}`;
+    if (!dedupMap.has(key)) dedupMap.set(key, { ...h, source, text });
+  }
+  const items = Array.from(dedupMap.values());
+  const vectors = items.map((it) => it.vector).filter(Boolean);
+
+  if (vectors.length === 0) return [];
+
+  const n = vectors.length;
+  const visited = new Array(n).fill(false);
+  const clusterId = new Array(n).fill(-1); // -1 = noise
+  let currentCluster = 0;
+
+  function rangeQuery(pointIdx) {
+    const neighbors = [];
+    for (let i = 0; i < n; i++) {
+      if (cosineDistance(vectors[pointIdx], vectors[i]) <= eps) {
+        neighbors.push(i);
+      }
+    }
+    return neighbors;
+  }
+
+  function expandCluster(pointIdx, neighbors) {
+    clusterId[pointIdx] = currentCluster;
+    const queue = [...neighbors];
+
+    while (queue.length > 0) {
+      const q = queue.shift();
+      if (!visited[q]) {
+        visited[q] = true;
+        const qNeighbors = rangeQuery(q);
+        if (qNeighbors.length >= minPts) {
+          queue.push(...qNeighbors);
+        }
+      }
+      if (clusterId[q] === -1) {
+        clusterId[q] = currentCluster;
+      }
+    }
+  }
+
+  // Main DBSCAN loop
+  for (let i = 0; i < n; i++) {
+    if (visited[i]) continue;
+    visited[i] = true;
+    const neighbors = rangeQuery(i);
+
+    if (neighbors.length < minPts) {
+      clusterId[i] = -1; // noise
+    } else {
+      expandCluster(i, neighbors);
+      currentCluster++;
+    }
+  }
+
+  // Group points by cluster
+  const clusterMap = new Map();
+  for (let i = 0; i < n; i++) {
+    const cid = clusterId[i];
+    if (cid === -1) continue; // ignore noise
+    if (!clusterMap.has(cid)) clusterMap.set(cid, []);
+    clusterMap.get(cid).push(items[i]);
+  }
+
+  // Convert to standard cluster format
+  const clusters = [];
+  for (const [cid, clusterItems] of clusterMap.entries()) {
+    const cl = {
+      id: generateClusterId(),
+      items: clusterItems,
+      created: new Date().toISOString(),
+      published: false,
+      category: clusterItems[0]?.category || null,
+      subCategory: clusterItems[0]?.subCategory || null,
+    };
+    updateCentroid(cl);
+    clusters.push(cl);
+  }
+
+  return clusters;
+}
+
 module.exports = {
   buildInitialClustersWithVectors,
+  buildClustersWithDBSCAN,
   addNewsToExistingClusters,
-  _helpers: { cosineSimilarity, normalize, updateCentroid, generateClusterId },
+  _helpers: {
+    cosineSimilarity,
+    cosineDistance,
+    normalize,
+    updateCentroid,
+    generateClusterId,
+  },
 };
 
 // Keep existing standalone behavior: if invoked directly, run the clustering flow
@@ -249,11 +360,20 @@ if (require.main === module) {
   // Parse command line arguments
   const args = process.argv.slice(2);
   let inputFile,
-    threshold = 0.5;
+    threshold = 0.5,
+    algorithm = "components", // 'components' or 'dbscan'
+    eps = 0.3,
+    minPts = 2;
+
   for (let i = 0; i < args.length; i++) {
     if (args[i].startsWith("--inputFile=")) inputFile = args[i].split("=")[1];
     if (args[i].startsWith("--threshold="))
       threshold = parseFloat(args[i].split("=")[1]) || 0.5;
+    if (args[i].startsWith("--algorithm=")) algorithm = args[i].split("=")[1];
+    if (args[i].startsWith("--eps="))
+      eps = parseFloat(args[i].split("=")[1]) || 0.3;
+    if (args[i].startsWith("--minPts="))
+      minPts = parseInt(args[i].split("=")[1], 10) || 2;
   }
 
   if (!inputFile) {
@@ -270,7 +390,24 @@ if (require.main === module) {
       vector: k.embedding,
       source: `kw_${k.id || idx}`,
     }));
-    const clusters = buildInitialClustersWithVectors(enriched, threshold);
+
+    console.error(`[clustering worker] Algorithm: ${algorithm}`);
+    console.error(`[clustering worker] Total keywords: ${enriched.length}`);
+
+    let clusters;
+    if (algorithm === "dbscan") {
+      console.error(
+        `[clustering worker] Running DBSCAN with eps=${eps}, minPts=${minPts}`
+      );
+      clusters = buildClustersWithDBSCAN(enriched, eps, minPts);
+    } else {
+      console.error(
+        `[clustering worker] Running connected components with threshold=${threshold}`
+      );
+      clusters = buildInitialClustersWithVectors(enriched, threshold);
+    }
+
+    console.error(`[clustering worker] Generated ${clusters.length} clusters`);
     for (const c of clusters) process.stdout.write(JSON.stringify(c) + "\n");
   } catch (e) {
     console.error(e && e.message ? e.message : String(e));
