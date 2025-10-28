@@ -31,13 +31,29 @@ let socketServerProcess: ChildProcess | null = null
 
 // Start socket server
 function startSocketServer() {
-  const socketPath = path.join(process.env.APP_ROOT, 'socket', 'server.cjs')
-  console.log('Starting socket server from:', socketPath)
-  
+  // In production, files are packed in ASAR, so we need to extract socket server
+  const isPackaged = app.isPackaged;
+  let socketPath: string;
+  let cwd: string;
+
+  if (isPackaged) {
+    // In packaged app, socket files are in Resources/app/socket
+    socketPath = path.join(process.resourcesPath, 'app', 'socket', 'server.cjs');
+    cwd = path.join(process.resourcesPath, 'app', 'socket');
+  } else {
+    // In development, use regular paths
+    socketPath = path.join(process.env.APP_ROOT!, 'socket', 'server.cjs');
+    cwd = path.join(process.env.APP_ROOT!, 'socket');
+  }
+
+  console.log('Starting socket server from:', socketPath);
+  console.log('Working directory:', cwd);
+  console.log('Is packaged:', isPackaged);
+
   socketServerProcess = spawn('node', [socketPath], {
-    cwd: path.join(process.env.APP_ROOT, 'socket'),
+    cwd,
     stdio: ['inherit', 'inherit', 'inherit']
-  })
+  });
 
   socketServerProcess.on('error', (error) => {
     console.error('Socket server error:', error)

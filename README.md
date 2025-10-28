@@ -1,18 +1,51 @@
-# Vue 3 + TypeScript + Vite
+# QuantBot
 
-This template should help get you started developing with Vue 3 and TypeScript in Vite. The template uses Vue 3 `<script setup>` SFCs, check out the [script setup docs](https://v3.vuejs.org/api/sfc-script-setup.html#sfc-script-setup) to learn more.
+Инструмент для краулинга и анализа сайтов с использованием Vue 3, TypeScript и Electron.
 
-## Recommended IDE Setup
+## Установка
 
-- [VS Code](https://code.visualstudio.com/) + [Volar](https://marketplace.visualstudio.com/items?itemName=Vue.volar) (and disable Vetur) + [TypeScript Vue Plugin (Volar)](https://marketplace.visualstudio.com/items?itemName=Vue.vscode-typescript-vue-plugin).
+### Скачивание
 
-## Type Support For `.vue` Imports in TS
+Скачайте последнюю версию с [GitHub Releases](https://github.com/yook/QuantBot/releases).
 
-TypeScript cannot handle type information for `.vue` imports by default, so we replace the `tsc` CLI with `vue-tsc` for type checking. In editors, we need [TypeScript Vue Plugin (Volar)](https://marketplace.visualstudio.com/items?itemName=Vue.vscode-typescript-vue-plugin) to make the TypeScript language service aware of `.vue` types.
+### macOS Gatekeeper
 
-If the standalone TypeScript plugin doesn't feel fast enough to you, Volar has also implemented a [Take Over Mode](https://github.com/johnsoncodehk/volar/discussions/471#discussioncomment-1361669) that is more performant. You can enable it by the following steps:
+При первом запуске macOS может заблокировать приложение с сообщением "Приложение повреждено". Чтобы обойти это:
 
-1. Disable the built-in TypeScript Extension
-   1. Run `Extensions: Show Built-in Extensions` from VSCode's command palette
-   2. Find `TypeScript and JavaScript Language Features`, right click and select `Disable (Workspace)`
-2. Reload the VSCode window by running `Developer: Reload Window` from the command palette.
+1. Откройте Терминал
+2. Выполните команду:
+   ```bash
+   xattr -rd com.apple.quarantine /Applications/QuantBot.app
+   ```
+3. Или альтернативно:
+   ```bash
+   codesign --force --deep --sign - /Applications/QuantBot.app
+   ```
+
+После этого приложение можно будет открыть нормально.
+
+## Разработка
+
+### Рекомендуемая IDE
+
+- [VS Code](https://code.visualstudio.com/) + [Volar](https://marketplace.visualstudio.com/items?itemName=Vue.volar)
+
+### Скрипты
+
+```bash
+# Установка зависимостей
+npm install
+
+# Запуск в режиме разработки
+npm run dev
+
+# Сборка для продакшена
+npm run build
+
+# Публикация релиза
+./publish-release.sh [версия] [описание]
+```
+
+## Автообновление
+
+Приложение автоматически проверяет обновления при запуске и скачивает их в фоне.
