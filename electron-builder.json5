@@ -37,4 +37,11 @@
     target: ["AppImage"],
     artifactName: "${productName}-Linux-${version}.${ext}",
   },
+  publish: [
+    {
+      provider: "github",
+      owner: "yook",
+      repo: "QuantBot",
+    },
+  ],
 }

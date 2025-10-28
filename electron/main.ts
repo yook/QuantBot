@@ -3,6 +3,9 @@ import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 import { spawn, type ChildProcess } from 'node:child_process'
 
+// Автообновление
+import { autoUpdater } from 'electron-updater';
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
 // The built directory structure
@@ -122,4 +125,7 @@ app.on('before-quit', () => {
 app.whenReady().then(() => {
   startSocketServer() // Start socket server first
   createWindow() // Then create window
+
+  // Проверка обновлений и уведомление пользователя
+  autoUpdater.checkForUpdatesAndNotify();
 })

@@ -4,7 +4,7 @@
   "description": "QuantBot — инструмент для краулинга и анализа сайтов",
   "author": "Yook",
   "private": true,
-  "version": "0.0.0",
+  "version": "1.0.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -24,6 +24,7 @@
     "body-parser": "^2.2.0",
     "cheerio": "^1.1.2",
     "cors": "^2.8.5",
+    "electron-updater": "^6.6.2",
     "element-plus": "^2.11.4",
     "express": "^5.1.0",
     "http": "^0.0.1-security",
@@ -43,7 +44,7 @@
     "@tailwindcss/postcss": "^4.1.14",
     "@vitejs/plugin-vue": "^5.0.4",
     "autoprefixer": "^10.4.21",
-    "electron": "^30.0.1",
+    "electron": "^39.0.0",
     "electron-builder": "^24.13.3",
     "icon-gen": "^4.0.0",
     "postcss": "^8.5.6",
@@ -54,5 +55,9 @@
     "vite-plugin-electron-renderer": "^0.14.5",
     "vue-tsc": "^2.0.26"
   },
-  "main": "dist-electron/main.js"
+  "main": "dist-electron/main.js",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/yook/QuantBot"
+  }
 }
