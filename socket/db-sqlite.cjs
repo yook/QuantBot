@@ -14,7 +14,7 @@
  *
  * Примечание: сложные поля хранятся как JSON-строки (TEXT).
  */
-const sqlite3 = require("sqlite3").verbose();
+const Database = require('better-sqlite3');
 const path = require("path");
 const fs = require("fs");
 
@@ -61,20 +61,21 @@ fs.mkdirSync(dbDir, { recursive: true });
 const dbPath = path.join(dbDir, "projects.db");
 
 // Open database connection (single, minimal)
-const db = new sqlite3.Database(dbPath, (err) => {
-  if (err) {
-    console.error("SQLite open error:", err);
-  }
-});
+let db;
+try {
+  db = new Database(dbPath);
+} catch (err) {
+  console.error("SQLite open error:", err);
+}
 
 // Apply PRAGMAs and ensure schema
-db.serialize(() => {
-  db.run("PRAGMA journal_mode=WAL;");
-  db.run("PRAGMA synchronous=NORMAL;");
-  db.run("PRAGMA cache_size = -200000;"); // ~200MB
-  db.run("PRAGMA mmap_size = 268435456;"); // 256MB
-  db.run("PRAGMA auto_vacuum = INCREMENTAL;");
-  db.run("PRAGMA temp_store = MEMORY;");
+if (db) {
+  db.pragma('journal_mode = WAL');
+  db.pragma('synchronous = NORMAL');
+  db.pragma('cache_size = -200000'); // ~200MB
+  db.pragma('mmap_size = 268435456'); // 256MB
+  db.pragma('auto_vacuum = INCREMENTAL');
+  db.pragma('temp_store = MEMORY');
 
   // Note: do NOT drop embeddings_cache on startup — preserve cache between restarts.
   // Previous migration code dropped the table here which caused the cache to be cleared
@@ -82,7 +83,7 @@ db.serialize(() => {
   // CREATE TABLE IF NOT EXISTS below to create it when missing.
 
   // Полная схема projects (без stats - выносим в отдельную таблицу)
-  db.run(
+  db.exec(
     `CREATE TABLE IF NOT EXISTS projects (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       name TEXT NOT NULL,
@@ -96,50 +97,20 @@ db.serialize(() => {
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
     )`
   );
-  db.run("CREATE INDEX IF NOT EXISTS idx_projects_url ON projects(url);");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_projects_url ON projects(url);");
 
   // Добавляем колонку queue_size в существующую таблицу, если она еще не существует
-  db.run(
-    `
-    PRAGMA table_info(projects);
-  `,
-    [],
-    (err, rows) => {
-      if (err) {
-        console.error("Ошибка при проверке структуры таблицы projects:", err);
-        return;
-      }
+  const columns = db.prepare('PRAGMA table_info(projects)').all();
+  const hasQueueSizeColumn = columns.some(column => column.name === 'queue_size');
 
-      // Проверяем, существует ли колонка queue_size
-      db.all(`PRAGMA table_info(projects)`, [], (err, columns) => {
-        if (err) {
-          console.error("Ошибка при получении информации о колонках:", err);
-          return;
-        }
-
-        const hasQueueSizeColumn = columns.some(
-          (column) => column.name === "queue_size"
-        );
-
-        if (!hasQueueSizeColumn) {
-          console.log("Добавляем колонку queue_size в таблицу projects...");
-          db.run(
-            `ALTER TABLE projects ADD COLUMN queue_size INTEGER DEFAULT 0`,
-            (err) => {
-              if (err) {
-                console.error("Ошибка при добавлении колонки queue_size:", err);
-              } else {
-                console.log("Колонка queue_size успешно добавлена");
-              }
-            }
-          );
-        }
-      });
-    }
-  );
+  if (!hasQueueSizeColumn) {
+    console.log("Добавляем колонку queue_size в таблицу projects...");
+    db.exec(`ALTER TABLE projects ADD COLUMN queue_size INTEGER DEFAULT 0`);
+    console.log("Колонка queue_size успешно добавлена");
+  }
 
   // Схема таблицы urls (единая коллекция для всех типов с привязкой к проекту)
-  db.run(
+  db.exec(
     `CREATE TABLE IF NOT EXISTS urls (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       project_id INTEGER NOT NULL,
@@ -427,29 +398,19 @@ db.serialize(() => {
   );
 
   // Миграция статистики удалена - статистика теперь вычисляется из основных таблиц
-});
+}
 
 // Промисифицированные обёртки для удобства использования
-const dbGet = (sql, params = []) =>
-  new Promise((resolve, reject) =>
-    db.get(sql, params, (e, row) => (e ? reject(e) : resolve(row)))
-  );
+const dbGet = (sql, params = []) => Promise.resolve(db.prepare(sql).get(params));
 
 const dbAll = (sql, params = []) => {
   // Log to stderr to avoid breaking worker stdout JSONL
   // console.error("Executing SQL query:", sql);
   // console.error("With parameters:", params);
-  return new Promise((resolve, reject) =>
-    db.all(sql, params, (e, rows) => (e ? reject(e) : resolve(rows)))
-  );
+  return Promise.resolve(db.prepare(sql).all(params));
 };
 
-const dbRun = (sql, params = []) =>
-  new Promise((resolve, reject) =>
-    db.run(sql, params, function (e) {
-      return e ? reject(e) : resolve(this);
-    })
-  );
+const dbRun = (sql, params = []) => Promise.resolve(db.prepare(sql).run(params));
 
 // Функции для работы с проектами
 const updateProjectStatus = async (projectId, freezed) => {

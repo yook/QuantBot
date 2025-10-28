@@ -16,7 +16,7 @@
   // node_modules tree.
   asarUnpack: [
     "worker/**/*",
-    "node_modules/sqlite3/**",
+    "node_modules/better-sqlite3/**",
     "node_modules/keytar/**",
   ],
   mac: {
