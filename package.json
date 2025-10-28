@@ -45,7 +45,7 @@
     "@tailwindcss/postcss": "^4.1.14",
     "@vitejs/plugin-vue": "^5.0.4",
     "autoprefixer": "^10.4.21",
-    "electron": "^39.0.0",
+    "electron": "^38.0.0",
     "electron-builder": "^24.13.3",
     "icon-gen": "^4.0.0",
     "postcss": "^8.5.6",
