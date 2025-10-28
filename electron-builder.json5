@@ -9,7 +9,16 @@
     buildResources: "public",
   },
   icon: "quant",
-  files: ["dist", "dist-electron", "socket/**/*"],
+  files: ["dist", "dist-electron", "socket/**/*", "worker/**/*"],
+  // Unpack only worker scripts and native modules required by the socket server.
+  // Native modules (.node) cannot be loaded from inside ASAR, so we keep them
+  // unpacked. This reduces package size compared to unpacking the entire
+  // node_modules tree.
+  asarUnpack: [
+    "worker/**/*",
+    "node_modules/sqlite3/**",
+    "node_modules/keytar/**",
+  ],
   mac: {
     target: ["dmg"],
     artifactName: "${productName}-Mac-${version}-Installer.${ext}",

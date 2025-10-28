@@ -18,8 +18,43 @@ const sqlite3 = require("sqlite3").verbose();
 const path = require("path");
 const fs = require("fs");
 
-// Ensure ./db exists
-const dbDir = path.join(__dirname, "..", "db");
+// Ensure ./db exists. When running from an ASAR the source files are read-only,
+// so prefer a writable location (userData) or allow overriding via env var.
+let dbDir = path.join(__dirname, "..", "db");
+// Allow explicit override (useful for packaged app main process)
+if (process.env.QUANTBOT_DB_DIR) {
+  dbDir = process.env.QUANTBOT_DB_DIR;
+} else {
+  try {
+    // If module is inside an asar archive, __dirname will contain '.asar'
+    if (typeof __dirname === "string" && __dirname.includes(".asar")) {
+      let userData = null;
+      try {
+        // Try to obtain electron.app.getPath('userData') when available
+        const electron = require("electron");
+        if (
+          electron &&
+          electron.app &&
+          typeof electron.app.getPath === "function"
+        ) {
+          userData = electron.app.getPath("userData");
+        }
+      } catch (e) {
+        // electron may not be available when running as a standalone node process
+        userData = null;
+      }
+      if (userData) {
+        dbDir = path.join(userData, "quantbot-db");
+      } else {
+        // Fallback to current working directory
+        dbDir = path.join(process.cwd(), "quantbot-db");
+      }
+    }
+  } catch (e) {
+    // ignore and keep default
+  }
+}
+
 fs.mkdirSync(dbDir, { recursive: true });
 
 // Path to SQLite database
