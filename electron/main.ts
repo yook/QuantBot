@@ -1,7 +1,6 @@
 import { app, BrowserWindow, shell } from "electron";
 import path from "path";
-import fs from "fs";
-import { fileURLToPath, pathToFileURL } from "url";
+import { fileURLToPath } from "url";
 import { spawn, type ChildProcess } from "node:child_process";
 import { createRequire } from "module";
 
@@ -30,8 +29,7 @@ process.env.VITE_PUBLIC = VITE_DEV_SERVER_URL
   ? path.join(process.env.APP_ROOT, "public")
   : RENDERER_DIST;
 
-// splash HTML will be built at runtime inside createWindow() so we can point
-// the <img> to the correct `quant.png` location (dev vs packaged path).
+// Main window will be created at runtime inside createWindow()
 
 let win: BrowserWindow | null;
 let socketServerProcess: ChildProcess | null = null;
@@ -173,44 +171,12 @@ function stopSocketServer() {
 }
 
 function createWindow() {
-  // create splash window
-  const splash = new BrowserWindow({
-    width: 420,
-    height: 260,
-    frame: false,
-    transparent: true,
-    alwaysOnTop: true,
-    skipTaskbar: true,
-    resizable: false,
-    movable: false,
-    show: true,
-    webPreferences: {
-      scrollBounce: false,
-      nodeIntegration: false,
-      contextIsolation: true,
-    },
-  });
-  // Build splash HTML pointing to the quant.png file so we show the logo spinning.
-  // Prefer embedding the PNG as base64 to avoid file:// resolution issues in packaged apps.
-  const imagePath = path.join(process.env.VITE_PUBLIC || "", "quant.png");
-  let imageSrc = pathToFileURL(imagePath).toString();
-  try {
-    const buf = fs.readFileSync(imagePath);
-    const b64 = buf.toString("base64");
-    imageSrc = `data:image/png;base64,${b64}`;
-  } catch (e: any) {
-    console.warn("Failed to read quant.png for splash embed, falling back to file:// URL:", e && e.message);
-  }
-
-  const splashHtml = `<!doctype html><html><head><meta charset="utf-8"/><style>html,body{height:100%;width:100%;margin:0;background:transparent;overflow:hidden !important;}body,html, #root{height:100%;} .splash-container{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;pointer-events:none;overflow:hidden;} .splash-box{display:flex;flex-direction:column;align-items:center;gap:12px;pointer-events:auto} img{width:120px;height:120px;animation:pulse 1.5s ease-in-out infinite;display:block;user-select:none;-webkit-user-drag:none;box-shadow:none !important;will-change:transform;backface-visibility:hidden;} @keyframes pulse{0%,100%{transform:scale(1)}50%{transform:scale(1.1)}} .label{font-family:sans-serif;color:#666;text-align:center;font-size:13px;pointer-events:none;text-shadow:none !important;}</style></head><body><div class="splash-container"><div class="splash-box"><img src="${imageSrc}" alt="logo"/></div></div></body></html>`;
-  splash.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(splashHtml)}`).catch(() => {});
-
-  // create main window hidden
+  // create main window
   win = new BrowserWindow({
     icon: path.join(process.env.VITE_PUBLIC, "quant.png"),
     width: 1400,
     height: 700,
-    show: false,
+    show: false, // Start hidden, will show after loading
     webPreferences: {
       preload: path.join(__dirname, "preload.mjs"),
     },
@@ -236,7 +202,6 @@ function createWindow() {
 
   // Test active push message to Renderer-process.
   win.webContents.on("did-finish-load", () => {
-  try { if (!splash.isDestroyed()) splash.close(); } catch {}
   win?.webContents.send("main-process-message", (new Date()).toLocaleString());
   if (!win?.isVisible()) win?.show();
   });
@@ -250,7 +215,6 @@ function createWindow() {
 
   // Fallback: if renderer doesn't fire did-finish-load, show main window after timeout
   setTimeout(() => {
-    try { if (!splash.isDestroyed()) splash.close(); } catch {}
     if (win && !win.isDestroyed() && !win.isVisible()) win.show();
   }, 15000);
 }

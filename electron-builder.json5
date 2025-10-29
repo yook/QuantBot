@@ -16,6 +16,7 @@
   // node_modules tree.
   asarUnpack: [
     "worker/**/*",
+    "socket/**/*",
     "node_modules/@vscode/sqlite3/**",
     "node_modules/keytar/**",
   ],
