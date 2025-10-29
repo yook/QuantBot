@@ -1,0 +1,31 @@
+name: CI - temporary windows portable build
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "18"
+          cache: npm
+
+      - name: Install deps
+        run: npm ci
+
+      - name: Build (windows portable)
+        run: npm run build:win:portable:cross -- --publish never
+
+      - name: Upload windows artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-installers
+          path: |
+            release/**/QuantBot-Windows-*-Setup.exe
+            release/**/win-unpacked/**
