@@ -1,0 +1,46 @@
+name: CI - temporary windows build + release
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-and-release-windows:
+    runs-on: windows-latest
+    env:
+      GH_TOKEN: ${{ secrets.GH_PAT }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "18"
+          cache: npm
+
+      - name: Install deps
+        run: npm ci
+
+      - name: Build (windows portable)
+        run: npm run build:win:portable:cross -- --publish never
+
+      - name: Upload windows artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-installers
+          path: |
+            release/**/QuantBot-Windows-*-Setup.exe
+            release/**/win-unpacked/**
+
+      - name: Get package version
+        id: get_version
+        run: |
+          echo "version=$(node -p \"require('./package.json').version\")" >> $GITHUB_OUTPUT
+
+      - name: Create GitHub Release and attach artifacts
+        uses: ncipollo/release-action@v1
+        with:
+          tag: v${{ steps.get_version.outputs.version }}
+          files: |
+            release/**/QuantBot-Windows-*-Setup.exe
+            release/**/win-unpacked/**
