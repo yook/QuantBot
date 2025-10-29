@@ -102,3 +102,4 @@ jobs:
           files: |
             release/**/QuantBot-Windows-*-Setup.exe
             release/**/QuantBot-Mac-*-Installer.dmg
+ 
