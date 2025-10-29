@@ -14,7 +14,7 @@
  *
  * Примечание: сложные поля хранятся как JSON-строки (TEXT).
  */
-const sqlite3 = require("@vscode/sqlite3").verbose();
+const { Database } = require("@vscode/sqlite3");
 const path = require("path");
 const fs = require("fs");
 
@@ -61,20 +61,21 @@ fs.mkdirSync(dbDir, { recursive: true });
 const dbPath = path.join(dbDir, "projects.db");
 
 // Open database connection (single, minimal)
-const db = new sqlite3.Database(dbPath, (err) => {
-  if (err) {
-    console.error("SQLite open error:", err);
-  }
-});
+let db;
+try {
+  db = new Database(dbPath);
+} catch (err) {
+  console.error("SQLite open error:", err);
+}
 
 // Apply PRAGMAs and ensure schema
-db.serialize(() => {
-  db.run("PRAGMA journal_mode=WAL;");
-  db.run("PRAGMA synchronous=NORMAL;");
-  db.run("PRAGMA cache_size = -200000;"); // ~200MB
-  db.run("PRAGMA mmap_size = 268435456;"); // 256MB
-  db.run("PRAGMA auto_vacuum = INCREMENTAL;");
-  db.run("PRAGMA temp_store = MEMORY;");
+if (db) {
+  db.exec("PRAGMA journal_mode = WAL");
+  db.exec("PRAGMA synchronous = NORMAL");
+  db.exec("PRAGMA cache_size = -200000"); // ~200MB
+  db.exec("PRAGMA mmap_size = 268435456"); // 256MB
+  db.exec("PRAGMA auto_vacuum = INCREMENTAL");
+  db.exec("PRAGMA temp_store = MEMORY");
 
   // Note: do NOT drop embeddings_cache on startup — preserve cache between restarts.
   // Previous migration code dropped the table here which caused the cache to be cleared
@@ -82,7 +83,7 @@ db.serialize(() => {
   // CREATE TABLE IF NOT EXISTS below to create it when missing.
 
   // Полная схема projects (без stats - выносим в отдельную таблицу)
-  db.run(
+  db.exec(
     `CREATE TABLE IF NOT EXISTS projects (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       name TEXT NOT NULL,
@@ -96,7 +97,7 @@ db.serialize(() => {
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
     )`
   );
-  db.run("CREATE INDEX IF NOT EXISTS idx_projects_url ON projects(url);");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_projects_url ON projects(url);");
 
   // Добавляем колонку queue_size в существующую таблицу, если она еще не существует
   db.run(
