@@ -27,7 +27,11 @@ jobs:
         run: npm ci
 
       - name: Build (mac dmg)
-        run: npm run build
+        run: npm run build -- --publish=never
+
+      - name: Set up PAT for release
+        env:
+          GH_PAT: ${{ secrets.GH_PAT }}
 
       - name: Upload mac artifacts
         uses: actions/upload-artifact@v4
