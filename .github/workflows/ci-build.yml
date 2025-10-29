@@ -27,11 +27,14 @@ jobs:
         run: npm ci
 
       - name: Build (mac dmg)
-        run: npm run build -- --publish=never
+        # do not publish from CI so we can inspect artifacts first
+        run: npm run build -- --publish never
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
 
       - name: Set up PAT for release
         env:
-          GH_PAT: ${{ secrets.GH_PAT }}
+          GH_TOKEN: ${{ secrets.GH_PAT }}
 
       - name: Upload mac artifacts
         uses: actions/upload-artifact@v4
@@ -42,7 +45,7 @@ jobs:
   build-windows-portable:
     runs-on: windows-latest
     env:
-      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GH_TOKEN: ${{ secrets.GH_PAT }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -57,10 +60,41 @@ jobs:
         run: npm ci
 
       - name: Build (windows portable)
-        run: npm run build:win:portable
+        run: npm run build:win:portable:cross -- --publish never
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+
+      - name: Validate native sqlite binary
+        shell: pwsh
+        run: |
+          Write-Host "Looking for vscode-sqlite3.node inside release/**/win-unpacked..."
+          $nodeFile = Get-ChildItem -Path release -Recurse -Filter "vscode-sqlite3.node" -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $nodeFile) {
+            Write-Error "vscode-sqlite3.node not found in release output"
+            exit 1
+          }
+          Write-Host "Found: $($nodeFile.FullName)"
+          $bytes = [System.IO.File]::ReadAllBytes($nodeFile.FullName)
+          if ($bytes.Length -lt 64) { Write-Error "File too small to be valid PE"; exit 1 }
+          if ($bytes[0] -ne 0x4D -or $bytes[1] -ne 0x5A) { Write-Error "Missing MZ header: not a PE file"; exit 1 }
+          $e_lfanew = [System.BitConverter]::ToInt32($bytes,0x3c)
+          if ($e_lfanew -le 0 -or $e_lfanew -ge $bytes.Length) { Write-Error "Invalid e_lfanew"; exit 1 }
+          $peSig = [System.Text.Encoding]::ASCII.GetString($bytes,$e_lfanew,4)
+          if ($peSig -ne "PE\0\0") { Write-Error "Missing PE\0\0 signature"; exit 1 }
+          $machine = [System.BitConverter]::ToUInt16($bytes,$e_lfanew + 4)
+          # IMAGE_FILE_MACHINE_AMD64 = 0x8664
+          if ($machine -ne 0x8664) { Write-Error "Native module is not x64 PE (machine=0x{0:X})" -f $machine; exit 1 }
+          Write-Host "Native module is valid Windows x64 PE (machine=0x{0:X})" -f $machine
 
       - name: Upload windows artifacts
         uses: actions/upload-artifact@v4
         with:
           name: windows-installers
-          path: release/**/QuantBot-Windows-*-Setup.*
+          path: |
+            release/**/QuantBot-Windows-*-Setup.exe
+            release/**/win-unpacked/**
+
+      # NOTE: Release creation is disabled in this temporary run so artifacts
+      # are produced and uploaded for manual inspection. To re-enable automatic
+      # releases after verification, restore the release step and ensure a
+      # PAT with appropriate repo permissions is stored in repository secrets.
