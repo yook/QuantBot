@@ -14,7 +14,7 @@ import type {
   ProjectSummary
 } from "../types/schema";
 
-const port = import.meta.env.VITE_SOCKET_PORT || 8090;
+const port = 8090;
 const host = import.meta.env.VITE_SOCKET_HOST || "localhost";
 
 // Stable per-window instance id for debugging
@@ -37,14 +37,14 @@ if (import.meta.hot) {
     socket = (window as any).__appSocket;
   } else {
     console.log('Creating new socket connection');
-    socket = io(`ws://${host}:${port}/`, {
+    socket = io(`ws://${host}:${port}`, {
       autoConnect: true,
       reconnection: true,
       reconnectionAttempts: 5,
       reconnectionDelay: 1000,
       timeout: 20000,
       transports: ["websocket"],
-      path: "/quantbot-socket",
+      path: "/socket",
       query: { clientInstanceId },
     });
     // Store socket in window for HMR reuse
@@ -59,7 +59,7 @@ if (import.meta.hot) {
     reconnectionDelay: 1000,
     timeout: 20000,
     transports: ["websocket"],
-    path: "/quantbot-socket",
+    path: "/socket",
     query: { clientInstanceId },
   });
 }

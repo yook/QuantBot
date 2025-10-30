@@ -1,7 +1,6 @@
 import { app, BrowserWindow, shell } from "electron";
 import path from "path";
 import { fileURLToPath } from "url";
-import { spawn, type ChildProcess } from "node:child_process";
 import { createRequire } from "module";
 
 // Автообновление
@@ -32,7 +31,6 @@ process.env.VITE_PUBLIC = VITE_DEV_SERVER_URL
 // Main window will be created at runtime inside createWindow()
 
 let win: BrowserWindow | null;
-let socketServerProcess: ChildProcess | null = null;
 
 // Prevent running multiple full Electron instances (avoid multiple windows)
 const gotSingleInstanceLock = app.requestSingleInstanceLock();
@@ -42,59 +40,30 @@ if (!gotSingleInstanceLock) {
 }
 
 // Start socket server
-function startSocketServer() {
-  const isPackaged = app.isPackaged;
-  const requireFrom = createRequire(import.meta.url);
-  const path = requireFrom("path");
-
-  let socketPath: string | null = null;
-
-  if (isPackaged) {
-    // Path for packaged app
-    socketPath = path.join(process.resourcesPath, "app.asar.unpacked", "socket", "server.cjs");
-    console.log("Packaged app detected, socket path:", socketPath);
-  } else {
-    // Path for development
-    socketPath = path.join(__dirname, "../socket/server.cjs");
-    console.log("Development mode, socket path:", socketPath);
-  }
-
-  if (socketPath) {
-    console.log("Starting socket server process...");
-    // In development we should run the socket server with the system `node`
-    // to avoid launching a full Electron binary which can attempt to load
-    // renderer/native modules (and cause architecture mismatches).
-    const nodePath = isPackaged ? process.execPath : "node";
-    console.log("Spawning socket server using:", nodePath);
-    socketServerProcess = spawn(nodePath, [socketPath], {
-      stdio: "inherit",
-      // In dev use shell so `node` is resolved via PATH; when packaged we
-      // call the exact executable so shell=false is safer.
-      shell: !isPackaged,
-    });
-
-    socketServerProcess.on("error", (err) => {
-      console.error("Failed to start socket server:", err);
-    });
-
-    socketServerProcess.on("exit", (code) => {
-      console.log(`Socket server exited with code ${code}`);
-    });
-
-    socketServerProcess.on("spawn", () => {
-      console.log("Socket server process spawned successfully");
-    });
-  } else {
-    console.error("Could not determine socket server path");
+async function startSocketServer() {
+  try {
+    const requireFrom = createRequire(import.meta.url);
+    const socketPath = requireFrom.resolve("../socket/server.cjs");
+    const socketModule = requireFrom(socketPath);
+    await socketModule.startSocketServer();
+    console.log("Socket server started from", socketPath);
+  } catch (e: any) {
+    console.warn(
+      "Failed to start socket server from server.cjs, falling back to socket.js:",
+      e?.message || String(e)
+    );
   }
 }
 
 // Stop socket server
 function stopSocketServer() {
-  if (socketServerProcess) {
-    console.log("Stopping socket server...");
-    socketServerProcess.kill("SIGTERM");
-    socketServerProcess = null;
+  try {
+    const requireFrom = createRequire(import.meta.url);
+    const socketPath = requireFrom.resolve("../socket/server.cjs");
+    const socketModule = requireFrom(socketPath);
+    socketModule.stopSocketServer();
+  } catch (e: any) {
+    console.warn("Failed to stop socket server:", e?.message || String(e));
   }
 }
 
@@ -157,7 +126,6 @@ function createWindow() {
 // for applications and their menu bar to stay active until the user quits
 // explicitly with Cmd + Q.
 app.on("window-all-closed", () => {
-  stopSocketServer(); // Stop socket server when app closes
   if (process.platform !== "darwin") {
     app.quit();
     win = null;
@@ -176,8 +144,8 @@ app.on("before-quit", () => {
   stopSocketServer(); // Ensure socket server is stopped before quit
 });
 
-app.whenReady().then(() => {
-  startSocketServer(); // Start socket server first
+app.whenReady().then(async () => {
+  await startSocketServer(); // Start socket server first
   createWindow(); // Then create window
 
   // Проверка обновлений и уведомление пользователя
