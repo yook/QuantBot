@@ -109,5 +109,4 @@ jobs:
           tag: v${{ steps.get_version.outputs.version }}
           # Attach both uploaded artifact bundles (windows and mac)
           artifacts: windows-installers,mac-installers
-          # Allow updating an existing release with the same tag
-          allowUpdates: true
+          # Note: allowUpdates removed to avoid updating existing releases in production
