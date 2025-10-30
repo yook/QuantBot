@@ -26,6 +26,4 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: windows-installers
-          path: |
-            release/**/QuantBot-Windows-*-Setup.exe
-            release/**/win-unpacked/**
+          path: release/**/QuantBot-*-Setup.exe
