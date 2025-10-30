@@ -1,6 +1,7 @@
 import { app, BrowserWindow, shell } from "electron";
 import path from "path";
 import { fileURLToPath } from "url";
+import { spawn, type ChildProcess } from "node:child_process";
 import { createRequire } from "module";
 
 // Автообновление
@@ -31,6 +32,7 @@ process.env.VITE_PUBLIC = VITE_DEV_SERVER_URL
 // Main window will be created at runtime inside createWindow()
 
 let win: BrowserWindow | null;
+let socketServerProcess: ChildProcess | null = null;
 
 // Prevent running multiple full Electron instances (avoid multiple windows)
 const gotSingleInstanceLock = app.requestSingleInstanceLock();
@@ -40,28 +42,61 @@ if (!gotSingleInstanceLock) {
 }
 
 // Start socket server
-async function startSocketServer() {
+function startSocketServer(): boolean {
+  // Prefer spawning a separate process to avoid loading native bindings into
+  // the Electron main process (architecture mismatches). Always spawn.
   try {
-    const socketPath = path.resolve(__dirname, "../socket/server.cjs");
-    const requireFrom = createRequire(import.meta.url);
-    const socketModule = requireFrom(socketPath);
-    await socketModule.startSocketServer();
-    console.log("Socket server started from", socketPath);
+    startSocketServerProcess();
+    return true;
   } catch (e: any) {
-    console.warn(
-      "Failed to start socket server from server.cjs, falling back to socket.js:",
-      e?.message || String(e)
-    );
+    console.warn('Failed to spawn socket server process:', e?.message || String(e));
+    return false;
   }
+}
+
+// Spawn-based server start (safer for native modules). Use this when direct
+// require fails due to native binding/arch mismatches.
+function startSocketServerProcess() {
+  if (socketServerProcess) {
+    console.log('Socket server process already started');
+    return;
+  }
+
+  // Prefer system `node` from PATH so native modules are loaded with the
+  // matching system Node.js runtime rather than Electron's embedded node.
+  const socketPath = path.resolve(__dirname, "../socket/server.cjs");
+  console.log('Spawning socket server process with system node:', socketPath);
+
+  const proc = spawn('node', [socketPath], { stdio: 'inherit', shell: false });
+  socketServerProcess = proc;
+
+  proc.on('error', (err) => {
+    console.error('Socket server process error:', err);
+  });
+
+  proc.on('exit', (code, sig) => {
+    console.log('Socket server process exited', code, sig);
+    socketServerProcess = null;
+  });
 }
 
 // Stop socket server
 function stopSocketServer() {
   try {
+    // If we spawned the server process, terminate it
+    if (socketServerProcess) {
+      console.log('Stopping spawned socket server process...');
+      socketServerProcess.kill('SIGTERM');
+      socketServerProcess = null;
+      return;
+    }
+
     const socketPath = path.resolve(__dirname, "../socket/server.cjs");
     const requireFrom = createRequire(import.meta.url);
     const socketModule = requireFrom(socketPath);
-    socketModule.stopSocketServer();
+    if (socketModule && typeof socketModule.stopSocketServer === 'function') {
+      socketModule.stopSocketServer();
+    }
   } catch (e: any) {
     console.warn("Failed to stop socket server:", e?.message || String(e));
   }
@@ -144,8 +179,13 @@ app.on("before-quit", () => {
   stopSocketServer(); // Ensure socket server is stopped before quit
 });
 
-app.whenReady().then(async () => {
-  await startSocketServer(); // Start socket server first
+app.whenReady().then(() => {
+  const ok = startSocketServer();
+  if (!ok) {
+    // fallback to spawn-based server start (works better with native bindings)
+    startSocketServerProcess();
+  }
+
   createWindow(); // Then create window
 
   // Проверка обновлений и уведомление пользователя
