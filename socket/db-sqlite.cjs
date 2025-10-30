@@ -14,7 +14,19 @@
  *
  * Примечание: сложные поля хранятся как JSON-строки (TEXT).
  */
-const { Database } = require("@vscode/sqlite3");
+// Prefer the standard `sqlite3` package when available; fall back to
+// `@vscode/sqlite3` which provides similar API shape. This makes the
+// server more flexible depending on which dependency is installed.
+let Database;
+try {
+  const sqlite = require("sqlite3");
+  // sqlite3 exports Database as a property
+  Database = sqlite.Database || sqlite;
+} catch (e) {
+  // fallback to @vscode/sqlite3
+  const sqlite = require("@vscode/sqlite3");
+  Database = sqlite.Database || sqlite;
+}
 const path = require("path");
 const fs = require("fs");
 

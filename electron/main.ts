@@ -34,130 +34,58 @@ process.env.VITE_PUBLIC = VITE_DEV_SERVER_URL
 let win: BrowserWindow | null;
 let socketServerProcess: ChildProcess | null = null;
 
+// Prevent running multiple full Electron instances (avoid multiple windows)
+const gotSingleInstanceLock = app.requestSingleInstanceLock();
+if (!gotSingleInstanceLock) {
+  // If we couldn't get the lock, another instance is already running — quit this one.
+  app.quit();
+}
+
 // Start socket server
 function startSocketServer() {
-  // Strategy:
-  // 1) In dev: require and run local `socket/server.cjs` from project root.
-  // 2) In packaged app: prefer the unpacked artifact placed by electron-builder
-  //    (resources/app.asar.unpacked/socket/server.cjs). Require it in-process
-  //    via createRequire to avoid having to spawn an external `node` binary.
-  // 3) Fallback: if unpacked not found, attempt ASAR extraction (legacy).
-
   const isPackaged = app.isPackaged;
   const requireFrom = createRequire(import.meta.url);
-  const fs = requireFrom("fs");
-  const os = requireFrom("os");
+  const path = requireFrom("path");
+
   let socketPath: string | null = null;
-  let cwd: string | null = null;
 
-  try {
-    if (isPackaged) {
-      // Prefer requiring the server from inside app.asar — this allows the server
-      // to resolve its dependencies from the bundled node_modules inside the asar.
-      const asarServerPath = path.join(
-        process.resourcesPath,
-        "app.asar",
-        "socket",
-        "server.cjs"
-      );
-      try {
-        if (fs.existsSync(path.join(process.resourcesPath, "app.asar"))) {
-          console.log("Attempting to require socket server from app.asar:", asarServerPath);
-          // Create a require function scoped to the server file so that
-          // the server's internal requires resolve relative to its location
-          const requireForAsarServer = createRequire(asarServerPath);
-          const serverModuleFromAsar = requireForAsarServer(asarServerPath);
-          if (serverModuleFromAsar && typeof serverModuleFromAsar.startSocketServer === "function") {
-            serverModuleFromAsar.startSocketServer();
-            console.log("Socket server started from app.asar in-process.");
-            return;
-          }
-        }
-      } catch (e) {
-        console.warn("Requiring server from app.asar failed — will try unpacked/extract fallback:", e);
-      }
+  if (isPackaged) {
+    // Path for packaged app
+    socketPath = path.join(process.resourcesPath, "app.asar.unpacked", "socket", "server.cjs");
+    console.log("Packaged app detected, socket path:", socketPath);
+  } else {
+    // Path for development
+    socketPath = path.join(__dirname, "../socket/server.cjs");
+    console.log("Development mode, socket path:", socketPath);
+  }
 
-      // Fallback: check for an unpacked copy placed by electron-builder (recommended)
-      const unpackedPath = path.join(
-        process.resourcesPath,
-        "app.asar.unpacked",
-        "socket",
-        "server.cjs"
-      );
-      const unpackedDir = path.join(process.resourcesPath, "app.asar.unpacked", "socket");
-
-      if (fs.existsSync(unpackedPath)) {
-        console.log("Found unpacked socket server at:", unpackedPath);
-        socketPath = unpackedPath;
-        cwd = unpackedDir;
-      } else {
-        // If socket folder wasn't unpacked, fall back to extracting the socket folder to a temp dir.
-        const asarPath = path.join(process.resourcesPath, "app.asar");
-        if (fs.existsSync(asarPath)) {
-          console.log("app.asar found at:", asarPath, "— extracting socket to temp dir");
-          const tempDir = os.tmpdir();
-          const extractPath = path.join(tempDir, "quantbot-socket-" + Date.now());
-          fs.mkdirSync(extractPath, { recursive: true });
-          try {
-            const asar = requireFrom("@electron/asar");
-            asar.extractAll(asarPath, extractPath);
-            socketPath = path.join(extractPath, "socket", "server.cjs");
-            cwd = path.join(extractPath, "socket");
-            console.log("Extracted socket to:", socketPath);
-          } catch (e) {
-            console.error("Failed to extract socket from ASAR:", e);
-          }
-        }
-      }
-    } else {
-      // Development mode — use project-local socket folder
-      socketPath = path.join(process.env.APP_ROOT!, "socket", "server.cjs");
-      cwd = path.join(process.env.APP_ROOT!, "socket");
-    }
-
-    if (!socketPath || !fs.existsSync(socketPath)) {
-      console.error("Socket server script not found at expected path:", socketPath);
-      return;
-    }
-
-    console.log("Starting socket server from:", socketPath);
-    console.log("Working directory:", cwd);
-    console.log("Is packaged:", isPackaged);
-
-    // Prefer to load the CJS module into the current (main) process using createRequire.
-    // This avoids spawning an external Node binary and prevents ASAR / path issues.
-    try {
-      // Load the CJS module using a require() bound to the socket script path
-      const requireForServer = createRequire(socketPath);
-      const serverModule = requireForServer(socketPath);
-      if (serverModule && typeof serverModule.startSocketServer === "function") {
-        // Start server (port optional, defaults inside module)
-        serverModule.startSocketServer();
-        console.log("Socket server started in-process.");
-        return;
-      }
-      console.warn("Socket module does not export startSocketServer(); falling back to child process spawn");
-    } catch (err) {
-      console.warn("In-process require failed, falling back to spawn():", err);
-    }
-
-    // Fallback: spawn an external process (older behaviour). Use `node` if available.
-    // Note: when packaged, node may not be available in PATH — but spawn is kept as a fallback.
-    socketServerProcess = spawn("node", [socketPath], {
-      cwd: cwd || undefined,
-      stdio: ["inherit", "inherit", "inherit"],
+  if (socketPath) {
+    console.log("Starting socket server process...");
+    // In development we should run the socket server with the system `node`
+    // to avoid launching a full Electron binary which can attempt to load
+    // renderer/native modules (and cause architecture mismatches).
+    const nodePath = isPackaged ? process.execPath : "node";
+    console.log("Spawning socket server using:", nodePath);
+    socketServerProcess = spawn(nodePath, [socketPath], {
+      stdio: "inherit",
+      // In dev use shell so `node` is resolved via PATH; when packaged we
+      // call the exact executable so shell=false is safer.
+      shell: !isPackaged,
     });
 
-    socketServerProcess.on("error", (error) => {
-      console.error("Socket server child process error:", error);
+    socketServerProcess.on("error", (err) => {
+      console.error("Failed to start socket server:", err);
     });
 
     socketServerProcess.on("exit", (code) => {
       console.log(`Socket server exited with code ${code}`);
-      socketServerProcess = null;
     });
-  } catch (error) {
-    console.error("Failed to start socket server:", error);
+
+    socketServerProcess.on("spawn", () => {
+      console.log("Socket server process spawned successfully");
+    });
+  } else {
+    console.error("Could not determine socket server path");
   }
 }
 
@@ -171,6 +99,12 @@ function stopSocketServer() {
 }
 
 function createWindow() {
+  // Prevent creating multiple windows
+  if (win && !win.isDestroyed()) {
+    win.focus();
+    return;
+  }
+
   // create main window
   win = new BrowserWindow({
     icon: path.join(process.env.VITE_PUBLIC, "quant.png"),

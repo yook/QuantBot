@@ -14,7 +14,9 @@ import type {
   ProjectSummary
 } from "../types/schema";
 
-const port = import.meta.env.VITE_DEV_SERVER_URL ? 8090 : 8090;
+const port = import.meta.env.VITE_SOCKET_PORT || 8090;
+const host = import.meta.env.VITE_SOCKET_HOST || "localhost";
+
 // Stable per-window instance id for debugging
 const clientInstanceId = (() => {
   const w = window as any;
@@ -35,7 +37,7 @@ if (import.meta.hot) {
     socket = (window as any).__appSocket;
   } else {
     console.log('Creating new socket connection');
-    socket = io(`ws://localhost:${port}/`, {
+    socket = io(`ws://${host}:${port}/`, {
       autoConnect: true,
       reconnection: true,
       reconnectionAttempts: 5,
@@ -50,7 +52,7 @@ if (import.meta.hot) {
   }
 } else {
   // Production: create socket normally
-  socket = io(`ws://localhost:${port}/`, {
+  socket = io(`ws://${host}:${port}/`, {
     autoConnect: true,
     reconnection: true,
     reconnectionAttempts: 5,

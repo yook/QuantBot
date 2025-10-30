@@ -1249,29 +1249,13 @@ onMounted(async () => {
 
     // Initialize virtual scroll
     const updatePageSize = () => {
-      // Выводим в консоль размер окна программы
-      console.log(
-        "Размер окна программы:",
-        window.innerWidth,
-        "x",
-        window.innerHeight,
-        "px"
-      );
-
-      if (tableCardRef.value) {
-        const cardElement = tableCardRef.value.$el || tableCardRef.value;
-        console.log(
-          "Высота контейнера таблицы:",
-          cardElement.offsetHeight,
-          "px"
-        );
-      }
+      // window size and container height logging removed
 
       // Для фиксированной высоты рассчитываем pageSize на основе fixedHeight
       if (props.fixedHeight && props.fixedHeight > 0) {
         // Проверяем готовность tableCardRef
         if (!tableCardRef.value) {
-          console.log("tableCardRef not ready, keeping default pageSize");
+          // tableCardRef not ready: keep default pageSize
           return;
         }
 

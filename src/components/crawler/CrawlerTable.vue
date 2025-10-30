@@ -799,18 +799,15 @@ onMounted(async () => {
         return;
       }
 
-      console.log(
-        `Virtual scroll: availableHeight=${availableHeight}px, rowHeight=${rowHeight}px, oldPageSize=${oldPageSize}, newPageSize=${pageSize.value}, dataLength=${dataComp.value.length}`
-      );
+      // virtual scroll: computed values (logging removed)
 
       // После изменения pageSize нужно скорректировать start, если он стал слишком большим
       const maxStart = Math.max(0, dataComp.value.length - pageSize.value);
       if (start.value > maxStart) {
-        console.log(`Correcting start: old=${start.value}, new=${maxStart}`);
         start.value = maxStart;
       }
     } else {
-      console.log("tableCardRef not ready, keeping default pageSize");
+      // tableCardRef not ready: keep default pageSize
     }
   };
 

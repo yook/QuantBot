@@ -1,6 +1,7 @@
 # Copilot instructions for QuantBot
 
 These rules help AI agents be productive in this repo. Keep responses concise and code-focused.
+Отвечай по русски.
 
 ## Golden rules
 
