@@ -17,14 +17,14 @@ jobs:
       - name: 🧾 Checkout repository
         uses: actions/checkout@v4
 
-      # 2️⃣ Устанавливаем Node.js (такой же, как в CI)
+      # 2️⃣ Устанавливаем Node.js (та же версия, что в dev)
       - name: ⚙️ Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: "22.x"
           cache: npm
 
-      # 3️⃣ Кеш Electron Builder, чтобы ускорить сборку
+      # 3️⃣ Кеш Electron и electron-builder для ускорения сборки
       - name: 💾 Cache Electron builder
         uses: actions/cache@v4
         with:
@@ -33,26 +33,29 @@ jobs:
             ~/.cache/electron-builder
           key: ${{ runner.os }}-electron-cache
 
-      # 4️⃣ Устанавливаем зависимости надёжным способом
-      #    с флагом --include=optional --force
-      #    чтобы не пропустить бинарные пакеты (например @rollup/rollup-win32-x64-msvc)
+      # 4️⃣ Устанавливаем зависимости с исправлением бага npm/rollup
       - name: 📦 Install dependencies (safe)
         run: |
-          rd /s /q node_modules || exit 0
-          del package-lock.json || exit 0
+          Write-Host "🧹 Cleaning node_modules and lock file..."
+          Remove-Item -Recurse -Force node_modules -ErrorAction SilentlyContinue
+          Remove-Item -Force package-lock.json -ErrorAction SilentlyContinue
+          Write-Host "📦 Installing dependencies..."
           npm install --include=optional --force
+        shell: pwsh
 
       # 5️⃣ Сборка portable-версии QuantBot
       - name: 🏗️ Build portable Windows app
         run: npm run build:win:portable:cross -- --publish never
 
-      # 6️⃣ Собираем артефакты (.exe, .yml и т.п.) в отдельную папку
+      # 6️⃣ Собираем артефакты (.exe, .yml, .blockmap) для загрузки
       - name: 🧩 Collect release artifacts
         run: |
-          mkdir dist-upload
-          copy release\**\*.exe dist-upload\ || exit 0
-          copy release\**\*.yml dist-upload\ || exit 0
-          copy release\**\*.blockmap dist-upload\ || exit 0
+          Write-Host "📁 Collecting artifacts..."
+          New-Item -ItemType Directory -Force -Path dist-upload | Out-Null
+          Copy-Item -Path "release/**/*.exe" -Destination "dist-upload" -Force -ErrorAction SilentlyContinue
+          Copy-Item -Path "release/**/*.yml" -Destination "dist-upload" -Force -ErrorAction SilentlyContinue
+          Copy-Item -Path "release/**/*.blockmap" -Destination "dist-upload" -Force -ErrorAction SilentlyContinue
+        shell: pwsh
 
       # 7️⃣ Загружаем файлы в GitHub Release
       - name: 🚀 Upload to GitHub Release
