@@ -4,7 +4,7 @@
   "description": "QuantBot — инструмент для краулинга и анализа сайтов",
   "author": "Yook",
   "private": true,
-  "version": "1.0.10",
+  "version": "1.0.12",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -24,7 +24,7 @@
   },
   "dependencies": {
     "@electron/asar": "^4.0.1",
-  "@vscode/sqlite3": "^5.1.8-vscode",
+    "@vscode/sqlite3": "^5.1.8-vscode",
     "axios": "^1.12.2",
     "body-parser": "^2.2.0",
     "cheerio": "^1.1.2",
