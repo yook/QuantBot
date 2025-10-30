@@ -42,8 +42,8 @@ if (!gotSingleInstanceLock) {
 // Start socket server
 async function startSocketServer() {
   try {
+    const socketPath = path.resolve(__dirname, "../socket/server.cjs");
     const requireFrom = createRequire(import.meta.url);
-    const socketPath = requireFrom.resolve("../socket/server.cjs");
     const socketModule = requireFrom(socketPath);
     await socketModule.startSocketServer();
     console.log("Socket server started from", socketPath);
@@ -58,8 +58,8 @@ async function startSocketServer() {
 // Stop socket server
 function stopSocketServer() {
   try {
+    const socketPath = path.resolve(__dirname, "../socket/server.cjs");
     const requireFrom = createRequire(import.meta.url);
-    const socketPath = requireFrom.resolve("../socket/server.cjs");
     const socketModule = requireFrom(socketPath);
     socketModule.stopSocketServer();
   } catch (e: any) {

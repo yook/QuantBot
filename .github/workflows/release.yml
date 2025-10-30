@@ -3,7 +3,6 @@ name: 🪟 Build and Release QuantBot (Windows)
 on:
   release:
     types: [published]
-  workflow_dispatch:
 
 permissions:
   contents: write # нужно для загрузки файлов в релиз
@@ -22,9 +21,19 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "22.x"
-          cache: npm
 
-      # 3️⃣ Кеш Electron и electron-builder для ускорения сборки
+      # 3️⃣ Кешируем node_modules, чтобы ускорить установку зависимостей
+      - name: 🧰 Cache node_modules
+        uses: actions/cache@v4
+        id: node-cache
+        with:
+          path: |
+            node_modules
+          key: ${{ runner.os }}-node-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-node-
+
+      # 4️⃣ Кеш Electron и Electron Builder (внутренние бинарные зависимости)
       - name: 💾 Cache Electron builder
         uses: actions/cache@v4
         with:
@@ -33,8 +42,9 @@ jobs:
             ~/.cache/electron-builder
           key: ${{ runner.os }}-electron-cache
 
-      # 4️⃣ Устанавливаем зависимости с исправлением бага npm/rollup
+      # 5️⃣ Устанавливаем зависимости (если не восстановились из кеша)
       - name: 📦 Install dependencies (safe)
+        if: steps.node-cache.outputs.cache-hit != 'true'
         run: |
           Write-Host "🧹 Cleaning node_modules and lock file..."
           Remove-Item -Recurse -Force node_modules -ErrorAction SilentlyContinue
@@ -43,11 +53,11 @@ jobs:
           npm install --include=optional --force
         shell: pwsh
 
-      # 5️⃣ Сборка portable-версии QuantBot
+      # 6️⃣ Сборка portable-версии QuantBot
       - name: 🏗️ Build portable Windows app
         run: npm run build:win:portable:cross -- --publish never
 
-      # 6️⃣ Собираем артефакты (.exe, .yml, .blockmap) для загрузки
+      # 7️⃣ Собираем артефакты (.exe, .yml, .blockmap) для загрузки
       - name: 🧩 Collect release artifacts
         run: |
           Write-Host "📁 Collecting artifacts..."
@@ -57,7 +67,7 @@ jobs:
           Copy-Item -Path "release/**/*.blockmap" -Destination "dist-upload" -Force -ErrorAction SilentlyContinue
         shell: pwsh
 
-      # 7️⃣ Загружаем файлы в GitHub Release
+      # 8️⃣ Загружаем файлы в GitHub Release
       - name: 🚀 Upload to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
