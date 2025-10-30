@@ -104,8 +104,8 @@ jobs:
         if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/')
         uses: ncipollo/release-action@v1
         with:
+          # Use PAT so the action can create/update releases
+          token: ${{ secrets.GH_PAT }}
           tag: v${{ steps.get_version.outputs.version }}
-          files: |
-            release/**/QuantBot-Windows-*-Setup.exe
-            release/**/QuantBot-Mac-*-Installer.dmg
- 
+          # Attach both uploaded artifact bundles (windows and mac)
+          artifacts: windows-installers,mac-installers

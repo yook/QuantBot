@@ -42,7 +42,8 @@ jobs:
       - name: Create GitHub Release and attach artifacts
         uses: ncipollo/release-action@v1
         with:
+          # Use the PAT we added to repository secrets so the action can create releases
+          token: ${{ secrets.GH_PAT }}
           tag: v${{ steps.get_version.outputs.version }}
-          files: |
-            release/**/QuantBot-Windows-*-Setup.exe
-            release/**/win-unpacked/**
+          # Attach the artifact uploaded above by name
+          artifacts: windows-installers
