@@ -1,0 +1,52 @@
+name: 🪟 Build and Release QuantBot (Windows)
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: write # нужно для загрузки файлов в релиз
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+
+    steps:
+      - name: 🧾 Checkout repository
+        uses: actions/checkout@v4
+
+      - name: ⚙️ Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22.x"
+          cache: npm
+
+      - name: 💾 Cache Electron builder
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/electron
+            ~/.cache/electron-builder
+          key: ${{ runner.os }}-electron-cache
+
+      - name: 📦 Install dependencies
+        run: |
+          npm ci
+          npm install --include=optional --no-save
+
+      - name: 🏗️ Build portable Windows app
+        run: npm run build:win:portable:cross -- --publish never
+
+      - name: 🧩 Collect release artifacts
+        run: |
+          mkdir -p dist-upload
+          copy release\**\*.exe dist-upload\
+          copy release\**\*.yml dist-upload\ || exit 0
+
+      - name: 🚀 Upload to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist-upload/**
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
