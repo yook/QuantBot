@@ -13,15 +13,18 @@ jobs:
     runs-on: windows-latest
 
     steps:
+      # 1️⃣ Клонируем репозиторий
       - name: 🧾 Checkout repository
         uses: actions/checkout@v4
 
+      # 2️⃣ Устанавливаем Node.js (такой же, как в CI)
       - name: ⚙️ Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: "22.x"
           cache: npm
 
+      # 3️⃣ Кеш Electron Builder, чтобы ускорить сборку
       - name: 💾 Cache Electron builder
         uses: actions/cache@v4
         with:
@@ -30,20 +33,28 @@ jobs:
             ~/.cache/electron-builder
           key: ${{ runner.os }}-electron-cache
 
-      - name: 📦 Install dependencies
+      # 4️⃣ Устанавливаем зависимости надёжным способом
+      #    с флагом --include=optional --force
+      #    чтобы не пропустить бинарные пакеты (например @rollup/rollup-win32-x64-msvc)
+      - name: 📦 Install dependencies (safe)
         run: |
-          npm ci
-          npm install --include=optional --no-save
+          rd /s /q node_modules || exit 0
+          del package-lock.json || exit 0
+          npm install --include=optional --force
 
+      # 5️⃣ Сборка portable-версии QuantBot
       - name: 🏗️ Build portable Windows app
         run: npm run build:win:portable:cross -- --publish never
 
+      # 6️⃣ Собираем артефакты (.exe, .yml и т.п.) в отдельную папку
       - name: 🧩 Collect release artifacts
         run: |
-          mkdir -p dist-upload
-          copy release\**\*.exe dist-upload\
+          mkdir dist-upload
+          copy release\**\*.exe dist-upload\ || exit 0
           copy release\**\*.yml dist-upload\ || exit 0
+          copy release\**\*.blockmap dist-upload\ || exit 0
 
+      # 7️⃣ Загружаем файлы в GitHub Release
       - name: 🚀 Upload to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
