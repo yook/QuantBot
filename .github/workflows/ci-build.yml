@@ -114,20 +114,20 @@ jobs:
   #         path: |
   #           release/**/QuantBot-Windows-*-Setup.exe
   #           release/**/win-unpacked/**
-  - name: Get package version
-    id: get_version
-    shell: bash
-    run: |
-      version=$(node -p "require('./package.json').version")
-      echo "version=$version" >> $GITHUB_OUTPUT
+      # - name: Get package version
+      #   id: get_version
+      #   shell: bash
+      #   run: |
+      #     version=$(node -p "require('./package.json').version")
+      #     echo "version=$version" >> $GITHUB_OUTPUT
 
-  - name: Create GitHub Release and attach artifacts
-    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/')
-    uses: ncipollo/release-action@v1
-    with:
-      # Use PAT so the action can create/update releases
-      token: ${{ secrets.GH_PAT }}
-      tag: v${{ steps.get_version.outputs.version }}
-      # Attach both uploaded artifact bundles (windows and mac)
-      artifacts: mac-installers
-      # Note: allowUpdates removed to avoid updating existing releases in production
+      # - name: Create GitHub Release and attach artifacts
+      #   if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/')
+      #   uses: ncipollo/release-action@v1
+      #   with:
+      #     # Use PAT so the action can create/update releases
+      #     token: ${{ secrets.GH_PAT }}
+      #     tag: v${{ steps.get_version.outputs.version }}
+      #     # Attach both uploaded artifact bundles (windows and mac)
+      #     artifacts: mac-installers
+      #     # Note: allowUpdates removed to avoid updating existing releases in production
