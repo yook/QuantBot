@@ -17,7 +17,10 @@ jobs:
           cache: npm
 
       - name: Install deps
-        run: npm ci --include=optional
+        run: npm ci
+
+      - name: Install optional deps
+        run: npm install --include=optional --no-save
 
       - name: Build (windows portable)
         run: npm run build:win:portable:cross -- --publish never
