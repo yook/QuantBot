@@ -47,3 +47,5 @@ jobs:
           tag: v${{ steps.get_version.outputs.version }}
           # Attach the artifact uploaded above by name
           artifacts: windows-installers
+          # Allow updating an existing release with the same tag (useful for test runs)
+          allowUpdates: true
