@@ -79,14 +79,15 @@ jobs:
           if ($bytes[0] -ne 0x4D -or $bytes[1] -ne 0x5A) { Write-Error "Missing MZ header: not a PE file"; exit 1 }
           $e_lfanew = [System.BitConverter]::ToInt32($bytes,0x3c)
           if ($e_lfanew -le 0 -or $e_lfanew -ge $bytes.Length) { Write-Error "Invalid e_lfanew"; exit 1 }
-          $peSig = [System.Text.Encoding]::ASCII.GetString($bytes,$e_lfanew,4)
-          # Avoid using string escapes like "\0" which can be mis-interpreted
-          # when the YAML is parsed; check the PE signature by bytes instead
-          if ($bytes[$e_lfanew] -ne 0x50 -or $bytes[$e_lfanew + 1] -ne 0x45 -or $bytes[$e_lfanew + 2] -ne 0x00 -or $bytes[$e_lfanew + 3] -ne 0x00) { Write-Error "Missing PE signature bytes"; exit 1 }
-          $machine = [System.BitConverter]::ToUInt16($bytes, $e_lfanew + 4)
-          # IMAGE_FILE_MACHINE_AMD64 = 0x8664
-          if ($machine -ne 0x8664) { Write-Error "Native module is not x64 PE (machine=0x{0:X})" -f $machine; exit 1 }
-          Write-Host "Native module is valid Windows x64 PE (machine=0x{0:X})" -f $machine
+            # Check PE signature bytes explicitly
+            if ($bytes[$e_lfanew] -ne 0x50 -or $bytes[$e_lfanew + 1] -ne 0x45 -or $bytes[$e_lfanew + 2] -ne 0x00 -or $bytes[$e_lfanew + 3] -ne 0x00) {
+              Write-Error "Missing PE signature bytes"
+              exit 1
+            }
+            $machine = [System.BitConverter]::ToUInt16($bytes, $e_lfanew + 4)
+            # IMAGE_FILE_MACHINE_AMD64 = 0x8664
+            if ($machine -ne 0x8664) { Write-Error ("Native module is not x64 PE (machine=0x{0:X})" -f $machine); exit 1 }
+            Write-Host ("Native module is valid Windows x64 PE (machine=0x{0:X})" -f $machine)
 
       - name: Upload windows artifacts
         uses: actions/upload-artifact@v4
