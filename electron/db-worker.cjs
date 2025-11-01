@@ -22,6 +22,13 @@ if (!fs.existsSync(dbDir)) {
 }
 
 console.error("[DB Worker] Starting with DB path:", dbPath);
+console.error("[DB Worker] Versions:", {
+  node: process.versions && process.versions.node,
+  electron: process.versions && process.versions.electron,
+  modules: process.versions && process.versions.modules,
+  platform: process.platform,
+  arch: process.arch,
+});
 
 // Load better-sqlite3 (should work in Node process)
 let db = null;
@@ -40,9 +47,25 @@ try {
 
   console.error("[DB Worker] Database initialized successfully");
 } catch (err) {
-  console.error("[DB Worker] Failed to initialize database:", err);
+  try {
+    console.error("[DB Worker] Failed to initialize database:", err && err.message ? err.message : err);
+    if (err && err.stack) console.error("[DB Worker] Stack:", err.stack);
+  } catch (e) {}
   process.exit(1);
 }
+
+process.on('uncaughtException', (err) => {
+  try {
+    console.error('[DB Worker] uncaughtException:', err && err.message ? err.message : err);
+    if (err && err.stack) console.error('[DB Worker] uncaughtException stack:', err.stack);
+  } catch (e) {}
+});
+
+process.on('unhandledRejection', (reason) => {
+  try {
+    console.error('[DB Worker] unhandledRejection:', reason && reason.message ? reason.message : reason);
+  } catch (e) {}
+});
 
 function initializeSchema() {
   // Projects table
