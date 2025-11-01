@@ -175,7 +175,6 @@ import {
   ElTag,
   ElIcon,
 } from "element-plus";
-import socket from "../../../stores/socket-client";
 import { useProjectStore } from "../../../stores/project";
 import { useTypingStore } from "../../../stores/typing";
 import { useI18n } from "vue-i18n";

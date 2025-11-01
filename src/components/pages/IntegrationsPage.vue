@@ -72,7 +72,7 @@
 
 <script setup>
 import { reactive, onMounted, watch, onUnmounted, markRaw } from "vue";
-import socket from "../../stores/socket-client";
+import { socket } from "../../stores/socket-client";
 import { useProjectStore } from "../../stores/project";
 import { ElMessageBox, ElMessage } from "element-plus";
 import { Delete } from "@element-plus/icons-vue";

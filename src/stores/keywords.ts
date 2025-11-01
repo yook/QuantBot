@@ -1,9 +1,9 @@
 import { defineStore } from "pinia";
-import { ref, computed, nextTick } from "vue";
+import { ref, computed } from "vue";
 import { ElMessage } from "element-plus";
 import { ipcClient } from "./socket-client";
 import { useProjectStore } from "./project";
-import type { Keyword, LoadKeywordsOptions, ErrorPayload } from "../types/schema";
+import type { Keyword, LoadKeywordsOptions } from "../types/schema";
 
 export const useKeywordsStore = defineStore("keywords", () => {
   // Access project store for clustering settings (eps, method)

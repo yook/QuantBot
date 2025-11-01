@@ -152,7 +152,7 @@
 <script setup>
 import { ref } from "vue";
 import { watch } from "vue";
-import socket from "../../../stores/socket-client";
+import { ipcClient } from "../../../stores/socket-client";
 import { useProjectStore } from "../../../stores/project";
 import { InfoFilled } from "@element-plus/icons-vue";
 import {
@@ -353,11 +353,15 @@ function startClustering() {
     console.warn("Failed to persist clustering params to project", e);
   }
 
-  socket.emit("keywords:start-clustering", {
-    projectId,
-    eps: Number(form.value.eps),
-    method: String("components"),
-  });
+  const algorithm = String(form.value.algorithm || "components");
+  const eps = Number(form.value.eps);
+  const minPts = Number(dbscanMinPts.value);
+  ipcClient
+    .startClustering(Number(projectId), algorithm, algorithm === 'components' ? eps : Number(dbscanEps.value), algorithm === 'dbscan' ? minPts : undefined)
+    .then(() => {
+      // optionally show feedback
+    })
+    .catch((e) => console.error("Failed to start clustering via IPC", e));
 }
 </script>
 

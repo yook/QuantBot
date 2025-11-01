@@ -1,5 +1,5 @@
 import * as XLSX from "xlsx";
-import socket from "./socket-client";
+import ipcClient from "./socket-client";
 import { toRaw } from "vue";
 import { useProjectStore } from "./project";
 import moment from "moment";
@@ -23,75 +23,61 @@ export interface ExportRequest {
 export async function downloadDataFromProject(req: ExportRequest) {
   const { projectId, currentDb, header, allColumns } = req;
 
-  return new Promise<void>((resolve, reject) => {
-    try {
-      const fields: Record<string, number> = {};
-      header.forEach((element: string) => {
-        if (element !== "_rowNumber") {
-          fields[element] = 1;
-        }
-      });
+  // Fetch full dataset via IPC based on currentDb
+  const pid = projectId ? Number(projectId) : undefined;
+  if (!pid) throw new Error("Invalid projectId");
 
-      const requestData = {
-        id: projectId,
-        db: currentDb,
-        fields: fields,
-      };
+  let data: any[] = [];
+  if (currentDb === "urls") {
+    data = (await ipcClient.getUrlsAll(pid)) || [];
+  } else if (currentDb === "keywords") {
+    data = (await ipcClient.getKeywordsAll(pid)) || [];
+  } else {
+    // Fallback: try urls
+    data = (await ipcClient.getUrlsAll(pid)) || [];
+  }
 
-      socket.emit("get-all-data", requestData);
+  if (!Array.isArray(data) || data.length === 0) {
+    throw new Error("No data received for export");
+  }
 
-        socket.once("urls-all-data", (data: any[]) => {
-        if (!data || !Array.isArray(data) || data.length === 0) {
-          reject(new Error("No data received for export"));
-          return;
-        }
+  const filterCol = allColumns.filter((item: ColumnDef) => header.includes(item.prop));
 
-        const filterCol = allColumns.filter((item: ColumnDef) => {
-          return header.includes(item.prop);
-        });
-
-        const headerData: Record<string, string> = {};
-        filterCol.forEach((item: ColumnDef) => {
-          headerData[item.prop] = item.name;
-        });
-
-        const book = XLSX.utils.book_new();
-
-        const arr = data.slice();
-
-        const newArr = arr
-          .map((el: Record<string, any>) => {
-            if (el.date) {
-              el.date = moment(el.date).format("YYYY-MM-DD HH:mm:ss");
-            }
-            return el;
-          })
-          .map((el: Record<string, any>) => {
-            const obj: Record<string, any> = {};
-            header.forEach((item: string) => {
-              obj[item] = el[item];
-            });
-            return obj;
-          });
-
-        newArr.unshift(headerData);
-
-        const wd = XLSX.utils.json_to_sheet(newArr, {
-          header: header,
-          skipHeader: true,
-        });
-        XLSX.utils.book_append_sheet(book, wd, currentDb);
-
-        const fileName = `${currentDb}-report.xlsx`;
-        XLSX.writeFile(book, fileName);
-        console.log('[Export] Saved file:', fileName);
-
-        resolve();
-      });
-    } catch (err) {
-      reject(err);
-    }
+  const headerData: Record<string, string> = {};
+  filterCol.forEach((item: ColumnDef) => {
+    headerData[item.prop] = item.name;
   });
+
+  const book = XLSX.utils.book_new();
+
+  const arr = data.slice();
+
+  const newArr = arr
+    .map((el: Record<string, any>) => {
+      if (el.date) {
+        el.date = moment(el.date).format("YYYY-MM-DD HH:mm:ss");
+      }
+      return el;
+    })
+    .map((el: Record<string, any>) => {
+      const obj: Record<string, any> = {};
+      header.forEach((item: string) => {
+        obj[item] = el[item];
+      });
+      return obj;
+    });
+
+  newArr.unshift(headerData);
+
+  const wd = XLSX.utils.json_to_sheet(newArr, {
+    header: header,
+    skipHeader: true,
+  });
+  XLSX.utils.book_append_sheet(book, wd, currentDb);
+
+  const fileName = `${currentDb}-report.xlsx`;
+  XLSX.writeFile(book, fileName);
+  console.log('[Export] Saved file:', fileName);
 }
 
 // Convenience wrapper: export current DB table using project store state
@@ -142,11 +128,15 @@ export function downloadKeywords(exportColumns: any[]) {
     return;
   }
 
-  // Request all keywords from backend with full fields
-  socket.emit("keywords:export", { projectId: project.currentProjectId });
-
-  socket.once("keywords:export-data", (data: any) => {
-    if (!data || !data.keywords || data.keywords.length === 0) {
+  (async () => {
+    const pid = project.currentProjectId ? Number(project.currentProjectId) : undefined;
+    if (!pid) {
+      console.warn("Invalid project id");
+      return;
+    }
+    const keywordsData = await ipcClient.getKeywordsAll(pid);
+    const data = { keywords: keywordsData || [] } as any;
+    if (!data.keywords || data.keywords.length === 0) {
       console.warn("No keywords data received");
       return;
     }
@@ -218,6 +208,6 @@ export function downloadKeywords(exportColumns: any[]) {
     // Use SheetJS writeFile to trigger download (browser) / write file (electron)
     XLSX.writeFile(wb, filename);
     console.log('[Export] Saved keywords file:', filename);
-  });
+  })().catch((e) => console.error('[Export] keywords export error:', e));
 }
 

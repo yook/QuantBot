@@ -29,5 +29,8 @@
     "electron/**/*.ts",
     "electron/**/*.d.ts"
   ],
+  "exclude": [
+    "src/examples/**"
+  ],
   "references": [{ "path": "./tsconfig.node.json" }]
 }
