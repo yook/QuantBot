@@ -45,6 +45,13 @@ jobs:
           npx electron-rebuild -f -w @vscode/sqlite3 --arch=x64 --electron-version=37.0.0
         shell: pwsh
 
+      # Workaround: ensure platform-specific Rollup native optional dependency is present
+      - name: Install Rollup native for Windows (workaround npm optional deps bug)
+        run: |
+          Write-Host "Installing @rollup/rollup-win32-x64-msvc to avoid optional deps issue"
+          npm i @rollup/rollup-win32-x64-msvc --no-save
+        shell: pwsh
+
       - name: Build portable Windows app
         run: npm run build:win:portable:cross -- --publish never
         env:
