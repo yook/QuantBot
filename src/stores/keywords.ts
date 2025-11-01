@@ -1,7 +1,7 @@
 import { defineStore } from "pinia";
 import { ref, computed, nextTick } from "vue";
 import { ElMessage } from "element-plus";
-import socket from "./socket-client";
+import { ipcClient } from "./socket-client";
 import { useProjectStore } from "./project";
 import type { Keyword, LoadKeywordsOptions, ErrorPayload } from "../types/schema";
 
@@ -103,37 +103,86 @@ export const useKeywordsStore = defineStore("keywords", () => {
     isAddingWithProgress.value = false;
   }
 
-  function addKeywords(newKeywords: string) {
+  async function addKeywords(newKeywords: string) {
+    console.log('[Keywords Store] addKeywords called with:', newKeywords.substring(0, 100) + '...');
+    
     if (!currentProjectId.value) {
       error.value = "No project selected" as any;
+      console.error('[Keywords Store] No project selected');
       return;
     }
 
     loading.value = true;
     error.value = null;
 
-    // Определяем количество ключевых слов
-    const parsedKeywords = newKeywords
-      .split(/[,\n]/)
-      .map((k) => k.trim())
-      .filter((k) => k.length > 0);
+    try {
+      // Парсим ключевые слова
+      const parsedKeywords = newKeywords
+        .split(/[,\n]/)
+        .map((k) => k.trim())
+        .filter((k) => k.length > 0);
 
-    // Если больше 20000 записей, показываем прогресс
-    if (parsedKeywords.length > 20000) {
-      isAddingWithProgress.value = true;
+      console.log('[Keywords Store] Parsed keywords:', {
+        count: parsedKeywords.length,
+        first: parsedKeywords[0],
+        last: parsedKeywords[parsedKeywords.length - 1]
+      });
+
+      if (parsedKeywords.length === 0) {
+        ElMessage.warning("Нет ключевых слов для добавления");
+        loading.value = false;
+        return;
+      }
+
+      // Если больше 20000 записей, показываем прогресс
+      if (parsedKeywords.length > 20000) {
+        isAddingWithProgress.value = true;
+        addProgress.value = 0;
+      }
+
+      console.log(`[Keywords Store] Добавление ${parsedKeywords.length} ключевых слов в проект ${currentProjectId.value}`);
+      
+      // Вызываем IPC метод для массового добавления
+      const result = await ipcClient.insertKeywordsBulk(
+        parsedKeywords,
+        currentProjectId.value as number
+      );
+
+      console.log('[Keywords Store] insertKeywordsBulk returned:', result);
+
+      if (result) {
+        const { inserted, skipped } = result;
+        if (skipped > 0) {
+          ElMessage.success(`Добавлено ${inserted} новых ключевых слов (${skipped} дубликатов пропущено)`);
+        } else {
+          ElMessage.success(`Добавлено ${inserted} ключевых слов`);
+        }
+        // Перезагружаем текущее окно
+        console.log('[Keywords Store] Reloading keywords window...');
+        await loadKeywords(currentProjectId.value as number, {
+          skip: windowStart.value,
+          limit: windowSize.value,
+          sort: sort.value,
+        });
+      } else {
+        console.error('[Keywords Store] Result is null or undefined');
+        ElMessage.error("Ошибка при добавлении ключевых слов");
+      }
+    } catch (err: any) {
+      console.error("[Keywords Store] Error adding keywords:", err);
+      console.error("[Keywords Store] Error stack:", err.stack);
+      error.value = err.message;
+      ElMessage.error(`Ошибка: ${err.message}`);
+    } finally {
+      loading.value = false;
+      isAddingWithProgress.value = false;
       addProgress.value = 0;
+      console.log('[Keywords Store] addKeywords finished');
     }
-
-    // Эмитим событие на сервер без таймаута
-  socket.emit("keywords:add", {
-      projectId: currentProjectId.value as string | number,
-      keywords: newKeywords,
-      createdAt: new Date().toISOString(),
-      windowStart: windowStart.value,
-      windowSize: windowSize.value,
-    });
   }
 
+  // TODO: IPC migration - migrate removeKeyword
+  /*
   function removeKeyword(index: number) {
     const pid = currentProjectId.value;
     if (index >= 0 && index < keywords.value.length && pid != null) {
@@ -156,8 +205,9 @@ export const useKeywordsStore = defineStore("keywords", () => {
       projectId: pid as string | number,
     });
   }
+  */
 
-  function deleteKeyword(id: number | string) {
+  async function deleteKeyword(id: number | string) {
     if (!currentProjectId.value) {
       console.error("No current project ID set");
       ElMessage.error("Проект не выбран");
@@ -169,42 +219,51 @@ export const useKeywordsStore = defineStore("keywords", () => {
       return;
     }
 
-    if (!socket.connected) {
-      console.error("Socket not connected");
-      ElMessage.error("Нет подключения к серверу");
-      return;
+    try {
+      console.log("Store: deleting keyword with id:", id);
+      const result = await ipcClient.deleteKeyword(Number(id));
+      
+      if (result !== null) {
+        ElMessage.success("Ключевое слово удалено");
+        // Перезагружаем текущее окно
+        await loadKeywords(currentProjectId.value as number, {
+          skip: windowStart.value,
+          limit: windowSize.value,
+          sort: sort.value,
+        });
+      } else {
+        ElMessage.error("Ошибка при удалении");
+      }
+    } catch (err: any) {
+      console.error("Error deleting keyword:", err);
+      ElMessage.error(`Ошибка: ${err.message}`);
     }
-
-    const payload = { id, projectId: currentProjectId.value as string | number };
-    console.log("Store: emitting keywords:delete with payload:", payload);
-  socket.emit("keywords:delete", payload);
   }
 
-  function searchKeywords(query: string) {
+  async function searchKeywords(query: string) {
     if (!currentProjectId.value) {
       console.error("No current project ID set");
       return;
     }
 
-    if (!socket.connected) {
-      console.error("Socket not connected");
-      return;
-    }
-
-    // Keep local searchQuery in sync so subsequent window loads include the filter
+    // Устанавливаем поисковый запрос
     searchQuery.value = query || "";
-
-    const payload = {
-      projectId: currentProjectId.value as string | number,
-      searchQuery: query,
+    console.log("Store: searching keywords with query:", query);
+    
+    // Сбрасываем позицию окна и перезагружаем с начала
+    windowStart.value = 0;
+    visibleStart.value = 0;
+    currentSkip.value = 0;
+    lastRequestedWindowStart.value = 0;
+    
+    await loadKeywords(currentProjectId.value as number, {
       skip: 0,
       limit: windowSize.value,
-    };
-    console.log("Store: emitting keywords:search with payload:", payload);
-  socket.emit("keywords:get", payload);
+      sort: sort.value,
+    });
   }
 
-  function sortKeywords(sortOptions: Record<string, number>) {
+  async function sortKeywords(sortOptions: Record<string, number>) {
     console.log("=== sortKeywords called ===");
     console.log("sortOptions:", JSON.stringify(sortOptions, null, 2));
     console.log("currentProjectId:", currentProjectId.value);
@@ -234,61 +293,216 @@ export const useKeywordsStore = defineStore("keywords", () => {
     });
   }
 
-  function loadKeywords(projectId: string | number, options: LoadKeywordsOptions = {}) {
+  function loadWindow(startIndex: number) {
+    console.log("=== loadWindow called ===");
+    console.log("startIndex:", startIndex);
+    console.log("currentProjectId:", currentProjectId.value);
+    console.log("bufferSize:", bufferSize.value);
+
+    if (!currentProjectId.value) {
+      console.log("No currentProjectId, skipping loadWindow");
+      return;
+    }
+
+    if (loadingMore.value) {
+      console.log("Skipping loadWindow because loadingMore is already true");
+      return;
+    }
+
+    let newWindowStart = Math.max(0, startIndex - bufferSize.value);
+    const maxStartAllowed = Math.max(0, totalCount.value - windowSize.value);
+    if (newWindowStart > maxStartAllowed) newWindowStart = maxStartAllowed;
+
+    if (newWindowStart === windowStart.value) {
+      console.log("loadWindow: newWindowStart equals current windowStart, skipping", newWindowStart);
+      return;
+    }
+
+    if (newWindowStart === lastRequestedWindowStart.value) {
+      console.log("loadWindow: newWindowStart equals lastRequestedWindowStart, skipping", newWindowStart);
+      return;
+    }
+
+    loadingMore.value = true;
+    lastRequestedWindowStart.value = newWindowStart;
+    console.log("Loading window with skip:", newWindowStart, "limit:", windowSize.value);
+
+    loadKeywords(currentProjectId.value, {
+      skip: newWindowStart,
+      limit: windowSize.value,
+      sort: sort.value,
+    });
+  }
+
+  // Запуск процесса категоризации через IPC
+  async function startCategorization() {
+    if (!currentProjectId.value) {
+      ElMessage.error("Проект не выбран");
+      return;
+    }
+
+    try {
+      // Сбрасываем состояние процессов
+      categorizationRunning.value = false;
+      typingRunning.value = false;
+      clusteringRunning.value = false;
+      categorizationFinished.value = false;
+      typingFinished.value = false;
+      clusteringFinished.value = false;
+      categorizationPercent.value = 0;
+      typingPercent.value = 0;
+      clusteringPercent.value = 0;
+      running.value = true;
+      percentage.value = 0;
+
+      console.log("[Keywords] Starting categorization, typing, and clustering for project", currentProjectId.value);
+
+      // Получаем параметры кластеризации из настроек проекта
+      const epsFromProject = Number((projectStore?.data as any)?.clustering_eps ?? 0.5);
+      const algorithm = String((projectStore?.data as any)?.clustering_algorithm ?? "components");
+      const dbscanEps = Number((projectStore?.data as any)?.clustering_dbscan_eps ?? 0.3);
+      const dbscanMinPts = Number((projectStore?.data as any)?.clustering_dbscan_minPts ?? 2);
+
+      // Запускаем процессы через IPC
+      await ipcClient.startCategorization(Number(currentProjectId.value));
+      await ipcClient.startTyping(Number(currentProjectId.value));
+      await ipcClient.startClustering(
+        Number(currentProjectId.value),
+        algorithm,
+        algorithm === "components" ? epsFromProject : dbscanEps,
+        algorithm === "dbscan" ? dbscanMinPts : undefined
+      );
+
+      ElMessage.success("Процессы категоризации запущены");
+    } catch (err: any) {
+      console.error("Error starting categorization:", err);
+      ElMessage.error(`Ошибка запуска категоризации: ${err.message}`);
+      running.value = false;
+    }
+  }
+
+  // Очистить все ключевые слова в текущем проекте
+  async function clearKeywords() {
+    if (!currentProjectId.value) {
+      ElMessage.error("Проект не выбран");
+      return;
+    }
+    
+    try {
+      console.log("clearKeywords called for project:", currentProjectId.value);
+      
+      // Удаляем все keywords через IPC
+      const result = await ipcClient.deleteKeywordsByProject(Number(currentProjectId.value));
+      
+      if (result) {
+        console.log("Keywords cleared successfully:", result);
+        
+        // Очищаем локальное состояние
+        keywords.value = [];
+        totalCount.value = 0;
+        hasMore.value = false;
+        windowStart.value = 0;
+        
+        ElMessage.success(`Удалено ключевых слов: ${result.changes || 0}`);
+      } else {
+        ElMessage.warning("Не удалось удалить ключевые слова");
+      }
+    } catch (err: any) {
+      console.error("Error clearing keywords:", err);
+      ElMessage.error(`Ошибка: ${err.message}`);
+    }
+  }
+
+  async function loadKeywords(projectId: string | number, options: LoadKeywordsOptions = {}) {
     console.log("=== loadKeywords called ===");
     console.log("projectId:", projectId);
     console.log("options:", options);
 
-    if (projectId) {
-      currentProjectId.value = projectId;
-      const {
-        skip = 0,
-        limit = windowSize.value,
-        sort: sortOptions,
-        resetSearch,
-      } = options;
-
-      console.log("skip:", skip, "limit:", limit);
-      console.log("windowSize:", windowSize.value);
-
-      // Если переданы параметры сортировки, сохраняем их
-      if (sortOptions) {
-        sort.value = sortOptions;
-        console.log("Updated sort:", sort.value);
-      }
-
-      // Если это первая загрузка, очищаем массив и сбрасываем позицию
-      if (skip === 0) {
-        console.log("First load: clearing keywords array");
-        setKeywords([]);
-        windowStart.value = 0;
-        visibleStart.value = 0;
-        currentSkip.value = 0;
-      }
-
-      // If caller requested to reset search (clear filter), clear local searchQuery
-      if (resetSearch) {
-        searchQuery.value = "";
-      }
-
-      loading.value = skip === 0; // Основная загрузка только для первой страницы
-      console.log("Set loading to:", loading.value);
-      console.log("Emitting socket event: keywords:get");
-
-      // Include current searchQuery so server can return filtered window when a search is active
-  const payload: any = {
-        projectId,
-        skip,
-        limit,
-        sort: sort.value,
-      };
-      if (searchQuery.value) payload.searchQuery = searchQuery.value;
-  socket.emit("keywords:get", payload);
-    } else {
+    if (!projectId) {
       console.log("No projectId provided, skipping load");
+      return;
+    }
+
+    currentProjectId.value = projectId;
+    const {
+      skip = 0,
+      limit = windowSize.value,
+      sort: sortOptions,
+      resetSearch,
+    } = options;
+
+    console.log("skip:", skip, "limit:", limit);
+    console.log("windowSize:", windowSize.value);
+
+    // Если переданы параметры сортировки, сохраняем их
+    if (sortOptions) {
+      sort.value = sortOptions;
+      console.log("Updated sort:", sort.value);
+    }
+
+    // If caller requested to reset search (clear filter), clear local searchQuery
+    if (resetSearch) {
+      searchQuery.value = "";
+    }
+
+    // Если это первая загрузка (skip === 0), показываем основной лоадер
+    // Иначе показываем loadingMore для подгрузки следующего окна
+    if (skip === 0) {
+      console.log("First load: clearing keywords array and showing main loader");
+      setKeywords([]);
+      windowStart.value = 0;
+      visibleStart.value = 0;
+      currentSkip.value = 0;
+      loading.value = true;
+      loadingMore.value = false;
+    } else {
+      console.log("Loading more data, showing loadingMore");
+      loading.value = false;
+      loadingMore.value = true;
+    }
+
+    try {
+      console.log("Loading keywords window via IPC for project:", projectId);
+      const result = await ipcClient.getKeywordsWindow(
+        Number(projectId), 
+        skip, 
+        limit, 
+        sort.value,
+        searchQuery.value
+      );
+      
+      if (!result) {
+        throw new Error("No result from getKeywordsWindow");
+      }
+
+      console.log(`Loaded window: ${result.keywords.length} keywords, total: ${result.total}`);
+      
+      // Обновляем данные окна
+      setKeywords(result.keywords);
+      totalCount.value = result.total;
+      windowStart.value = skip;
+      currentSkip.value = skip;
+      hasMore.value = (skip + result.keywords.length) < result.total;
+      
+      console.log("Window state:", {
+        windowStart: windowStart.value,
+        keywordsLength: result.keywords.length,
+        totalCount: totalCount.value,
+        hasMore: hasMore.value
+      });
+      
+    } catch (err: any) {
+      console.error("Error loading keywords:", err);
+      error.value = err.message;
+      ElMessage.error(`Ошибка загрузки: ${err.message}`);
+    } finally {
+      loading.value = false;
+      loadingMore.value = false;
     }
   }
 
+  // TODO: IPC migration - remove loadMoreKeywords (loading all data at once now)
+  /*
   function loadMoreKeywords() {
     if (!canLoadMore.value || !currentProjectId.value) return;
 
@@ -301,7 +515,10 @@ export const useKeywordsStore = defineStore("keywords", () => {
       limit: pageSize.value,
     });
   }
+  */
 
+  // TODO: IPC migration - remove loadWindow (not needed with full data load)
+  /*
   function loadWindow(startIndex: number) {
     console.log("=== loadWindow called ===");
     console.log("startIndex:", startIndex);
@@ -379,10 +596,14 @@ export const useKeywordsStore = defineStore("keywords", () => {
       totalCount: totalCount.value,
     });
   }
+  */
 
+  // TODO: IPC migration - remove or refactor
+  /*
   function saveKeywords() {
     // Не нужно, так как изменения сохраняются через socket
   }
+  */
 
   function resetAddProgress() {
     isAddingWithProgress.value = false;
@@ -391,6 +612,8 @@ export const useKeywordsStore = defineStore("keywords", () => {
   }
 
   // Запустить процесс категоризации на сервере
+  // TODO: IPC migration - implement categorization/typing/clustering via IPC
+  /*
   function startCategorization() {
     if (!currentProjectId.value) {
       ElMessage.error("Проект не выбран");
@@ -444,6 +667,7 @@ export const useKeywordsStore = defineStore("keywords", () => {
       minPts: algorithm === "dbscan" ? dbscanMinPts : undefined,
     });
   }
+  */
 
   // Проверка завершения всех процессов
   function checkBothProcessesFinished() {
@@ -464,6 +688,8 @@ export const useKeywordsStore = defineStore("keywords", () => {
   }
 
   // Socket listeners
+  // TODO: IPC migration - socket events removed, now using direct IPC calls
+  /*
   function setupSocketListeners() {
   socket.on("keywords:list", (data) => {
       console.log("=== keywords:list received ===");
@@ -812,9 +1038,103 @@ export const useKeywordsStore = defineStore("keywords", () => {
       loading.value = false;
     });
   }
+  */
 
   // Инициализация
-  setupSocketListeners();
+  // TODO: IPC migration - socket listeners removed
+  // setupSocketListeners();
+
+  // Setup IPC event listeners for worker progress
+  function setupIpcListeners() {
+    console.log('[Keywords Store] Setting up IPC listeners');
+    
+    // Categorization events
+    ipcClient.on('keywords:categorization-progress', (data: any) => {
+      console.log('[Keywords Store] Received categorization-progress:', data);
+      if (data.projectId === currentProjectId.value) {
+        categorizationRunning.value = true;
+        categorizationPercent.value = Math.max(0, Math.min(100, data.progress || 0));
+        checkBothProcessesFinished();
+      }
+    });
+
+    ipcClient.on('keywords:categorization-finished', (data: any) => {
+      console.log('[Keywords Store] Received categorization-finished:', data);
+      if (data.projectId === currentProjectId.value) {
+        categorizationRunning.value = false;
+        categorizationFinished.value = true;
+        categorizationPercent.value = 100;
+        checkBothProcessesFinished();
+        // Reload keywords to show updated categories
+        if (currentProjectId.value) {
+          loadKeywords(currentProjectId.value);
+        }
+      }
+    });
+
+    ipcClient.on('keywords:categorization-error', (data: any) => {
+      if (data.projectId === currentProjectId.value) {
+        categorizationRunning.value = false;
+        running.value = false;
+        ElMessage.error(data.message || "Ошибка категоризации");
+      }
+    });
+
+    // Typing events
+    ipcClient.on('keywords:typing-progress', (data: any) => {
+      if (data.projectId === currentProjectId.value) {
+        typingRunning.value = true;
+        typingPercent.value = Math.max(0, Math.min(100, data.progress || 0));
+        checkBothProcessesFinished();
+      }
+    });
+
+    ipcClient.on('keywords:typing-finished', (data: any) => {
+      if (data.projectId === currentProjectId.value) {
+        typingRunning.value = false;
+        typingFinished.value = true;
+        typingPercent.value = 100;
+        checkBothProcessesFinished();
+      }
+    });
+
+    ipcClient.on('keywords:typing-error', (data: any) => {
+      if (data.projectId === currentProjectId.value) {
+        typingRunning.value = false;
+        running.value = false;
+        ElMessage.error(data.message || "Ошибка типизации");
+      }
+    });
+
+    // Clustering events
+    ipcClient.on('keywords:clustering-progress', (data: any) => {
+      if (data.projectId === currentProjectId.value) {
+        clusteringRunning.value = true;
+        clusteringPercent.value = Math.max(0, Math.min(100, data.progress || 0));
+        checkBothProcessesFinished();
+      }
+    });
+
+    ipcClient.on('keywords:clustering-finished', (data: any) => {
+      if (data.projectId === currentProjectId.value) {
+        clusteringRunning.value = false;
+        clusteringFinished.value = true;
+        clusteringPercent.value = 100;
+        checkBothProcessesFinished();
+      }
+    });
+
+    ipcClient.on('keywords:clustering-error', (data: any) => {
+      if (data.projectId === currentProjectId.value) {
+        clusteringRunning.value = false;
+        running.value = false;
+        ElMessage.error(data.message || "Ошибка кластеризации");
+      }
+    });
+  }
+
+  // Initialize IPC listeners
+  setupIpcListeners();
 
   return {
     // State
@@ -847,18 +1167,19 @@ export const useKeywordsStore = defineStore("keywords", () => {
     initializeState,
     setKeywords,
     addKeywords,
-    removeKeyword,
-    clearKeywords,
+    // removeKeyword, // TODO: IPC migration
+    clearKeywords, // Stub - shows warning message
     deleteKeyword,
     searchKeywords,
     loadKeywords,
-    loadMoreKeywords,
-    loadWindow,
-    saveKeywords,
+    loadWindow, // Stub for compatibility (all data loaded at once now)
+    // loadMoreKeywords, // TODO: IPC migration - not needed
+    // saveKeywords, // TODO: IPC migration
     resetAddProgress,
     sortKeywords,
+    startCategorization, // Stub - shows warning message
     // New actions/flags
-    startCategorization,
+    // startCategorization, // TODO: IPC migration
     // Background process flags
     running,
     percentage,

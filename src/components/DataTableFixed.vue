@@ -1050,14 +1050,16 @@ function handleResize(event) {
 
 function stopResize() {
   if (resizing.value && currentColumn.value) {
-    // Save the final width to the project store
+    // First set resizing to false
+    resizing.value = false;
+
+    // Then save the final width to the project store
     saveColumnWidth(
       currentColumn.value,
       columnWidths.value[currentColumn.value]
     );
   }
 
-  resizing.value = false;
   currentColumn.value = null;
   document.removeEventListener("mousemove", handleResize);
   document.removeEventListener("mouseup", stopResize);
@@ -1066,6 +1068,12 @@ function stopResize() {
 function saveColumnWidth(columnProp, width) {
   // Применяем минимальную ширину для _rowNumber
   const finalWidth = columnProp === "_rowNumber" ? Math.max(30, width) : width;
+
+  // Update columnWidths.value to include this new width
+  columnWidths.value = {
+    ...columnWidths.value,
+    [columnProp]: finalWidth,
+  };
 
   // Make sure columnWidths structure exists in project data
   if (!project.data.columnWidths) {
@@ -1077,8 +1085,11 @@ function saveColumnWidth(columnProp, width) {
     project.data.columnWidths[getDbKey()] = {};
   }
 
-  // Save width to the project data
-  project.data.columnWidths[getDbKey()][columnProp] = finalWidth;
+  // Save ALL current column widths to project data (not just one)
+  project.data.columnWidths[getDbKey()] = {
+    ...project.data.columnWidths[getDbKey()],
+    ...columnWidths.value,
+  };
 
   // Find the column in the default settings or parser columns and update there too
   const defaultColumnIndex = project.defaultColumns.findIndex(
@@ -1087,17 +1098,19 @@ function saveColumnWidth(columnProp, width) {
   if (defaultColumnIndex !== -1) {
     project.defaultColumns[defaultColumnIndex].width = finalWidth;
   } else {
-    // Try to find in the parser columns
-    const parserColumnIndex = project.data.parser?.findIndex(
-      (col) => col.prop === columnProp
-    );
-    if (parserColumnIndex !== -1) {
-      project.data.parser[parserColumnIndex].width = finalWidth;
+    // Try to find in the parser columns (only if parser exists and is an array)
+    if (Array.isArray(project.data.parser)) {
+      const parserColumnIndex = project.data.parser.findIndex(
+        (col) => col.prop === columnProp
+      );
+      if (parserColumnIndex !== -1) {
+        project.data.parser[parserColumnIndex].width = finalWidth;
+      }
     }
   }
 
-  // Save to localStorage
-  saveColumnWidthsToLocalStorage(columnProp, finalWidth);
+  // Save ALL widths to localStorage (not just one)
+  saveAllColumnWidthsToLocalStorage();
 
   // Only save to database when resizing is complete to avoid too many updates
   if (!resizing.value) {
@@ -1126,6 +1139,18 @@ function saveColumnWidthsToLocalStorage(columnProp, width) {
   // Сохраняем обратно в localStorage
   try {
     localStorage.setItem(storageKey, JSON.stringify(storedWidths));
+  } catch (e) {
+    // Ignore errors
+  }
+}
+
+// Функция сохранения ВСЕХ ширин столбцов в localStorage
+function saveAllColumnWidthsToLocalStorage() {
+  const storageKey = `table-column-widths-${project.data.id}-${getDbKey()}`;
+
+  // Сохраняем все текущие ширины
+  try {
+    localStorage.setItem(storageKey, JSON.stringify(columnWidths.value));
   } catch (e) {
     // Ignore errors
   }
@@ -1222,6 +1247,11 @@ onMounted(async () => {
 
     // Sync column widths from storage or project data for current DB
     const updateColumnWidthsFromStore = () => {
+      // Если идет ресайз, не обновляем из стора (чтобы не потерять текущие изменения)
+      if (resizing.value) {
+        return;
+      }
+
       // Сначала пробуем загрузить из localStorage
       const localWidths = loadColumnWidthsFromLocalStorage();
       if (Object.keys(localWidths).length > 0) {

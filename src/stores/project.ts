@@ -1,5 +1,5 @@
 import { defineStore } from "pinia";
-import socket from "./socket-client";
+import { ipcClient } from "./socket-client";
 import settingsJson from "./schema/table-name-prop.json";
 import reportsJson from "./schema/table-reports.json";
 import newProjectJson from "./schema/new-project.json";
@@ -22,9 +22,6 @@ import type {
   NewProjectFile,
   UrlData,
   SortOption,
-  QueueUpdate,
-  CrawlerStatus,
-  TableUpdate,
 } from "../types/schema";
 
 export const useProjectStore = defineStore("project", {
@@ -108,29 +105,33 @@ export const useProjectStore = defineStore("project", {
   },
 
   actions: {
-    getProjects() {
-      socket.emit("get-all-projects");
-      socket.once("all-projects-data", (data: ProjectSummary[] = []) => {
-        if (Array.isArray(data)) this.projects = data;
-        this.projectsLoaded = true;
-        const storageId = localStorage.getItem("currentProjectId");
-        if (this.projects.length > 0) {
-          const idx = this.projects.findIndex((p) => String(p.id) === String(storageId));
-          this.currentProjectId = idx >= 0 ? String(storageId) : String(this.projects[0].id);
-          localStorage.setItem("currentProjectId", String(this.currentProjectId));
-          socket.emit("get-project", this.currentProjectId);
-        } else {
-          this.newProjectForm = true;
+    async getProjects() {
+      console.log('[Project Store] getProjects called');
+      const data = await ipcClient.getProjectsAll();
+      console.log('[Project Store] Projects loaded:', data);
+      if (Array.isArray(data)) this.projects = data;
+      this.projectsLoaded = true;
+      const storageId = localStorage.getItem("currentProjectId");
+      if (this.projects.length > 0) {
+        const idx = this.projects.findIndex((p) => String(p.id) === String(storageId));
+        this.currentProjectId = idx >= 0 ? String(storageId) : String(this.projects[0].id);
+        localStorage.setItem("currentProjectId", String(this.currentProjectId));
+        const projectData = await ipcClient.getProject(Number(this.currentProjectId));
+        if (projectData) {
+          Object.assign(this.data, projectData);
+          if (!this.data.stats) this.data.stats = (newProjectJson as NewProjectFile).stats;
+          if (!this.data.columns) this.data.columns = {};
+          this.getsortedDb({ id: this.data.id as number | string, sort: this.sort, skip: 0, limit: 50, db: this.currentDb });
         }
-      });
+      } else {
+        this.newProjectForm = true;
+      }
     },
 
-    refreshProjectsList() {
-      socket.emit("get-all-projects");
-      socket.once("all-projects-data", (data: ProjectSummary[] = []) => {
-        if (Array.isArray(data)) this.projects = data;
-        this.projectsLoaded = true;
-      });
+    async refreshProjectsList() {
+      const data = await ipcClient.getProjectsAll();
+      if (Array.isArray(data)) this.projects = data;
+      this.projectsLoaded = true;
     },
 
     socketOn() {
@@ -139,240 +140,82 @@ export const useProjectStore = defineStore("project", {
       this.socketReady = true;
       this.getProjects();
 
-      socket.on("project-data", (data) => {
-        if (!data) return;
-        Object.assign(this.data, data);
-        if (!this.data.stats) this.data.stats = (newProjectJson as NewProjectFile).stats;
-        if (!this.data.columns) this.data.columns = {};
-        this.getsortedDb({ id: this.data.id as number | string, sort: this.sort, skip: 0, limit: 50, db: this.currentDb });
-      });
-
-      // Обработчик очистки данных краулера
-      socket.on("crawler-data-cleared", (data: { projectId: string | number }) => {
-        // Обновляем данные только для текущего проекта
-        if (String(data.projectId) === String(this.currentProjectId)) {
-          // Очищаем только данные краулера, сохраняя проект
-          this.tableData = [];
-          this.tableLoading = false;
-          
-          // Сбрасываем статистику краулера
-          if (this.data.stats) {
-            this.data.stats.html = 0;
-            this.data.stats.redirect = 0;
-            this.data.stats.image = 0;
-            this.data.stats.jscss = 0;
-            this.data.stats.error = 0;
-            this.data.stats.other = 0;
-            this.data.stats.queue = 0;
-            this.data.stats.depth3 = 0;
-            this.data.stats.depth5 = 0;
-            this.data.stats.depth6 = 0;
-          }
-          
-          // Останавливаем краулер если он был запущен
-          if (this.running) {
-            this.running = false;
-          }
-        }
-      });
-
-            // Обработчик обновлений очереди краулера
-      socket.on("queue", (data: QueueUpdate) => {
-        // Обновляем статистику очереди только для текущего проекта
-        if (String(data.projectId) === String(this.currentProjectId)) {
-          if (!this.data.stats) {
-            this.data.stats = (newProjectJson as NewProjectFile).stats;
-          }
-          if (data.queue !== undefined) {
-            this.data.stats.queue = data.queue;
-          }
-          
-          // Останавливаем краулер если очередь пуста и он был запущен
-          if (data.queue === 0 && this.running) {
-            console.log("Queue is empty, stopping crawler");
-            this.running = false;
-          }
-        }
-      });
-
-      // Обработчик обновлений fetched
-      socket.on("fetched", (data: QueueUpdate) => {
-        if (String(data.projectId) === String(this.currentProjectId)) {
-          if (!this.data.stats) {
-            this.data.stats = (newProjectJson as NewProjectFile).stats;
-          }
-          if (data.fetched !== undefined) {
-            this.data.stats.fetched = data.fetched;
-          }
-        }
-      });
-
-      // Обработчик общих событий остановки краулера
-      socket.on("stopped", (data: CrawlerStatus) => {
-        console.log("Crawler stopped:", data);
-        // Останавливаем для текущего проекта независимо от ID
-        // поскольку событие stopped приходит для активного краулера
-        this.running = false;
-      });
-
-      // Обработчик обновлений данных в таблице
-      socket.on("data-updated", (data: TableUpdate) => {
-        // Обновляем таблицу только для текущего проекта
-        if (String(data.projectId) === String(this.currentProjectId) && this.currentProjectId) {
-          // Перезагружаем данные таблицы для отображения новых записей
-          this.getsortedDb({ 
-            id: this.currentProjectId, 
-            sort: this.sort, 
-            skip: 0, 
-            limit: 50, 
-            db: this.currentDb 
-          });
-        }
-      });
-
-      // Обработчики статистики по типам контента
-      socket.on("stat-html", (data: { count: number; projectId: string | number }) => {
-        if (String(data.projectId) === String(this.currentProjectId)) {
-          if (!this.data.stats) this.data.stats = (newProjectJson as NewProjectFile).stats;
-          this.data.stats.html = data.count;
-        }
-      });
-
-      socket.on("stat-jscss", (data: { count: number; projectId: string | number }) => {
-        if (String(data.projectId) === String(this.currentProjectId)) {
-          if (!this.data.stats) this.data.stats = (newProjectJson as NewProjectFile).stats;
-          this.data.stats.jscss = data.count;
-        }
-      });
-
-      socket.on("stat-image", (data: { count: number; projectId: string | number }) => {
-        if (String(data.projectId) === String(this.currentProjectId)) {
-          if (!this.data.stats) this.data.stats = (newProjectJson as NewProjectFile).stats;
-          this.data.stats.image = data.count;
-        }
-      });
-
-      socket.on("stat-redirect", (data: { count: number; projectId: string | number }) => {
-        if (String(data.projectId) === String(this.currentProjectId)) {
-          if (!this.data.stats) this.data.stats = (newProjectJson as NewProjectFile).stats;
-          this.data.stats.redirect = data.count;
-        }
-      });
-
-      socket.on("stat-error", (data: { count: number; projectId: string | number }) => {
-        if (String(data.projectId) === String(this.currentProjectId)) {
-          if (!this.data.stats) this.data.stats = (newProjectJson as NewProjectFile).stats;
-          this.data.stats.error = data.count;
-        }
-      });
-
-      // Обработчики статистики по глубине
-      socket.on("stat-depth3", (data: { count: number; projectId: string | number }) => {
-        if (String(data.projectId) === String(this.currentProjectId)) {
-          if (!this.data.stats) this.data.stats = (newProjectJson as NewProjectFile).stats;
-          this.data.stats.depth3 = data.count;
-        }
-      });
-
-      socket.on("stat-depth5", (data: { count: number; projectId: string | number }) => {
-        if (String(data.projectId) === String(this.currentProjectId)) {
-          if (!this.data.stats) this.data.stats = (newProjectJson as NewProjectFile).stats;
-          this.data.stats.depth5 = data.count;
-        }
-      });
-
-      socket.on("stat-depth6", (data: { count: number; projectId: string | number }) => {
-        if (String(data.projectId) === String(this.currentProjectId)) {
-          if (!this.data.stats) this.data.stats = (newProjectJson as NewProjectFile).stats;
-          this.data.stats.depth6 = data.count;
-        }
-      });
-
-      socket.on("stat-other", (data: { count: number; projectId: string | number }) => {
-        if (String(data.projectId) === String(this.currentProjectId)) {
-          if (!this.data.stats) this.data.stats = (newProjectJson as NewProjectFile).stats;
-          this.data.stats.other = data.count;
-        }
-      });
-
-      // Обработчик обновлений запрещенных URL
-      socket.on("disallow", (count: number) => {
-        if (!this.data.stats) this.data.stats = (newProjectJson as NewProjectFile).stats;
-        this.data.stats.disallow = count;
-      });
-
-      // Обработчик успешного удаления проекта
-      socket.on("projectDeleted", (deletedProjectId: number) => {
-        console.log(`Project ${deletedProjectId} deleted successfully`);
-        
-        // Удаляем проект из списка
-        const deletedIndex = this.projects.findIndex((p) => String(p.id) === String(deletedProjectId));
-        if (deletedIndex !== -1) {
-          this.projects.splice(deletedIndex, 1);
-        }
-
-        // Если удалили текущий проект
-        if (String(this.currentProjectId) === String(deletedProjectId)) {
-          // Переключаемся на первый проект в списке или показываем форму создания
-          if (this.projects.length > 0) {
-            this.currentProjectId = String(this.projects[0].id);
-            localStorage.setItem("currentProjectId", String(this.currentProjectId));
-            socket.emit("get-project", this.currentProjectId);
-          } else {
-            this.currentProjectId = null;
-            localStorage.removeItem("currentProjectId");
-            this.newProjectForm = true;
-          }
-        }
-      });
-
-      // Обработчик ошибки удаления проекта
-      socket.on("projectDeleteError", (errorMessage: string) => {
-        console.error("Error deleting project:", errorMessage);
-      });
+      // Note: Event listeners for crawler updates will need to be implemented
+      // via IPC events when crawler functionality is added
+      // TODO: Implement crawler events via IPC
+      // - crawler-data-cleared
+      // - queue, fetched, stopped
+      // - data-updated
+      // - stat-html, stat-jscss, stat-image, stat-redirect, stat-error
+      // - stat-depth3, stat-depth5, stat-depth6, stat-other
+      // - disallow
+      // - projectDeleted, projectDeleteError
     },
 
-    updateProject() {
-      socket.emit("update-project", this.data);
+    async updateProject() {
+      // TODO: Implement via IPC
+      console.warn('[Project Store] updateProject not implemented yet');
     },
 
-    saveNewProject(form: { name: string; url: string }) {
+    async saveNewProject(form: { name: string; url: string }) {
+      console.log('[Project Store] saveNewProject called:', form);
       const data: ProjectData = { ...(newProjectJson as NewProjectFile) } as ProjectData;
       data.name = form.name;
       data.url = form.url;
-      socket.emit("save-new-project", data);
-      socket.once("new-project-data", (newDoc: { id: string | number }) => {
-        this.currentProjectId = String(newDoc.id);
-        localStorage.setItem("currentProjectId", String(newDoc.id));
+      
+      console.log('[Project Store] Inserting project:', data.name, data.url);
+      const result = await ipcClient.insertProject(data.name, data.url || '');
+      console.log('[Project Store] Insert result:', result);
+      
+      if (result && result.lastInsertRowid) {
+        this.currentProjectId = String(result.lastInsertRowid);
+        localStorage.setItem("currentProjectId", String(result.lastInsertRowid));
         this.newProjectForm = false;
-        this.refreshProjectsList();
-        socket.emit("get-project", newDoc.id);
-      });
+        await this.refreshProjectsList();
+        const projectData = await ipcClient.getProject(Number(result.lastInsertRowid));
+        if (projectData) {
+          Object.assign(this.data, projectData);
+          if (!this.data.stats) this.data.stats = (newProjectJson as NewProjectFile).stats;
+          if (!this.data.columns) this.data.columns = {};
+          this.getsortedDb({ id: this.data.id as number | string, sort: this.sort, skip: 0, limit: 50, db: this.currentDb });
+        }
+      } else {
+        console.error('[Project Store] Failed to insert project, result:', result);
+      }
     },
 
-    changeProject(id: string) {
+    async changeProject(id: string) {
       this.tableData = [];
       this.tableLoading = true;
       localStorage.setItem("currentProjectId", id);
       this.currentProjectId = id;
-      socket.emit("change-project", id);
+      
+      const projectData = await ipcClient.getProject(Number(id));
+      if (projectData) {
+        Object.assign(this.data, projectData);
+        if (!this.data.stats) this.data.stats = (newProjectJson as NewProjectFile).stats;
+        if (!this.data.columns) this.data.columns = {};
+        this.getsortedDb({ id: this.data.id as number | string, sort: this.sort, skip: 0, limit: 50, db: this.currentDb });
+      }
+      this.tableLoading = false;
     },
 
     start(url: string) {
       this.data.url = url;
-      socket.emit("startCrauler", this.data);
+      // TODO: Implement crawler via IPC
+      console.warn('[Project Store] Crawler not implemented yet');
       this.running = true;
-      socket.emit("update-project", this.data);
     },
 
     freeze() {
-      socket.emit("freezeQueue");
+      // TODO: Implement crawler freeze via IPC
+      console.warn('[Project Store] Crawler freeze not implemented yet');
       this.running = false;
     },
 
     // downloadData removed — use exportCrawlerData from `src/stores/export` directly
 
-    getsortedDb(options: Partial<SortedRequestOptions>) {
+    async getsortedDb(options: Partial<SortedRequestOptions>) {
       const projectId = options && options.id ? options.id : (this.data.id as number | string | undefined);
       if (!projectId) {
         this.tableLoading = false;
@@ -383,40 +226,61 @@ export const useProjectStore = defineStore("project", {
       const requestOptions: SortedRequestOptions = {
         id: projectId,
         sort: (options.sort as SortOption) || this.sort,
-        limit: options.limit || 0,
+        limit: options.limit || 50,
         skip: options.skip || 0,
         db: (options.db as string) || this.currentDb,
       } as SortedRequestOptions;
 
-      const requestId = `store-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
-      requestOptions.requestId = requestId;
-      const responseEvent = `sorted-urls-data-${requestId}` as const;
-      socket.once(responseEvent, (response: any[] | { data?: any[]; total?: number }) => {
+      try {
+        const response = await ipcClient.getUrlsSorted(requestOptions);
         if (Array.isArray(response)) {
           this.tableData = response;
           this.tableDataLength = response.length;
-        } else if (response && Array.isArray(response.data)) {
-          this.tableData = response.data;
-          this.tableDataLength = response.total ?? response.data.length;
         } else {
           this.tableData = [];
           this.tableDataLength = 0;
         }
-        this.tableLoading = false;
-      });
-      socket.emit("get-sorted-urls", requestOptions);
+      } catch (error) {
+        console.error('[Project Store] Error loading sorted URLs:', error);
+        this.tableData = [];
+        this.tableDataLength = 0;
+      }
+      this.tableLoading = false;
     },
 
-    deleteData() {
-      socket.emit("delete-all", this.currentProjectId);
+    async deleteData() {
+      // TODO: Implement delete all crawler data via IPC
+      console.warn('[Project Store] Delete all data not implemented yet');
     },
 
-    deleteProject() {
-      socket.emit("delete-project", this.currentProjectId);
+    async deleteProject() {
+      if (!this.currentProjectId) return;
+      
+      try {
+        await ipcClient.deleteProject(Number(this.currentProjectId));
+        
+        // Удаляем проект из списка
+        const deletedIndex = this.projects.findIndex((p) => String(p.id) === String(this.currentProjectId));
+        if (deletedIndex !== -1) {
+          this.projects.splice(deletedIndex, 1);
+        }
+
+        // Переключаемся на первый проект или показываем форму создания
+        if (this.projects.length > 0) {
+          await this.changeProject(String(this.projects[0].id));
+        } else {
+          this.currentProjectId = null;
+          localStorage.removeItem("currentProjectId");
+          this.newProjectForm = true;
+        }
+      } catch (error) {
+        console.error('[Project Store] Error deleting project:', error);
+      }
     },
 
     clearEmbeddingsCache() {
-      socket.emit("clear-embeddings-cache");
+      // TODO: Implement clear embeddings cache via IPC
+      console.warn('[Project Store] Clear embeddings cache not implemented yet');
     },
   },
 });

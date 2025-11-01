@@ -2,8 +2,8 @@ import { app, BrowserWindow, shell, ipcMain } from "electron";
 import path from "path";
 import { fileURLToPath } from "url";
 import { spawn, type ChildProcess } from "node:child_process";
-import { createRequire } from "module";
 import fs from "fs";
+import os from "os";
 
 // Автообновление
 import { autoUpdater } from "electron-updater";
@@ -33,135 +33,366 @@ process.env.VITE_PUBLIC = VITE_DEV_SERVER_URL
 // Main window will be created at runtime inside createWindow()
 
 let win: BrowserWindow | null;
-let socketServerProcess: ChildProcess | null = null;
+let dbWorkerProcess: ChildProcess | null = null;
 
-// IPC-based in-memory socket adapter (replaces network socket.io for renderer)
-const ipcIo = {
-  sockets: {
-    sockets: new Map(), // id -> socketAdapter
-  },
-};
+// DB Worker IPC bridge
+let dbRequestId = 0;
+const dbPendingRequests = new Map<number, { resolve: Function; reject: Function }>();
 
-const socketsByInstance = new Map(); // clientInstanceId -> socketAdapter
+function dbCall(method: string, ...params: any[]): Promise<any> {
+  return new Promise((resolve, reject) => {
+    if (!dbWorkerProcess || dbWorkerProcess.killed) {
+      return reject(new Error('DB worker not running'));
+    }
 
-function createSocketAdapter(webContents: Electron.WebContents, clientInstanceId: string) {
-  const id = `ipc-${Math.random().toString(36).slice(2, 8)}`;
-  const listeners = new Map();
+    const id = ++dbRequestId;
+    dbPendingRequests.set(id, { resolve, reject });
 
-  const socket = {
-    id,
-    handshake: { query: { clientInstanceId }, headers: {} },
-    on(event: string, handler: (...args: any[]) => void) {
-      if (!listeners.has(event)) listeners.set(event, []);
-      listeners.get(event).push(handler);
-    },
-    once(event: string, handler: (...args: any[]) => void) {
-      const onceWrapper = (...args: any[]) => {
-        this.off(event, onceWrapper);
-        handler(...args);
-      };
-      this.on(event, onceWrapper);
-    },
-    off(event: string, handler?: (...args: any[]) => void) {
-      if (!listeners.has(event)) return;
-      if (!handler) return listeners.delete(event);
-      const arr = listeners.get(event).filter((h: any) => h !== handler);
-      listeners.set(event, arr);
-    },
-    emit(event: string, ...args: any[]) {
-      try {
-        // Forward to renderer process using same event name
-        webContents.send(event, ...args);
-      } catch (e) {
-        console.error('Failed to send IPC event to renderer', e);
+    const request = JSON.stringify({ id, method, params }) + '\n';
+    dbWorkerProcess.stdin?.write(request);
+
+    // Timeout after 30s
+    setTimeout(() => {
+      if (dbPendingRequests.has(id)) {
+        dbPendingRequests.delete(id);
+        reject(new Error('DB request timeout'));
       }
-    },
-    // Socket.IO compatibility: to() returns this socket (broadcast to room)
-    // In IPC context, we only have one client per socket, so just return self
-    to(_room: string) {
-      return this;
-    },
-    // Called when renderer sends an event to this socket
-    __receive(event: string, ...args: any[]) {
-      const arr = listeners.get(event) || [];
-      for (const h of arr) {
-        try {
-          h(...args);
-        } catch (e) {
-          console.error('Socket handler error', e);
-        }
-      }
-    },
-    disconnect() {
-      // cleanup
-      ipcIo.sockets.sockets.delete(id);
-      if (clientInstanceId && socketsByInstance.get(clientInstanceId) === socket) {
-        socketsByInstance.delete(clientInstanceId);
-      }
-    },
-  } as any;
-
-  ipcIo.sockets.sockets.set(id, socket);
-  socketsByInstance.set(clientInstanceId, socket);
-  return socket;
+    }, 30000);
+  });
 }
 
-// Register IPC handlers for renderer to connect and emit events
-function registerIpcSocketHandlers() {
-  // connect: create adapter and register server handlers
-  ipcMain.handle('socket:connect', (event: Electron.IpcMainInvokeEvent, { clientInstanceId } = {}) => {
-    const wc = event.sender;
-    if (!clientInstanceId) {
-      return { ok: false, error: 'missing clientInstanceId' };
-    }
-    // Already connected? reuse
-    if (socketsByInstance.has(clientInstanceId)) {
-      return { ok: true };
-    }
-
-    const socket = createSocketAdapter(wc, clientInstanceId);
-
-    // Register existing socket handlers (reuse socket/Handler*.cjs)
+// Register IPC handlers for renderer DB operations
+function registerIpcHandlers() {
+  // Projects
+  ipcMain.handle('db:projects:getAll', async () => {
     try {
-      const requireFrom = createRequire(import.meta.url);
-      const registerProject = requireFrom(path.join(__dirname, "../socket/HandlerProject.cjs"));
-      const registerCrawler = requireFrom(path.join(__dirname, "../socket/HandlerCrawler.cjs"));
-      const registerKeywords = requireFrom(path.join(__dirname, "../socket/HandlerKeywords.cjs"));
-      const registerCategories = requireFrom(path.join(__dirname, "../socket/HandlerCategories.cjs"));
-      const registerIntegrations = requireFrom(path.join(__dirname, "../socket/HandlerIntegrations.cjs"));
-      const registerTyping = requireFrom(path.join(__dirname, "../socket/HandlerTyping.cjs"));
-
-      registerProject(ipcIo, socket);
-      registerCrawler(ipcIo, socket);
-      registerKeywords(ipcIo, socket);
-      registerCategories(ipcIo, socket);
-      registerIntegrations(ipcIo, socket);
-      registerTyping(ipcIo, socket);
-    } catch (err) {
-      console.warn('Failed to register socket handlers via IPC adapter:', String(err));
+      const result = await dbCall('projects:getAll');
+      return { success: true, data: result };
+    } catch (error: any) {
+      return { success: false, error: error.message };
     }
-
-    return { ok: true };
   });
 
-  // emit: renderer sends event to main/socket
-  ipcMain.handle('socket:emit', (_event: Electron.IpcMainInvokeEvent, { clientInstanceId, eventName, args } = {}) => {
-    const socket = socketsByInstance.get(clientInstanceId);
-    if (!socket) return { ok: false, error: 'not connected' };
-    socket.__receive(eventName, ...(Array.isArray(args) ? args : [args]));
-    return { ok: true };
-  });
-
-  ipcMain.handle('socket:disconnect', (_event: Electron.IpcMainInvokeEvent, { clientInstanceId } = {}) => {
-    const socket = socketsByInstance.get(clientInstanceId);
-    if (socket) {
-      socket.disconnect();
+  ipcMain.handle('db:projects:get', async (_event, id) => {
+    try {
+      const result = await dbCall('projects:get', id);
+      return { success: true, data: result };
+    } catch (error: any) {
+      return { success: false, error: error.message };
     }
-    return { ok: true };
   });
+
+  ipcMain.handle('db:projects:insert', async (_event, name, url) => {
+    try {
+      const result = await dbCall('projects:insert', name, url);
+      return { success: true, data: result };
+    } catch (error: any) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('db:projects:update', async (_event, name, url, id) => {
+    try {
+      const result = await dbCall('projects:update', name, url, id);
+      return { success: true, data: result };
+    } catch (error: any) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('db:projects:delete', async (_event, id) => {
+    try {
+      const result = await dbCall('projects:delete', id);
+      return { success: true, data: result };
+    } catch (error: any) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  // Keywords
+  ipcMain.handle('db:keywords:getAll', async (_event, projectId) => {
+    try {
+      const result = await dbCall('keywords:getAll', projectId);
+      return { success: true, data: result };
+    } catch (error: any) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('db:keywords:getWindow', async (_event, projectId, skip, limit, sort, searchQuery) => {
+    try {
+      const result = await dbCall('keywords:getWindow', projectId, skip, limit, sort, searchQuery);
+      return { success: true, data: result };
+    } catch (error: any) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('db:keywords:insert', async (_event, keyword, projectId, categoryId, color, disabled) => {
+    try {
+      const result = await dbCall('keywords:insert', keyword, projectId, categoryId, color, disabled);
+      return { success: true, data: result };
+    } catch (error: any) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('db:keywords:update', async (_event, keyword, categoryId, color, disabled, id) => {
+    try {
+      const result = await dbCall('keywords:update', keyword, categoryId, color, disabled, id);
+      return { success: true, data: result };
+    } catch (error: any) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('db:keywords:delete', async (_event, id) => {
+    try {
+      const result = await dbCall('keywords:delete', id);
+      return { success: true, data: result };
+    } catch (error: any) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('db:keywords:insertBulk', async (_event, keywords, projectId) => {
+    console.log('[Main IPC] db:keywords:insertBulk handler called:', {
+      keywordsType: Array.isArray(keywords) ? 'array' : typeof keywords,
+      keywordsCount: Array.isArray(keywords) ? keywords.length : 'N/A',
+      projectIdType: typeof projectId,
+      projectId
+    });
+    
+    try {
+      const result = await dbCall('keywords:insertBulk', keywords, projectId);
+      console.log('[Main IPC] db:keywords:insertBulk success:', result);
+      return { success: true, data: result };
+    } catch (error: any) {
+      console.error('[Main IPC] db:keywords:insertBulk error:', error);
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('db:keywords:updateCategory', async (_event, id, categoryName, categorySimilarity) => {
+    try {
+      const result = await dbCall('keywords:updateCategory', id, categoryName, categorySimilarity);
+      return { success: true, data: result };
+    } catch (error: any) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('db:keywords:updateClass', async (_event, id, className, classSimilarity) => {
+    try {
+      const result = await dbCall('keywords:updateClass', id, className, classSimilarity);
+      return { success: true, data: result };
+    } catch (error: any) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('db:keywords:updateCluster', async (_event, id, cluster) => {
+    try {
+      const result = await dbCall('keywords:updateCluster', id, cluster);
+      return { success: true, data: result };
+    } catch (error: any) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('db:keywords:deleteByProject', async (_event, projectId) => {
+    try {
+      const result = await dbCall('keywords:deleteByProject', projectId);
+      return { success: true, data: result };
+    } catch (error: any) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  // Categories
+  ipcMain.handle('db:categories:getAll', async (_event, projectId) => {
+    try {
+      const result = await dbCall('categories:getAll', projectId);
+      return { success: true, data: result };
+    } catch (error: any) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('db:categories:insert', async (_event, name, projectId, color) => {
+    try {
+      const result = await dbCall('categories:insert', name, projectId, color);
+      return { success: true, data: result };
+    } catch (error: any) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('db:categories:update', async (_event, name, color, id) => {
+    try {
+      const result = await dbCall('categories:update', name, color, id);
+      return { success: true, data: result };
+    } catch (error: any) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('db:categories:delete', async (_event, id) => {
+    try {
+      const result = await dbCall('categories:delete', id);
+      return { success: true, data: result };
+    } catch (error: any) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  // Typing
+  ipcMain.handle('db:typing:getAll', async (_event, projectId) => {
+    try {
+      const result = await dbCall('typing:getAll', projectId);
+      return { success: true, data: result };
+    } catch (error: any) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('db:typing:insert', async (_event, projectId, url, sample, date) => {
+    try {
+      const result = await dbCall('typing:insert', projectId, url, sample, date);
+      return { success: true, data: result };
+    } catch (error: any) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('db:typing:update', async (_event, url, sample, date, id) => {
+    try {
+      const result = await dbCall('typing:update', url, sample, date, id);
+      return { success: true, data: result };
+    } catch (error: any) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('db:typing:delete', async (_event, id) => {
+    try {
+      const result = await dbCall('typing:delete', id);
+      return { success: true, data: result };
+    } catch (error: any) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('db:typing:deleteByProject', async (_event, projectId) => {
+    try {
+      const result = await dbCall('typing:deleteByProject', projectId);
+      return { success: true, data: result };
+    } catch (error: any) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  // Stopwords
+  ipcMain.handle('db:stopwords:getAll', async (_event, projectId) => {
+    try {
+      const result = await dbCall('stopwords:getAll', projectId);
+      return { success: true, data: result };
+    } catch (error: any) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('db:stopwords:insert', async (_event, projectId, word) => {
+    try {
+      const result = await dbCall('stopwords:insert', projectId, word);
+      return { success: true, data: result };
+    } catch (error: any) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('db:stopwords:delete', async (_event, id) => {
+    try {
+      const result = await dbCall('stopwords:delete', id);
+      return { success: true, data: result };
+    } catch (error: any) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('db:stopwords:deleteByProject', async (_event, projectId) => {
+    try {
+      const result = await dbCall('stopwords:deleteByProject', projectId);
+      return { success: true, data: result };
+    } catch (error: any) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  // URLs
+  ipcMain.handle('db:urls:getAll', async (_event, projectId) => {
+    try {
+      const result = await dbCall('urls:getAll', projectId);
+      return { success: true, data: result };
+    } catch (error: any) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('db:urls:getSorted', async (_event, options) => {
+    try {
+      const result = await dbCall('urls:getSorted', options);
+      return { success: true, data: result };
+    } catch (error: any) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('db:urls:count', async (_event, projectId) => {
+    try {
+      const result = await dbCall('urls:count', projectId);
+      return { success: true, data: result };
+    } catch (error: any) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  // Process runners: categorization, typing, clustering
+  ipcMain.handle('keywords:start-categorization', async (_event, projectId) => {
+    try {
+      // Start categorization worker
+      startCategorizationWorker(projectId);
+      return { success: true };
+    } catch (error: any) {
+      console.error('Categorization start error:', error);
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('keywords:start-typing', async (_event, projectId) => {
+    try {
+      // Start typing worker
+      startTypingWorker(projectId);
+      return { success: true };
+    } catch (error: any) {
+      console.error('Typing start error:', error);
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('keywords:start-clustering', async (_event, projectId, algorithm, eps, minPts) => {
+    try {
+      // Start clustering worker
+      startClusteringWorker(projectId, algorithm, eps, minPts);
+      return { success: true };
+    } catch (error: any) {
+      console.error('Clustering start error:', error);
+      return { success: false, error: error.message };
+    }
+  });
+
+  console.log('IPC handlers registered');
 }
-
-// IPC socket handlers will be registered when startSocketServer() is called.
 
 // Prevent running multiple full Electron instances (avoid multiple windows)
 const gotSingleInstanceLock = app.requestSingleInstanceLock();
@@ -170,129 +401,482 @@ if (!gotSingleInstanceLock) {
   app.quit();
 }
 
-// Start socket server
-function startSocketServer(): boolean {
-  // Switch to IPC-driven in-process socket adapter. Register IPC handlers so
-  // renderers can `invoke('socket:connect')` and `invoke('socket:emit', ...)`.
-  try {
-    registerIpcSocketHandlers();
+// Start DB worker process
+function startDbWorker(): boolean {
+  if (dbWorkerProcess) {
+    console.log('DB worker already running');
     return true;
-  } catch (e) {
-    console.warn('Failed to register IPC socket handlers:', String(e));
+  }
+
+  // In dev: use source file from electron/ directory
+  // In production: use copied file from dist-electron/
+  const workerPath = app.isPackaged
+    ? path.join(process.resourcesPath, "app.asar.unpacked", "electron", "db-worker.cjs")
+    : path.join(__dirname, "..", "electron", "db-worker.cjs");
+
+  const execCmd = app.isPackaged ? process.execPath : "node";
+  console.log("Starting DB worker:", execCmd, workerPath);
+
+  // Set DB path via environment variable
+  // Always use local db/projects.db relative to app root
+  const dbPath = path.join(__dirname, '..', 'db', 'projects.db');
+
+  console.log("DB path:", dbPath);
+
+  try {
+    const proc = spawn(execCmd, [workerPath], {
+      stdio: ['pipe', 'pipe', 'pipe'],
+      shell: false,
+      env: { ...process.env, DB_PATH: dbPath },
+    });
+
+    dbWorkerProcess = proc;
+
+    // Handle responses from worker
+    let buffer = '';
+    proc.stdout?.setEncoding('utf8');
+    proc.stdout?.on('data', (chunk) => {
+      buffer += chunk;
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        try {
+          const response = JSON.parse(line);
+          const pending = dbPendingRequests.get(response.id);
+          if (pending) {
+            dbPendingRequests.delete(response.id);
+            if (response.error) {
+              pending.reject(new Error(response.error));
+            } else {
+              pending.resolve(response.result);
+            }
+          }
+        } catch (err) {
+          console.error('Failed to parse DB worker response:', err);
+        }
+      }
+    });
+
+    proc.stderr?.setEncoding('utf8');
+    proc.stderr?.on('data', (data) => {
+      console.log('[DB Worker]', data.toString().trim());
+    });
+
+    proc.on('error', (err) => {
+      console.error('DB worker process error:', err);
+      dbWorkerProcess = null;
+    });
+
+    proc.on('exit', (code, sig) => {
+      console.log('DB worker exited', code, sig);
+      dbWorkerProcess = null;
+      // Reject all pending requests
+      for (const [id, pending] of dbPendingRequests.entries()) {
+        pending.reject(new Error('DB worker exited'));
+        dbPendingRequests.delete(id);
+      }
+    });
+
+    return true;
+  } catch (e: any) {
+    console.error("Failed to start DB worker:", e?.message || String(e));
     return false;
   }
 }
 
-// Spawn-based server start (safer for native modules). Use this when direct
-// require fails due to native binding/arch mismatches.
-function startSocketServerProcess() {
-  if (socketServerProcess) {
-    console.log('Socket server process already started');
-    return;
-  }
-
-  // Choose executable depending on whether app is packaged:
-  // - In dev we prefer system `node` (so native bindings match system Node and
-  //   we avoid loading them into the Electron main process).
-  // - In packaged app (portable) there may be no `node` on user's PATH, so
-  //   spawn Electron's bundled binary (process.execPath) to run the server
-  //   with the embedded node runtime. When packaged, native modules should
-  //   be rebuilt for Electron and included in `app.asar.unpacked`.
-  const socketPath = app.isPackaged
-    ? path.join(process.resourcesPath, "app.asar.unpacked", "socket", "server.cjs")
-    : path.resolve(__dirname, "../socket/server.cjs");
-
-  const execCmd = app.isPackaged ? process.execPath : "node";
-  console.log("Spawning socket server process:", execCmd, socketPath);
-
-  // In packaged apps (portable) there's no attached console — capture child
-  // stdout/stderr into a log file under userData so we can inspect failures.
-  let proc: ChildProcess | null = null;
+// Worker process runners for categorization, typing, clustering
+async function startCategorizationWorker(projectId: number) {
+  const workerPath = path.join(__dirname, '..', 'worker', 'assignCategorization.cjs');
+  
+  console.log(`Starting categorization worker for project ${projectId}`);
+  
   try {
-    if (app.isPackaged) {
-      const userLogDir = app.getPath("userData") || process.cwd();
-      try {
-        fs.mkdirSync(userLogDir, { recursive: true });
-      } catch (e) {
-        /* ignore */
+    // Load categories and keywords from DB
+    const categories = await dbCall('categories:getAll', projectId);
+    const keywords = await dbCall('keywords:getAll', projectId);
+
+    if (!keywords || keywords.length === 0) {
+      console.warn(`No keywords found for project ${projectId}`);
+      if (win && !win.isDestroyed()) {
+        win.webContents.send('keywords:categorization-error', {
+          projectId,
+          message: 'No keywords found for project',
+        });
       }
-      const logPath = path.join(userLogDir, "socket-server.log");
-      const outFd = fs.openSync(logPath, "a");
-      const errFd = fs.openSync(logPath, "a");
-
-      if (!fs.existsSync(socketPath)) {
-        const msg = `Socket server entry not found at ${socketPath}\n`;
-        fs.writeSync(outFd, msg);
-        console.error(msg);
-      }
-
-      proc = spawn(execCmd, [socketPath], {
-        stdio: ["ignore", outFd, errFd],
-        shell: false,
-      });
-      fs.writeSync(outFd, `Spawned socket server process pid=${proc.pid}\n`);
-    } else {
-      // Dev: inherit console for immediate feedback
-      proc = spawn(execCmd, [socketPath], { stdio: "inherit", shell: false });
-    }
-    socketServerProcess = proc;
-
-    if (proc !== null) {
-      proc.on("error", (err) => {
-        console.error("Socket server process error:", err);
-        try {
-          const userLogDir = app.getPath("userData") || process.cwd();
-          const logPath = path.join(userLogDir, "socket-server.log");
-          fs.appendFileSync(logPath, `Socket server process error: ${String(err)}\n`);
-        } catch (e) {}
-      });
-
-      proc.on("exit", (code, sig) => {
-        console.log("Socket server process exited", code, sig);
-        try {
-          const userLogDir = app.getPath("userData") || process.cwd();
-          const logPath = path.join(userLogDir, "socket-server.log");
-          fs.appendFileSync(logPath, `Socket server exited code=${code} sig=${sig}\n`);
-        } catch (e) {}
-        socketServerProcess = null;
-      });
-    }
-  } catch (e: any) {
-    console.error("Failed to spawn socket server process:", e?.message || String(e));
-  }
-  socketServerProcess = proc;
-  // Attach final safety handlers only if the process was created.
-  if (proc) {
-    proc.on('error', (err) => {
-      console.error('Socket server process error:', err);
-    });
-
-    proc.on('exit', (code, sig) => {
-      console.log('Socket server process exited', code, sig);
-      socketServerProcess = null;
-    });
-  }
-}
-
-// Stop socket server
-function stopSocketServer() {
-  try {
-    // If we spawned the server process, terminate it
-    if (socketServerProcess) {
-      console.log('Stopping spawned socket server process...');
-      socketServerProcess.kill('SIGTERM');
-      socketServerProcess = null;
       return;
     }
 
-    const socketPath = path.resolve(__dirname, "../socket/server.cjs");
-    const requireFrom = createRequire(import.meta.url);
-    const socketModule = requireFrom(socketPath);
-    if (socketModule && typeof socketModule.stopSocketServer === 'function') {
-      socketModule.stopSocketServer();
+    // Attach embeddings to keywords using the embeddings helper
+    console.log(`Attaching embeddings to ${keywords.length} keywords...`);
+    const HandlerKeywords = require(path.join(__dirname, '..', 'socket', 'HandlerKeywords.cjs'));
+    const attachEmbeddingsToKeywords = HandlerKeywords.attachEmbeddingsToKeywords;
+    
+    let embeddingStats;
+    try {
+      embeddingStats = await attachEmbeddingsToKeywords(keywords, { chunkSize: 40 });
+      console.log('Embedding stats:', embeddingStats);
+    } catch (embErr: any) {
+      console.error('[categorization] Failed to prepare embeddings:', embErr?.message || embErr);
+      if (win && !win.isDestroyed()) {
+        win.webContents.send('keywords:categorization-error', {
+          projectId,
+          message: 'Не удалось получить эмбеддинги для категоризации. Проверьте OpenAI ключ.',
+        });
+      }
+      return;
     }
-  } catch (e: any) {
-    console.warn("Failed to stop socket server:", e?.message || String(e));
+
+    if (!embeddingStats.embedded) {
+      if (win && !win.isDestroyed()) {
+        win.webContents.send('keywords:categorization-error', {
+          projectId,
+          message: 'Не удалось подготовить эмбеддинги для категоризации.',
+        });
+      }
+      return;
+    }
+
+    // Create temporary directory and input file
+    const tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'categorization-'));
+    const inputPath = path.join(tmpDir, `input-${Date.now()}.json`);
+    const input = JSON.stringify({ categories: categories || [], keywords });
+    
+    await fs.promises.writeFile(inputPath, input, 'utf8');
+    console.log(`Created input file: ${inputPath}`);
+
+    const child = spawn('node', [workerPath, `--projectId=${projectId}`, `--inputFile=${inputPath}`], {
+      env: Object.assign({}, process.env),
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+
+    // Parse progress and results from stdout
+    let processed = 0;
+    child.stdout?.setEncoding('utf8');
+    let stdoutBuffer = '';
+    
+    child.stdout?.on('data', (data) => {
+      stdoutBuffer += data;
+      const lines = stdoutBuffer.split('\n');
+      stdoutBuffer = lines.pop() || '';
+
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        
+        console.log(`[Categorization Worker ${projectId}]`, line);
+        
+        // Try to parse as JSON result
+        try {
+          const obj = JSON.parse(line);
+          processed++;
+          
+          // Update keyword in DB
+          if (obj.id && obj.bestCategoryName !== undefined) {
+            dbCall('keywords:updateCategory', obj.id, obj.bestCategoryName, obj.similarity || null)
+              .catch(err => console.error('Failed to update keyword category:', err));
+          }
+
+          // Send progress update
+          const progress = Math.round((processed / keywords.length) * 100);
+          if (win && !win.isDestroyed()) {
+            console.log(`Sending categorization progress: ${progress}% (${processed}/${keywords.length})`);
+            win.webContents.send('keywords:categorization-progress', {
+              projectId,
+              progress,
+            });
+          }
+        } catch (e) {
+          // Not JSON, might be a log message
+          if (line.includes('progress:')) {
+            const match = line.match(/progress: (\d+)/);
+            if (match && win) {
+              win.webContents.send('keywords:categorization-progress', {
+                projectId,
+                progress: parseInt(match[1]),
+              });
+            }
+          }
+        }
+      }
+    });
+
+    child.stderr?.setEncoding('utf8');
+    child.stderr?.on('data', (data) => {
+      console.error(`[Categorization Worker ${projectId} ERROR]`, data.toString().trim());
+    });
+
+    child.on('exit', async (code) => {
+      console.log(`Categorization worker exited with code ${code}`);
+      console.log(`Window exists: ${!!win}, isDestroyed: ${win?.isDestroyed()}`);
+      
+      // Cleanup temp file
+      try {
+        await fs.promises.rm(tmpDir, { recursive: true, force: true });
+      } catch (e) {
+        console.error('Failed to cleanup temp dir:', e);
+      }
+
+      if (win && !win.isDestroyed()) {
+        if (code === 0) {
+          console.log(`Sending keywords:categorization-finished for project ${projectId}`);
+          win.webContents.send('keywords:categorization-finished', { projectId });
+        } else {
+          win.webContents.send('keywords:categorization-error', {
+            projectId,
+            message: `Worker exited with code ${code}`,
+          });
+        }
+      }
+    });
+  } catch (error: any) {
+    console.error('Failed to start categorization worker:', error);
+    if (win) {
+      win.webContents.send('keywords:categorization-error', {
+        projectId,
+        message: error.message || 'Failed to start worker',
+      });
+    }
+  }
+}
+
+async function startTypingWorker(projectId: number) {
+  const workerPath = path.join(__dirname, '..', 'worker', 'trainAndClassify.cjs');
+  
+  console.log(`Starting typing worker for project ${projectId}`);
+  
+  try {
+    // Load typing samples and keywords from DB
+    const typingSamples = await dbCall('typing:getAll', projectId);
+    const keywords = await dbCall('keywords:getAll', projectId);
+
+    // Create temporary directory and input file
+    const tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'typing-'));
+    const inputPath = path.join(tmpDir, `input-${Date.now()}.json`);
+    const input = JSON.stringify({ typingSamples: typingSamples || [], keywords: keywords || [] });
+    
+    await fs.promises.writeFile(inputPath, input, 'utf8');
+    console.log(`Created typing input file: ${inputPath}`);
+
+    const child = spawn('node', [workerPath, `--projectId=${projectId}`, `--inputFile=${inputPath}`], {
+      env: Object.assign({}, process.env),
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+
+    let processed = 0;
+    child.stdout?.setEncoding('utf8');
+    let stdoutBuffer = '';
+    
+    child.stdout?.on('data', (data) => {
+      stdoutBuffer += data;
+      const lines = stdoutBuffer.split('\n');
+      stdoutBuffer = lines.pop() || '';
+
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        
+        console.log(`[Typing Worker ${projectId}]`, line);
+        
+        try {
+          const obj = JSON.parse(line);
+          processed++;
+          
+          // Update keyword in DB
+          if (obj.id && obj.className !== undefined) {
+            dbCall('keywords:updateClass', obj.id, obj.className, obj.similarity || null)
+              .catch(err => console.error('Failed to update keyword class:', err));
+          }
+
+          // Send progress
+          if (keywords && keywords.length > 0) {
+            const progress = Math.round((processed / keywords.length) * 100);
+            if (win) {
+              win.webContents.send('keywords:typing-progress', {
+                projectId,
+                progress,
+              });
+            }
+          }
+        } catch (e) {
+          // Not JSON, check for progress message
+          if (line.includes('progress:')) {
+            const match = line.match(/progress: (\d+)/);
+            if (match && win) {
+              win.webContents.send('keywords:typing-progress', {
+                projectId,
+                progress: parseInt(match[1]),
+              });
+            }
+          }
+        }
+      }
+    });
+
+    child.stderr?.setEncoding('utf8');
+    child.stderr?.on('data', (data) => {
+      console.error(`[Typing Worker ${projectId} ERROR]`, data.toString().trim());
+    });
+
+    child.on('exit', async (code) => {
+      console.log(`Typing worker exited with code ${code}`);
+      
+      // Cleanup
+      try {
+        await fs.promises.rm(tmpDir, { recursive: true, force: true });
+      } catch (e) {
+        console.error('Failed to cleanup temp dir:', e);
+      }
+
+      if (win) {
+        if (code === 0) {
+          win.webContents.send('keywords:typing-finished', { projectId });
+        } else {
+          win.webContents.send('keywords:typing-error', {
+            projectId,
+            message: `Worker exited with code ${code}`,
+          });
+        }
+      }
+    });
+  } catch (error: any) {
+    console.error('Failed to start typing worker:', error);
+    if (win) {
+      win.webContents.send('keywords:typing-error', {
+        projectId,
+        message: error.message || 'Failed to start worker',
+      });
+    }
+  }
+}
+
+async function startClusteringWorker(projectId: number, algorithm: string, eps: number, minPts?: number) {
+  const workerPath = path.join(__dirname, '..', 'worker', 'clusterСomponents.cjs');
+  
+  console.log(`Starting clustering worker for project ${projectId}`, { algorithm, eps, minPts });
+  
+  try {
+    // Load keywords from DB
+    const keywords = await dbCall('keywords:getAll', projectId);
+
+    if (!keywords || keywords.length === 0) {
+      console.warn(`No keywords found for project ${projectId}`);
+      if (win) {
+        win.webContents.send('keywords:clustering-error', {
+          projectId,
+          message: 'No keywords found for project',
+        });
+      }
+      return;
+    }
+
+    // Create temporary directory and input file
+    const tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'clustering-'));
+    const inputPath = path.join(tmpDir, `input-${Date.now()}.json`);
+    const input = JSON.stringify({ keywords, algorithm, eps, minPts });
+    
+    await fs.promises.writeFile(inputPath, input, 'utf8');
+    console.log(`Created clustering input file: ${inputPath}`);
+
+    const args = [workerPath, `--projectId=${projectId}`, `--inputFile=${inputPath}`, `--algorithm=${algorithm}`, `--eps=${eps}`];
+    if (minPts !== undefined) {
+      args.push(`--minPts=${minPts}`);
+    }
+    
+    const child = spawn('node', args, {
+      env: Object.assign({}, process.env),
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+
+    let processed = 0;
+    child.stdout?.setEncoding('utf8');
+    let stdoutBuffer = '';
+    
+    child.stdout?.on('data', (data) => {
+      stdoutBuffer += data;
+      const lines = stdoutBuffer.split('\n');
+      stdoutBuffer = lines.pop() || '';
+
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        
+        console.log(`[Clustering Worker ${projectId}]`, line);
+        
+        try {
+          const obj = JSON.parse(line);
+          processed++;
+          
+          // Update keyword cluster in DB
+          if (obj.id && obj.cluster !== undefined) {
+            dbCall('keywords:updateCluster', obj.id, obj.cluster)
+              .catch(err => console.error('Failed to update keyword cluster:', err));
+          }
+
+          // Send progress
+          const progress = Math.round((processed / keywords.length) * 100);
+          if (win) {
+            win.webContents.send('keywords:clustering-progress', {
+              projectId,
+              progress,
+            });
+          }
+        } catch (e) {
+          // Not JSON
+          if (line.includes('progress:')) {
+            const match = line.match(/progress: (\d+)/);
+            if (match && win) {
+              win.webContents.send('keywords:clustering-progress', {
+                projectId,
+                progress: parseInt(match[1]),
+              });
+            }
+          }
+        }
+      }
+    });
+
+    child.stderr?.setEncoding('utf8');
+    child.stderr?.on('data', (data) => {
+      console.error(`[Clustering Worker ${projectId} ERROR]`, data.toString().trim());
+    });
+
+    child.on('exit', async (code) => {
+      console.log(`Clustering worker exited with code ${code}`);
+      
+      // Cleanup
+      try {
+        await fs.promises.rm(tmpDir, { recursive: true, force: true });
+      } catch (e) {
+        console.error('Failed to cleanup temp dir:', e);
+      }
+
+      if (win) {
+        if (code === 0) {
+          win.webContents.send('keywords:clustering-finished', { projectId });
+        } else {
+          win.webContents.send('keywords:clustering-error', {
+            projectId,
+            message: `Worker exited with code ${code}`,
+          });
+        }
+      }
+    });
+  } catch (error: any) {
+    console.error('Failed to start clustering worker:', error);
+    if (win) {
+      win.webContents.send('keywords:clustering-error', {
+        projectId,
+        message: error.message || 'Failed to start worker',
+      });
+    }
+  }
+}
+
+// Stop DB worker
+function stopDbWorker() {
+  if (dbWorkerProcess) {
+    console.log('Stopping DB worker...');
+    dbWorkerProcess.kill('SIGTERM');
+    dbWorkerProcess = null;
   }
 }
 
@@ -370,16 +954,22 @@ app.on("activate", () => {
 });
 
 app.on("before-quit", () => {
-  stopSocketServer(); // Ensure socket server is stopped before quit
+  stopDbWorker(); // Ensure DB worker is stopped before quit
 });
 
 app.whenReady().then(() => {
-  const ok = startSocketServer();
+  console.log('[Main] App ready, starting DB worker...');
+  const ok = startDbWorker();
   if (!ok) {
-    // fallback to spawn-based server start (works better with native bindings)
-    startSocketServerProcess();
+    console.error('[Main] Failed to start DB worker');
+    app.quit();
+    return;
   }
 
+  console.log('[Main] DB worker started, registering IPC handlers...');
+  registerIpcHandlers(); // Register IPC handlers
+  
+  console.log('[Main] Creating window...');
   createWindow(); // Then create window
 
   // Проверка обновлений и уведомление пользователя

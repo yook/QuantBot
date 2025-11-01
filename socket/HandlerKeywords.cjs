@@ -1533,3 +1533,4 @@ const registerKeywords = (io, socket) => {
 };
 
 module.exports = registerKeywords;
+module.exports.attachEmbeddingsToKeywords = attachEmbeddingsToKeywords;

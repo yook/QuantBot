@@ -93,17 +93,13 @@ if (db) {
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
     )`
   ).run();
-  db.prepare(
-    "CREATE INDEX IF NOT EXISTS idx_projects_url ON projects(url);"
-  ).run();
+  db.prepare("CREATE INDEX IF NOT EXISTS idx_projects_url ON projects(url);").run();
 
   // Добавляем колонку queue_size в существующую таблицу, если она еще не существует
   const columns = db.prepare("PRAGMA table_info(projects);").all();
   const hasQueueSize = columns.some((col) => col.name === "queue_size");
   if (!hasQueueSize) {
-    db.prepare(
-      "ALTER TABLE projects ADD COLUMN queue_size INTEGER DEFAULT 0;"
-    ).run();
+    db.prepare("ALTER TABLE projects ADD COLUMN queue_size INTEGER DEFAULT 0;").run();
   }
 
   // Схема таблицы urls (единая коллекция для всех типов с привязкой к проекту)
@@ -131,9 +127,7 @@ if (db) {
         FOREIGN KEY(project_id) REFERENCES projects(id)
       )`
     ).run();
-    db.prepare(
-      "CREATE INDEX IF NOT EXISTS idx_urls_project ON urls(project_id);"
-    ).run();
+    db.prepare("CREATE INDEX IF NOT EXISTS idx_urls_project ON urls(project_id);").run();
     db.prepare(
       "CREATE UNIQUE INDEX IF NOT EXISTS idx_urls_project_url ON urls(project_id, url);"
     ).run();
@@ -185,7 +179,7 @@ if (db) {
     db.prepare(
       "CREATE UNIQUE INDEX IF NOT EXISTS idx_keywords_project_keyword ON keywords(project_id, keyword);"
     ).run();
-
+    
     // Add columns for categorization if they don't exist
     const alterColumns = [
       "ALTER TABLE keywords ADD COLUMN category_id INTEGER;",
@@ -195,10 +189,10 @@ if (db) {
       "ALTER TABLE keywords ADD COLUMN class_similarity REAL;",
       "ALTER TABLE keywords ADD COLUMN cluster_label TEXT;",
       "ALTER TABLE keywords ADD COLUMN target_query INTEGER DEFAULT 1;",
-      "ALTER TABLE keywords ADD COLUMN blocking_rule TEXT;",
+      "ALTER TABLE keywords ADD COLUMN blocking_rule TEXT;"
     ];
-
-    alterColumns.forEach((sql) => {
+    
+    alterColumns.forEach(sql => {
       try {
         db.prepare(sql).run();
       } catch (err) {
@@ -207,7 +201,7 @@ if (db) {
         }
       }
     });
-
+    
     // Indexes for new columns
     db.prepare(
       "CREATE INDEX IF NOT EXISTS idx_keywords_category_id ON keywords(category_id);"
@@ -592,26 +586,23 @@ const stopWordsInsertBatch = async (projectId, words, createdAt) => {
       // for normal words we normalize to lowercase.
       const normalized = isRegex ? raw : raw.toLowerCase();
 
-      try {
-        const result = stmt.run(
-          projectId,
-          normalized,
-          createdAt || new Date().toISOString()
+      await new Promise((res, rej) => {
+        stmt.run(
+          [projectId, normalized, createdAt || new Date().toISOString()],
+          function (err) {
+            if (err) return rej(err);
+            if (this.changes && this.changes > 0)
+              added.push({
+                id: this.lastID,
+                project_id: projectId,
+                word: normalized,
+              });
+            res();
+          }
         );
-        if (result.changes && result.changes > 0) {
-          added.push({
-            id: result.lastInsertRowid,
-            project_id: projectId,
-            word: normalized,
-          });
-        }
-      } catch (err) {
-        // Ignore duplicate errors, log others
-        if (!err.message.includes("UNIQUE constraint")) {
-          console.error("Error inserting stop_word:", err);
-        }
-      }
+      });
     }
+    stmt.finalize && stmt.finalize();
     return { success: true, added };
   } catch (error) {
     console.error("Error inserting stop_words batch:", error);
@@ -1180,7 +1171,7 @@ async function getUrlsStats(projectId) {
       lastUpdated: new Date().toISOString(),
     };
   }
-}
+};
 
 // Функция для сохранения ошибок
 const saveError = async (projectId, data, socket) => {
@@ -2213,7 +2204,7 @@ const typingSamplesUpdate = async (id, fields = {}) => {
     }
     if (setParts.length === 0) return false;
     params.push(id);
-    const sql = `UPDATE typing_samples SET ${setParts.join(", ")} WHERE id = ?`;
+       const sql = `UPDATE typing_samples SET ${setParts.join(", ")} WHERE id = ?`;
     const res = await dbRun(sql, params);
     const changes = res && res.changes ? res.changes : 0;
     if (changes > 0 && newLabel !== oldLabel) {
