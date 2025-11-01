@@ -35,6 +35,46 @@ process.env.VITE_PUBLIC = VITE_DEV_SERVER_URL
 let win: BrowserWindow | null;
 let dbWorkerProcess: ChildProcess | null = null;
 
+// --- Bridge main-process logs to renderer console ---
+type LogLevel = 'log' | 'info' | 'warn' | 'error';
+const originalConsole = {
+  log: console.log.bind(console),
+  info: console.info.bind(console),
+  warn: console.warn.bind(console),
+  error: console.error.bind(console),
+};
+const logBuffer: Array<{ level: LogLevel; args: any[] }> = [];
+
+function sendLogToRenderer(level: LogLevel, args: any[]) {
+  try {
+    if (win && !win.isDestroyed()) {
+      win.webContents.send('app-log', { level, args });
+    } else {
+      logBuffer.push({ level, args });
+    }
+  } catch (_e) {
+    // ignore
+  }
+}
+
+// Monkey-patch console methods to mirror logs to renderer
+console.log = (...args: any[]) => {
+  originalConsole.log(...args);
+  sendLogToRenderer('log', args);
+};
+console.info = (...args: any[]) => {
+  originalConsole.info(...args);
+  sendLogToRenderer('info', args);
+};
+console.warn = (...args: any[]) => {
+  originalConsole.warn(...args);
+  sendLogToRenderer('warn', args);
+};
+console.error = (...args: any[]) => {
+  originalConsole.error(...args);
+  sendLogToRenderer('error', args);
+};
+
 // DB Worker IPC bridge
 let dbRequestId = 0;
 const dbPendingRequests = new Map<number, { resolve: Function; reject: Function }>();
@@ -66,9 +106,12 @@ function registerIpcHandlers() {
   // Projects
   ipcMain.handle('db:projects:getAll', async () => {
     try {
+      console.log('[IPC] db:projects:getAll called');
       const result = await dbCall('projects:getAll');
+      console.log('[IPC] db:projects:getAll result:', Array.isArray(result) ? `count=${result.length}` : result);
       return { success: true, data: result };
     } catch (error: any) {
+      console.error('[IPC] db:projects:getAll error:', error?.message || error);
       return { success: false, error: error.message };
     }
   });
@@ -84,9 +127,12 @@ function registerIpcHandlers() {
 
   ipcMain.handle('db:projects:insert', async (_event, name, url) => {
     try {
+      console.log('[IPC] db:projects:insert payload:', { name, url });
       const result = await dbCall('projects:insert', name, url);
+      console.log('[IPC] db:projects:insert result:', result);
       return { success: true, data: result };
     } catch (error: any) {
+      console.error('[IPC] db:projects:insert error:', error?.message || error);
       return { success: false, error: error.message };
     }
   });
@@ -463,7 +509,8 @@ function startDbWorker(): boolean {
 
     proc.stderr?.setEncoding('utf8');
     proc.stderr?.on('data', (data) => {
-      console.log('[DB Worker]', data.toString().trim());
+      const text = data.toString().trim();
+      console.log('[DB Worker]', text);
     });
 
     proc.on('error', (err) => {
@@ -922,6 +969,14 @@ function createWindow() {
   win.webContents.on("did-finish-load", () => {
   win?.webContents.send("main-process-message", (new Date()).toLocaleString());
   if (!win?.isVisible()) win?.show();
+  // Flush buffered main-process logs to renderer console
+  try {
+    if (logBuffer.length) {
+      for (const entry of logBuffer.splice(0, logBuffer.length)) {
+        sendLogToRenderer(entry.level, entry.args);
+      }
+    }
+  } catch (_e) {}
   });
 
   if (VITE_DEV_SERVER_URL) {
@@ -970,6 +1025,15 @@ app.whenReady().then(() => {
 
   console.log('[Main] DB worker started, registering IPC handlers...');
   registerIpcHandlers(); // Register IPC handlers
+  // Probe DB readiness with a lightweight query
+  (async () => {
+    try {
+      const projects = await dbCall('projects:getAll');
+      console.log('[Main] DB ready: projects count =', Array.isArray(projects) ? projects.length : 'n/a');
+    } catch (e: any) {
+      console.error('[Main] DB readiness check failed:', e?.message || e);
+    }
+  })();
   
   console.log('[Main] Creating window...');
   createWindow(); // Then create window

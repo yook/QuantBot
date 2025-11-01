@@ -162,6 +162,7 @@ export const useProjectStore = defineStore("project", {
       const data: ProjectData = { ...(newProjectJson as NewProjectFile) } as ProjectData;
       data.name = form.name;
       data.url = form.url;
+      console.log('[Project Store] Insert payload:', { name: data.name, url: data.url });
       
       console.log('[Project Store] Inserting project:', data.name, data.url);
       const result = await ipcClient.insertProject(data.name, data.url || '');

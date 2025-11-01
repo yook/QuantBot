@@ -357,7 +357,12 @@ function startClustering() {
   const eps = Number(form.value.eps);
   const minPts = Number(dbscanMinPts.value);
   ipcClient
-    .startClustering(Number(projectId), algorithm, algorithm === 'components' ? eps : Number(dbscanEps.value), algorithm === 'dbscan' ? minPts : undefined)
+    .startClustering(
+      Number(projectId),
+      algorithm,
+      algorithm === "components" ? eps : Number(dbscanEps.value),
+      algorithm === "dbscan" ? minPts : undefined
+    )
     .then(() => {
       // optionally show feedback
     })

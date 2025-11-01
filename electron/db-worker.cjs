@@ -225,7 +225,13 @@ function handleRequest(req) {
 
       // Projects
       case "projects:getAll":
-        result = db.prepare("SELECT * FROM projects").all();
+        try {
+          result = db.prepare("SELECT * FROM projects").all();
+          console.error("[DB Worker] projects:getAll -> count:", Array.isArray(result) ? result.length : 'n/a');
+        } catch (err) {
+          console.error("[DB Worker] projects:getAll error:", err && err.message ? err.message : err);
+          throw err;
+        }
         break;
       case "projects:get":
         result = db
@@ -233,9 +239,16 @@ function handleRequest(req) {
           .get(params[0]);
         break;
       case "projects:insert":
-        result = db
-          .prepare("INSERT INTO projects (name, url) VALUES (?, ?)")
-          .run(params[0], params[1]);
+        try {
+          console.error("[DB Worker] projects:insert payload:", { name: params[0], url: params[1] });
+          result = db
+            .prepare("INSERT INTO projects (name, url) VALUES (?, ?)")
+            .run(params[0], params[1]);
+          console.error("[DB Worker] projects:insert result:", result);
+        } catch (err) {
+          console.error("[DB Worker] projects:insert error:", err && err.message ? err.message : err);
+          throw err;
+        }
         break;
       case "projects:update":
         result = db
