@@ -227,9 +227,15 @@ function handleRequest(req) {
       case "projects:getAll":
         try {
           result = db.prepare("SELECT * FROM projects").all();
-          console.error("[DB Worker] projects:getAll -> count:", Array.isArray(result) ? result.length : 'n/a');
+          console.error(
+            "[DB Worker] projects:getAll -> count:",
+            Array.isArray(result) ? result.length : "n/a"
+          );
         } catch (err) {
-          console.error("[DB Worker] projects:getAll error:", err && err.message ? err.message : err);
+          console.error(
+            "[DB Worker] projects:getAll error:",
+            err && err.message ? err.message : err
+          );
           throw err;
         }
         break;
@@ -240,13 +246,19 @@ function handleRequest(req) {
         break;
       case "projects:insert":
         try {
-          console.error("[DB Worker] projects:insert payload:", { name: params[0], url: params[1] });
+          console.error("[DB Worker] projects:insert payload:", {
+            name: params[0],
+            url: params[1],
+          });
           result = db
             .prepare("INSERT INTO projects (name, url) VALUES (?, ?)")
             .run(params[0], params[1]);
           console.error("[DB Worker] projects:insert result:", result);
         } catch (err) {
-          console.error("[DB Worker] projects:insert error:", err && err.message ? err.message : err);
+          console.error(
+            "[DB Worker] projects:insert error:",
+            err && err.message ? err.message : err
+          );
           throw err;
         }
         break;
