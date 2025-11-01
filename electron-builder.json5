@@ -9,7 +9,13 @@
     buildResources: "public",
   },
   icon: "quant",
-  files: ["dist", "dist-electron", "socket/**/*", "worker/**/*"],
+  files: [
+    "dist",
+    "dist-electron",
+    "socket/**/*",
+    "worker/**/*",
+    "electron/db-worker.cjs"
+  ],
   // Unpack only worker scripts and native modules required by the socket server.
   // Native modules (.node) cannot be loaded from inside ASAR, so we keep them
   // unpacked. This reduces package size compared to unpacking the entire
@@ -17,6 +23,7 @@
   asarUnpack: [
     "worker/**/*",
     "socket/**/*",
+    "electron/db-worker.cjs",
     "node_modules/better-sqlite3/**",
     "node_modules/keytar/**",
   ],

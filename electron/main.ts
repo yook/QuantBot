@@ -418,8 +418,10 @@ function startDbWorker(): boolean {
   console.log("Starting DB worker:", execCmd, workerPath);
 
   // Set DB path via environment variable
-  // Always use local db/projects.db relative to app root
-  const dbPath = path.join(__dirname, '..', 'db', 'projects.db');
+  // In dev: use local repo path; In production: use userData (writable)
+  const dbPath = app.isPackaged
+    ? path.join(app.getPath('userData'), 'projects.db')
+    : path.join(__dirname, '..', 'db', 'projects.db');
 
   console.log("DB path:", dbPath);
 
