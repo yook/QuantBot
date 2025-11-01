@@ -460,6 +460,7 @@ function startDbWorker(): boolean {
     ? path.join(process.resourcesPath, "app.asar.unpacked", "electron", "db-worker.cjs")
     : path.join(__dirname, "..", "electron", "db-worker.cjs");
 
+  // In packaged builds, run Electron binary in Node mode
   const execCmd = app.isPackaged ? process.execPath : "node";
   console.log("Starting DB worker:", execCmd, workerPath);
 
@@ -472,10 +473,14 @@ function startDbWorker(): boolean {
   console.log("DB path:", dbPath);
 
   try {
+    const env: NodeJS.ProcessEnv = { ...process.env, DB_PATH: dbPath } as any;
+    if (app.isPackaged) {
+      env.ELECTRON_RUN_AS_NODE = '1';
+    }
     const proc = spawn(execCmd, [workerPath], {
       stdio: ['pipe', 'pipe', 'pipe'],
       shell: false,
-      env: { ...process.env, DB_PATH: dbPath },
+      env,
     });
 
     dbWorkerProcess = proc;
