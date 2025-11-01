@@ -195,9 +195,38 @@ export const socket: IpcSocket = {
   },
   emit(eventName: string, ...args: any[]) {
     try {
+      // Serialize args to ensure they can be cloned through IPC
+      // We need to convert Vue refs and other complex objects to plain values
+      const serializedArgs = args.map(arg => {
+        if (arg === null || arg === undefined) return arg;
+        if (typeof arg === 'function') {
+          console.warn('[IPC Socket] Skipping function in emit args');
+          return null;
+        }
+        if (typeof arg === 'object') {
+          try {
+            // Deep clone to remove non-serializable properties (refs, functions, etc)
+            return JSON.parse(JSON.stringify(arg));
+          } catch (e) {
+            console.warn('[IPC Socket] Failed to serialize arg, using simple toString:', e);
+            return String(arg);
+          }
+        }
+        return arg;
+      }).filter(arg => arg !== null && arg !== undefined);
+      
+      console.log('[IPC Socket] emit:', eventName, 'serialized args:', serializedArgs);
+      
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (window as any).ipcRenderer.invoke('socket:emit', { clientInstanceId, eventName, args });
-    } catch (e) {}
+      (window as any).ipcRenderer.invoke('socket:emit', { 
+        clientInstanceId, 
+        eventName, 
+        args: serializedArgs 
+      })
+        .catch((e: any) => console.error('[IPC Socket] emit error:', eventName, e));
+    } catch (e) {
+      console.error('[IPC Socket] emit sync error:', eventName, e);
+    }
   },
   connect() {
     try { (window as any).ipcRenderer.invoke('socket:connect', { clientInstanceId }); } catch (e) {}

@@ -14,7 +14,7 @@
 const axios = require("axios");
 const fs = require("fs");
 const path = require("path");
-const db = require("../socket/db-sqlite.cjs");
+const { embeddingsCacheGet, embeddingsCachePut, updateTypingSampleEmbeddings, upsertTypingModel } = require("../socket/db-sqlite.cjs");
 
 const OPENAI_EMBED_URL = "https://api.openai.com/v1/embeddings";
 const DEFAULT_MODEL = "text-embedding-3-small";
@@ -50,7 +50,7 @@ async function fetchEmbeddings(texts, opts = {}) {
   for (let i = 0; i < texts.length; i++) {
     const text = texts[i];
     try {
-      const row = await db.embeddingsCacheGet(text);
+      const row = await embeddingsCacheGet(text);
       if (row && Array.isArray(row.embedding) && row.embedding.length) {
         results[i] = row.embedding;
         continue;
@@ -78,7 +78,7 @@ async function fetchEmbeddings(texts, opts = {}) {
       if (Array.isArray(emb) && emb.length) {
         results[idx] = emb;
         try {
-          await db.embeddingsCachePut(text, emb);
+          await embeddingsCachePut(text, emb);
         } catch (_) {
           // ignore cache write errors
         }
@@ -264,7 +264,7 @@ module.exports = {
   // DB helpers
   saveEmbeddingsToDb: async (projectId, items, vectorModel) => {
     // items: [{ sample_id, label, vector: number[]|Float32Array, dim? }]
-    return db.updateTypingSampleEmbeddings(
+    return updateTypingSampleEmbeddings(
       projectId,
       items,
       vectorModel || DEFAULT_MODEL
@@ -277,6 +277,6 @@ module.exports = {
       vector_model: vectorModel || DEFAULT_MODEL,
       payload_json: JSON.stringify(modelObj),
     };
-    return db.upsertTypingModel(projectId, payload);
+    return upsertTypingModel(projectId, payload);
   },
 };

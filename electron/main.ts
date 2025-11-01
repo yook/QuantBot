@@ -76,6 +76,11 @@ function createSocketAdapter(webContents: Electron.WebContents, clientInstanceId
         console.error('Failed to send IPC event to renderer', e);
       }
     },
+    // Socket.IO compatibility: to() returns this socket (broadcast to room)
+    // In IPC context, we only have one client per socket, so just return self
+    to(_room: string) {
+      return this;
+    },
     // Called when renderer sends an event to this socket
     __receive(event: string, ...args: any[]) {
       const arr = listeners.get(event) || [];

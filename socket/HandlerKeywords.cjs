@@ -11,6 +11,8 @@ const {
   keywordsRemove,
   keywordsClear,
   keywordsDelete,
+  dbRun,
+  dbGet,
 } = require("./db-sqlite.cjs");
 const { fetchEmbeddings } = require("../worker/embeddingsClassifier.cjs");
 const db = require("./db-sqlite.cjs");
@@ -861,13 +863,12 @@ const registerKeywords = (io, socket) => {
           const obj = JSON.parse(line);
           // Persist result to DB: always write class_*; fill category_* only if empty
           try {
-            const db = require("./db-sqlite.cjs");
             const cid = obj.bestCategoryId ?? null;
             const cname = obj.bestCategoryName ?? null;
             const csim = obj.similarity ?? null;
 
             // Write category_* always for categorization worker
-            await db.dbRun(
+            await dbRun(
               `UPDATE keywords
                SET
                  category_name = ?,
@@ -878,7 +879,7 @@ const registerKeywords = (io, socket) => {
 
             // Fetch the updated row and emit an update event so UI can refresh this row immediately
             try {
-              const updated = await db.dbGet(
+              const updated = await dbGet(
                 `SELECT * FROM keywords WHERE id = ?`,
                 [obj.id]
               );
@@ -1084,7 +1085,7 @@ const registerKeywords = (io, socket) => {
             const csim = obj.similarity ?? null;
 
             // Write class_* always
-            await db.dbRun(
+            await dbRun(
               `UPDATE keywords
                SET
                  class_name = ?,
@@ -1095,7 +1096,7 @@ const registerKeywords = (io, socket) => {
 
             // Fetch the updated row and emit an update event so UI can refresh this row immediately
             try {
-              const updated = await db.dbGet(
+              const updated = await dbGet(
                 `SELECT * FROM keywords WHERE id = ?`,
                 [obj.id]
               );
@@ -1245,7 +1246,7 @@ const registerKeywords = (io, socket) => {
 
       // Ensure previous clustering labels are cleared so each run is fresh
       try {
-        const result = await db.dbRun(
+        const result = await dbRun(
           `UPDATE keywords SET cluster_label = NULL WHERE project_id = ?`,
           [projectId]
         );
@@ -1461,14 +1462,14 @@ const registerKeywords = (io, socket) => {
               for (const item of cluster.items) {
                 if (!item || typeof item.id === "undefined") continue;
                 try {
-                  await db.dbRun(
+                  await dbRun(
                     `UPDATE keywords SET cluster_label = ? WHERE id = ?`,
                     [label, item.id]
                   );
                   processed++;
                   // Emit per-row update so UI refreshes immediately
                   try {
-                    const updated = await db.dbGet(
+                    const updated = await dbGet(
                       `SELECT * FROM keywords WHERE id = ?`,
                       [item.id]
                     );
