@@ -1,4 +1,4 @@
-import * as xlsx from "xlsx";
+import * as XLSX from "xlsx";
 import socket from "./socket-client";
 import { toRaw } from "vue";
 import { useProjectStore } from "./project";
@@ -55,7 +55,7 @@ export async function downloadDataFromProject(req: ExportRequest) {
           headerData[item.prop] = item.name;
         });
 
-        const book = xlsx.utils.book_new();
+        const book = XLSX.utils.book_new();
 
         const arr = data.slice();
 
@@ -76,14 +76,14 @@ export async function downloadDataFromProject(req: ExportRequest) {
 
         newArr.unshift(headerData);
 
-        const wd = xlsx.utils.json_to_sheet(newArr, {
+        const wd = XLSX.utils.json_to_sheet(newArr, {
           header: header,
           skipHeader: true,
         });
-        xlsx.utils.book_append_sheet(book, wd, currentDb);
+        XLSX.utils.book_append_sheet(book, wd, currentDb);
 
         const fileName = `${currentDb}-report.xlsx`;
-        xlsx.writeFile(book, fileName);
+        XLSX.writeFile(book, fileName);
         console.log('[Export] Saved file:', fileName);
 
         resolve();
@@ -206,9 +206,9 @@ export function downloadKeywords(exportColumns: any[]) {
     });
 
     // Create workbook and worksheet
-    const wb = xlsx.utils.book_new();
-    const ws = xlsx.utils.json_to_sheet(exportData);
-    xlsx.utils.book_append_sheet(wb, ws, "Keywords");
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.json_to_sheet(exportData);
+    XLSX.utils.book_append_sheet(wb, ws, "Keywords");
 
     // Save file
     const date = new Date().toISOString().split("T")[0];
@@ -216,7 +216,7 @@ export function downloadKeywords(exportColumns: any[]) {
     const filename = `${projectName}-keywords-${date}.xlsx`;
 
     // Use SheetJS writeFile to trigger download (browser) / write file (electron)
-    xlsx.writeFile(wb, filename);
+    XLSX.writeFile(wb, filename);
     console.log('[Export] Saved keywords file:', filename);
   });
 }

@@ -51,10 +51,10 @@ jobs:
         shell: pwsh
 
       # 5.1️⃣ Rebuild native modules for Electron (important for @vscode/sqlite3)
-      - name: 🔧 Rebuild native modules for Electron (@vscode/sqlite3)
+      - name: 🔧 Rebuild native modules for Electron (better-sqlite3)
         run: |
-          Write-Host "� Rebuilding native modules for Electron (win x64)..."
-          npx electron-rebuild -f -w @vscode/sqlite3 --arch=x64 --electron-version=37.0.0
+          Write-Host "🔁 Rebuilding native modules for Electron (win x64)..."
+          npx electron-rebuild -f -w better-sqlite3 --arch=x64 --electron-version=37.0.0
         shell: pwsh
 
       # Workaround: ensure platform-specific Rollup native optional dependency is present
@@ -67,7 +67,7 @@ jobs:
       # 6️⃣ Сборка portable-версии QuantBot
       - name: 🏗️ Build portable Windows app
         env:
-          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
         run: npm run build:win:portable:cross -- --publish never
 
       # 7️⃣ Собираем артефакты (.exe, .yml, .blockmap) для загрузки

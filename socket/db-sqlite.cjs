@@ -14,14 +14,8 @@
  *
  * Примечание: сложные поля хранятся как JSON-строки (TEXT).
  */
-// Prefer the standard `sqlite3` package when available; fall back to
-// `@vscode/sqlite3` which provides similar API shape. This makes the
-// server more flexible depending on which dependency is installed.
-// Use @vscode/sqlite3 explicitly to avoid ambiguity and ensure consistent
-// behavior across platforms. The package exposes Database similarly to
-// the standard sqlite3 package.
-const sqlite = require("@vscode/sqlite3");
-const Database = sqlite.Database || sqlite;
+// Use better-sqlite3 for synchronous, performant SQLite access
+const Database = require("better-sqlite3");
 const path = require("path");
 const fs = require("fs");
 
@@ -77,20 +71,15 @@ try {
 
 // Apply PRAGMAs and ensure schema
 if (db) {
-  db.exec("PRAGMA journal_mode = WAL");
-  db.exec("PRAGMA synchronous = NORMAL");
-  db.exec("PRAGMA cache_size = -200000"); // ~200MB
-  db.exec("PRAGMA mmap_size = 268435456"); // 256MB
-  db.exec("PRAGMA auto_vacuum = INCREMENTAL");
-  db.exec("PRAGMA temp_store = MEMORY");
-
-  // Note: do NOT drop embeddings_cache on startup — preserve cache between restarts.
-  // Previous migration code dropped the table here which caused the cache to be cleared
-  // every time the app restarted. We keep the table if it exists and rely on
-  // CREATE TABLE IF NOT EXISTS below to create it when missing.
+  db.pragma("journal_mode = WAL");
+  db.pragma("synchronous = NORMAL");
+  db.pragma("cache_size = -200000"); // ~200MB
+  db.pragma("mmap_size = 268435456"); // 256MB
+  db.pragma("auto_vacuum = INCREMENTAL");
+  db.pragma("temp_store = MEMORY");
 
   // Полная схема projects (без stats - выносим в отдельную таблицу)
-  db.exec(
+  db.prepare(
     `CREATE TABLE IF NOT EXISTS projects (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       name TEXT NOT NULL,
@@ -103,291 +92,246 @@ if (db) {
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
     )`
-  );
-  db.exec("CREATE INDEX IF NOT EXISTS idx_projects_url ON projects(url);");
+  ).run();
+  db.prepare("CREATE INDEX IF NOT EXISTS idx_projects_url ON projects(url);").run();
 
   // Добавляем колонку queue_size в существующую таблицу, если она еще не существует
-  db.run(
-    `
-    PRAGMA table_info(projects);
-  `,
-    [],
-    (err, rows) => {
-      if (err) {
-        console.error("Ошибка при проверке структуры таблицы projects:", err);
-        return;
-      }
-
-      // Проверяем, существует ли колонка queue_size
-      db.all(`PRAGMA table_info(projects)`, [], (err, columns) => {
-        if (err) {
-          console.error("Ошибка при получении информации о колонках:", err);
-          return;
-        }
-
-        const hasQueueSizeColumn = columns.some(
-          (column) => column.name === "queue_size"
-        );
-
-        if (!hasQueueSizeColumn) {
-          console.log("Добавляем колонку queue_size в таблицу projects...");
-          db.run(
-            `ALTER TABLE projects ADD COLUMN queue_size INTEGER DEFAULT 0`,
-            (err) => {
-              if (err) {
-                console.error("Ошибка при добавлении колонки queue_size:", err);
-              } else {
-                console.log("Колонка queue_size успешно добавлена");
-              }
-            }
-          );
-        }
-      });
-    }
-  );
+  const columns = db.prepare("PRAGMA table_info(projects);").all();
+  const hasQueueSize = columns.some((col) => col.name === "queue_size");
+  if (!hasQueueSize) {
+    db.prepare("ALTER TABLE projects ADD COLUMN queue_size INTEGER DEFAULT 0;").run();
+  }
 
   // Схема таблицы urls (единая коллекция для всех типов с привязкой к проекту)
-  db.run(
-    `CREATE TABLE IF NOT EXISTS urls (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      project_id INTEGER NOT NULL,
-      type TEXT,
-      url TEXT NOT NULL,
-      referrer TEXT,
-      depth INTEGER,
-      code INTEGER,
-      contentType TEXT,
-      protocol TEXT,
-  location TEXT,
-      actualDataSize INTEGER,
-      requestTime INTEGER,
-      requestLatency INTEGER,
-      downloadTime INTEGER,
-      status TEXT,
-      date TEXT,
-      content TEXT, -- JSON с динамическими полями парсера
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY(project_id) REFERENCES projects(id)
-    )`
-  );
-  db.run("CREATE INDEX IF NOT EXISTS idx_urls_project ON urls(project_id);");
-  db.run(
-    "CREATE UNIQUE INDEX IF NOT EXISTS idx_urls_project_url ON urls(project_id, url);"
-  );
+  try {
+    db.prepare(
+      `CREATE TABLE IF NOT EXISTS urls (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        project_id INTEGER NOT NULL,
+        type TEXT,
+        url TEXT NOT NULL,
+        referrer TEXT,
+        depth INTEGER,
+        code INTEGER,
+        contentType TEXT,
+        protocol TEXT,
+    location TEXT,
+        actualDataSize INTEGER,
+        requestTime INTEGER,
+        requestLatency INTEGER,
+        downloadTime INTEGER,
+        status TEXT,
+        date TEXT,
+        content TEXT, -- JSON с динамическими полями парсера
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY(project_id) REFERENCES projects(id)
+      )`
+    ).run();
+    db.prepare("CREATE INDEX IF NOT EXISTS idx_urls_project ON urls(project_id);").run();
+    db.prepare(
+      "CREATE UNIQUE INDEX IF NOT EXISTS idx_urls_project_url ON urls(project_id, url);"
+    ).run();
+  } catch (e) {
+    console.error("Error creating urls table:", e);
+  }
 
   // Схема таблицы errors (для сетевых ошибок и DNS проблем)
-  db.run(
-    `CREATE TABLE IF NOT EXISTS disallowed (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      project_id INTEGER NOT NULL,
-      url TEXT NOT NULL,
-      error_type TEXT NOT NULL, -- 'network_error', 'dns_error', 'invalid_domain', 'fetchdisallowed'
-      code INTEGER DEFAULT 0,
-      status TEXT,
-      referrer TEXT,
-      depth INTEGER,
-      protocol TEXT,
-      error_message TEXT,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY(project_id) REFERENCES projects(id)
-    )`
-  );
-  db.run(
-    "CREATE INDEX IF NOT EXISTS idx_disallowed_project ON disallowed(project_id);"
-  );
-  db.run(
-    "CREATE INDEX IF NOT EXISTS idx_disallowed_type ON disallowed(error_type);"
-  );
+  try {
+    db.prepare(
+      `CREATE TABLE IF NOT EXISTS disallowed (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        project_id INTEGER NOT NULL,
+        url TEXT NOT NULL,
+        error_type TEXT NOT NULL, -- 'network_error', 'dns_error', 'invalid_domain', 'fetchdisallowed'
+        code INTEGER DEFAULT 0,
+        status TEXT,
+        referrer TEXT,
+        depth INTEGER,
+        protocol TEXT,
+        error_message TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY(project_id) REFERENCES projects(id)
+      )`
+    ).run();
+    db.prepare(
+      "CREATE INDEX IF NOT EXISTS idx_disallowed_project ON disallowed(project_id);"
+    ).run();
+    db.prepare(
+      "CREATE INDEX IF NOT EXISTS idx_disallowed_type ON disallowed(error_type);"
+    ).run();
+  } catch (e) {
+    console.error("Error creating disallowed table:", e);
+  }
   // Схема таблицы keywords (ключевые запросы для проектов)
-  db.run(
-    `CREATE TABLE IF NOT EXISTS keywords (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      project_id INTEGER NOT NULL,
-      keyword TEXT NOT NULL,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY(project_id) REFERENCES projects(id)
-    )`
-  );
-  db.run(
-    "CREATE INDEX IF NOT EXISTS idx_keywords_project ON keywords(project_id);"
-  );
-  db.run(
-    "CREATE UNIQUE INDEX IF NOT EXISTS idx_keywords_project_keyword ON keywords(project_id, keyword);"
-  );
-  // Add columns for categorization if they don't exist
-  db.run("ALTER TABLE keywords ADD COLUMN category_id INTEGER;", (err) => {
-    if (err && !err.message.includes("duplicate column name")) {
-      console.error("Error adding category_id column:", err);
-    }
-  });
-  db.run("ALTER TABLE keywords ADD COLUMN category_name TEXT;", (err) => {
-    if (err && !err.message.includes("duplicate column name")) {
-      console.error("Error adding category_name column:", err);
-    }
-  });
-  db.run("ALTER TABLE keywords ADD COLUMN category_similarity REAL;", (err) => {
-    if (err && !err.message.includes("duplicate column name")) {
-      console.error("Error adding category_similarity column:", err);
-    }
-  });
-  // New class columns for type classification
-  db.run("ALTER TABLE keywords ADD COLUMN class_name TEXT;", (err) => {
-    if (err && !err.message.includes("duplicate column name")) {
-      console.error("Error adding class_name column:", err);
-    }
-  });
-  db.run("ALTER TABLE keywords ADD COLUMN class_similarity REAL;", (err) => {
-    if (err && !err.message.includes("duplicate column name")) {
-      console.error("Error adding class_similarity column:", err);
-    }
-  });
-  // New column for clustering
-  db.run("ALTER TABLE keywords ADD COLUMN cluster_label TEXT;", (err) => {
-    if (err && !err.message.includes("duplicate column name")) {
-      console.error("Error adding cluster_label column:", err);
-    }
-  });
-  // Add new columns: target_query (boolean stored as INTEGER 0/1) and blocking_rule (text)
-  db.run(
-    "ALTER TABLE keywords ADD COLUMN target_query INTEGER DEFAULT 1;",
-    (err) => {
-      if (err && !err.message.includes("duplicate column name")) {
-        console.error("Error adding target_query column:", err);
+  try {
+    db.prepare(
+      `CREATE TABLE IF NOT EXISTS keywords (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        project_id INTEGER NOT NULL,
+        keyword TEXT NOT NULL,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY(project_id) REFERENCES projects(id)
+      )`
+    ).run();
+    db.prepare(
+      "CREATE INDEX IF NOT EXISTS idx_keywords_project ON keywords(project_id);"
+    ).run();
+    db.prepare(
+      "CREATE UNIQUE INDEX IF NOT EXISTS idx_keywords_project_keyword ON keywords(project_id, keyword);"
+    ).run();
+    
+    // Add columns for categorization if they don't exist
+    const alterColumns = [
+      "ALTER TABLE keywords ADD COLUMN category_id INTEGER;",
+      "ALTER TABLE keywords ADD COLUMN category_name TEXT;",
+      "ALTER TABLE keywords ADD COLUMN category_similarity REAL;",
+      "ALTER TABLE keywords ADD COLUMN class_name TEXT;",
+      "ALTER TABLE keywords ADD COLUMN class_similarity REAL;",
+      "ALTER TABLE keywords ADD COLUMN cluster_label TEXT;",
+      "ALTER TABLE keywords ADD COLUMN target_query INTEGER DEFAULT 1;",
+      "ALTER TABLE keywords ADD COLUMN blocking_rule TEXT;"
+    ];
+    
+    alterColumns.forEach(sql => {
+      try {
+        db.prepare(sql).run();
+      } catch (err) {
+        if (!err.message.includes("duplicate column name")) {
+          console.error("Error altering keywords table:", err.message);
+        }
       }
-    }
-  );
-  db.run("ALTER TABLE keywords ADD COLUMN blocking_rule TEXT;", (err) => {
-    if (err && !err.message.includes("duplicate column name")) {
-      console.error("Error adding blocking_rule column:", err);
-    }
-  });
-  // Indexes for new columns
-  db.run(
-    "CREATE INDEX IF NOT EXISTS idx_keywords_category_id ON keywords(category_id);"
-  );
-  db.run(
-    "CREATE INDEX IF NOT EXISTS idx_keywords_category_similarity ON keywords(category_similarity);"
-  );
-  // Index to speed up queries filtering by target_query
-  db.run(
-    "CREATE INDEX IF NOT EXISTS idx_keywords_target_query ON keywords(target_query);"
-  );
+    });
+    
+    // Indexes for new columns
+    db.prepare(
+      "CREATE INDEX IF NOT EXISTS idx_keywords_category_id ON keywords(category_id);"
+    ).run();
+    db.prepare(
+      "CREATE INDEX IF NOT EXISTS idx_keywords_category_similarity ON keywords(category_similarity);"
+    ).run();
+    db.prepare(
+      "CREATE INDEX IF NOT EXISTS idx_keywords_target_query ON keywords(target_query);"
+    ).run();
+  } catch (e) {
+    console.error("Error creating keywords table:", e);
+  }
 
   // Схема таблицы categories (категории для проектов)
-  db.run(
-    `CREATE TABLE IF NOT EXISTS categories (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      project_id INTEGER NOT NULL,
-      category_name TEXT NOT NULL,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY(project_id) REFERENCES projects(id)
-    )`,
-    (err) => {
-      if (err) {
-        console.error("Error creating categories table:", err);
-      } else {
-        console.error("Categories table created or already exists");
-      }
-    }
-  );
-  db.run(
-    "CREATE INDEX IF NOT EXISTS idx_categories_project ON categories(project_id);",
-    (err) => {
-      if (err) {
-        console.error("Error creating categories index:", err);
-      }
-    }
-  );
-  db.run(
-    "CREATE UNIQUE INDEX IF NOT EXISTS idx_categories_project_name ON categories(project_id, category_name);",
-    (err) => {
-      if (err) {
-        console.error("Error creating categories unique index:", err);
-      }
-    }
-  );
+  try {
+    db.prepare(
+      `CREATE TABLE IF NOT EXISTS categories (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        project_id INTEGER NOT NULL,
+        category_name TEXT NOT NULL,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY(project_id) REFERENCES projects(id)
+      )`
+    ).run();
+    db.prepare(
+      "CREATE INDEX IF NOT EXISTS idx_categories_project ON categories(project_id);"
+    ).run();
+    db.prepare(
+      "CREATE UNIQUE INDEX IF NOT EXISTS idx_categories_project_name ON categories(project_id, category_name);"
+    ).run();
+  } catch (err) {
+    console.error("Error creating categories table:", err);
+  }
 
   // Схема таблицы stop_words (стоп-слова для проектов)
-  db.run(
-    `CREATE TABLE IF NOT EXISTS stop_words (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      project_id INTEGER NOT NULL,
-      word TEXT NOT NULL,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY(project_id) REFERENCES projects(id)
-    )`
-  );
-  db.run(
-    "CREATE INDEX IF NOT EXISTS idx_stopwords_project ON stop_words(project_id);"
-  );
-  db.run(
-    "CREATE UNIQUE INDEX IF NOT EXISTS idx_stopwords_project_word ON stop_words(project_id, word);",
-    (err) => {
-      if (err) {
-        console.error("Error creating stop_words unique index:", err);
-      }
-    }
-  );
+  try {
+    db.prepare(
+      `CREATE TABLE IF NOT EXISTS stop_words (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        project_id INTEGER NOT NULL,
+        word TEXT NOT NULL,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY(project_id) REFERENCES projects(id)
+      )`
+    ).run();
+    db.prepare(
+      "CREATE INDEX IF NOT EXISTS idx_stopwords_project ON stop_words(project_id);"
+    ).run();
+    db.prepare(
+      "CREATE UNIQUE INDEX IF NOT EXISTS idx_stopwords_project_word ON stop_words(project_id, word);"
+    ).run();
+  } catch (err) {
+    console.error("Error creating stop_words table:", err);
+  }
 
   // Схема таблицы typing_samples (обучающие примеры для классификации)
-  db.run(
-    `CREATE TABLE IF NOT EXISTS typing_samples (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      project_id INTEGER NOT NULL,
-      text TEXT NOT NULL,
-      label TEXT NOT NULL,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY(project_id) REFERENCES projects(id)
-    )`
-  );
-  db.run(
-    "CREATE INDEX IF NOT EXISTS idx_typing_samples_project ON typing_samples(project_id);"
-  );
+  try {
+    db.prepare(
+      `CREATE TABLE IF NOT EXISTS typing_samples (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        project_id INTEGER NOT NULL,
+        text TEXT NOT NULL,
+        label TEXT NOT NULL,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY(project_id) REFERENCES projects(id)
+      )`
+    ).run();
+    db.prepare(
+      "CREATE INDEX IF NOT EXISTS idx_typing_samples_project ON typing_samples(project_id);"
+    ).run();
+  } catch (err) {
+    console.error("Error creating typing_samples table:", err);
+  }
+
   // Cache for embeddings to avoid repeated OpenAI requests for identical texts
-  db.run(
-    `CREATE TABLE IF NOT EXISTS embeddings_cache (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      key TEXT UNIQUE NOT NULL,
-      embedding BLOB,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    )`
-  );
-  db.run(
-    "CREATE INDEX IF NOT EXISTS idx_embeddings_cache_key ON embeddings_cache(key);"
-  );
+  try {
+    db.prepare(
+      `CREATE TABLE IF NOT EXISTS embeddings_cache (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        key TEXT UNIQUE NOT NULL,
+        embedding BLOB,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      )`
+    ).run();
+    db.prepare(
+      "CREATE INDEX IF NOT EXISTS idx_embeddings_cache_key ON embeddings_cache(key);"
+    ).run();
+  } catch (err) {
+    console.error("Error creating embeddings_cache table:", err);
+  }
   // Ensure embedding column exists (TEXT, JSON encoded) - safe to run even if column exists
-  db.run("ALTER TABLE typing_samples ADD COLUMN embedding TEXT;", (err) => {
-    if (err && !/duplicate column name/i.test(err.message)) {
+  try {
+    db.prepare("ALTER TABLE typing_samples ADD COLUMN embedding TEXT;").run();
+  } catch (err) {
+    if (!/duplicate column name/i.test(err.message)) {
       // Some SQLite versions may report different messages; log unexpected errors
       console.warn(
         "Could not add embedding column to typing_samples:",
         err.message
       );
     }
-  });
+  }
 
   // typing_embeddings таблица больше не используется: удаляем её, если миграция еще не проведена
-  db.run("DROP TABLE IF EXISTS typing_embeddings", (err) => {
-    if (err) {
-      console.error("Failed to drop legacy typing_embeddings table:", err);
-    }
-  });
+  try {
+    db.prepare("DROP TABLE IF EXISTS typing_embeddings").run();
+  } catch (err) {
+    console.error("Failed to drop legacy typing_embeddings table:", err);
+  }
 
   // Таблица с параметрами обученной модели
-  db.run(
-    `CREATE TABLE IF NOT EXISTS typing_model (
-      id INTEGER PRIMARY KEY,
-      project_id INTEGER UNIQUE NOT NULL,
-      model_name TEXT NOT NULL,
-      vector_model TEXT NOT NULL,
-      payload_json TEXT NOT NULL,
-      created_at INTEGER NOT NULL,
-      FOREIGN KEY(project_id) REFERENCES projects(id)
-    )`
-  );
-  db.run(
-    "CREATE UNIQUE INDEX IF NOT EXISTS idx_typing_model_project ON typing_model(project_id);"
-  );
+  try {
+    db.prepare(
+      `CREATE TABLE IF NOT EXISTS typing_model (
+        id INTEGER PRIMARY KEY,
+        project_id INTEGER UNIQUE NOT NULL,
+        model_name TEXT NOT NULL,
+        vector_model TEXT NOT NULL,
+        payload_json TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        FOREIGN KEY(project_id) REFERENCES projects(id)
+      )`
+    ).run();
+    db.prepare(
+      "CREATE UNIQUE INDEX IF NOT EXISTS idx_typing_model_project ON typing_model(project_id);"
+    ).run();
+  } catch (err) {
+    console.error("Error creating typing_model table:", err);
+  }
 
   // Integrations table removed: API keys are managed via OS keyring (keytar) or external handlers.
 
@@ -404,11 +348,13 @@ if (db) {
     "ALTER TABLE projects ADD COLUMN clustering_method TEXT DEFAULT 'cosine'",
   ];
   alters.forEach((sql) => {
-    db.run(sql, (err) => {
-      if (err && !/duplicate column name/i.test(err.message)) {
+    try {
+      db.prepare(sql).run();
+    } catch (err) {
+      if (!/duplicate column name/i.test(err.message)) {
         console.warn("Schema alter warning:", err.message);
       }
-    });
+    }
   });
 
   // Добавляем недостающие колонки в urls
@@ -417,47 +363,62 @@ if (db) {
     "ALTER TABLE urls ADD COLUMN content TEXT",
   ];
   urlAlters.forEach((sql) => {
-    db.run(sql, (err) => {
-      if (err && !/duplicate column name/i.test(err.message)) {
+    try {
+      db.prepare(sql).run();
+    } catch (err) {
+      if (!/duplicate column name/i.test(err.message)) {
         console.warn("Schema urls alter warning:", err.message);
       }
-    });
+    }
   });
 
   // Миграция данных: если есть старая колонка columns, переносим данные в ui_columns
-  db.run(
-    "UPDATE projects SET ui_columns = columns WHERE (ui_columns IS NULL OR ui_columns = '') AND columns IS NOT NULL",
-    (err) => {
-      if (err && !/no such column: columns/i.test(err.message)) {
-        console.warn("Schema data migration warning:", err.message);
-      }
+  try {
+    db.prepare(
+      "UPDATE projects SET ui_columns = columns WHERE (ui_columns IS NULL OR ui_columns = '') AND columns IS NOT NULL"
+    ).run();
+  } catch (err) {
+    if (!/no such column: columns/i.test(err.message)) {
+      console.warn("Schema data migration warning:", err.message);
     }
-  );
+  }
 
   // Миграция статистики удалена - статистика теперь вычисляется из основных таблиц
 }
 
-// Промисифицированные обёртки для удобства использования
-const dbGet = (sql, params = []) =>
-  new Promise((resolve, reject) =>
-    db.get(sql, params, (e, row) => (e ? reject(e) : resolve(row)))
-  );
-
-const dbAll = (sql, params = []) => {
-  // Log to stderr to avoid breaking worker stdout JSONL
-  // console.error("Executing SQL query:", sql);
-  // console.error("With parameters:", params);
-  return new Promise((resolve, reject) =>
-    db.all(sql, params, (e, rows) => (e ? reject(e) : resolve(rows)))
-  );
+// Промисифицированные обёртки для удобства использования (better-sqlite3 синхронный, оборачиваем в промисы)
+const dbGet = async (sql, params = []) => {
+  try {
+    const stmt = db.prepare(sql);
+    return stmt.get(...params);
+  } catch (e) {
+    throw e;
+  }
 };
 
-const dbRun = (sql, params = []) =>
-  new Promise((resolve, reject) =>
-    db.run(sql, params, function (e) {
-      return e ? reject(e) : resolve(this);
-    })
-  );
+const dbAll = async (sql, params = []) => {
+  try {
+    const stmt = db.prepare(sql);
+    return stmt.all(...params);
+  } catch (e) {
+    throw e;
+  }
+};
+
+const dbRun = async (sql, params = []) => {
+  try {
+    const stmt = db.prepare(sql);
+    const result = stmt.run(...params);
+    // better-sqlite3 возвращает { changes, lastInsertRowid }
+    // эмулируем старый API с this.changes и this.lastID
+    return {
+      changes: result.changes,
+      lastID: result.lastInsertRowid,
+    };
+  } catch (e) {
+    throw e;
+  }
+};
 
 // Функции для работы с проектами
 const updateProjectStatus = async (projectId, freezed) => {
@@ -1210,7 +1171,7 @@ async function getUrlsStats(projectId) {
       lastUpdated: new Date().toISOString(),
     };
   }
-}
+};
 
 // Функция для сохранения ошибок
 const saveError = async (projectId, data, socket) => {
@@ -2243,7 +2204,7 @@ const typingSamplesUpdate = async (id, fields = {}) => {
     }
     if (setParts.length === 0) return false;
     params.push(id);
-    const sql = `UPDATE typing_samples SET ${setParts.join(", ")} WHERE id = ?`;
+       const sql = `UPDATE typing_samples SET ${setParts.join(", ")} WHERE id = ?`;
     const res = await dbRun(sql, params);
     const changes = res && res.changes ? res.changes : 0;
     if (changes > 0 && newLabel !== oldLabel) {
