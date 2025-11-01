@@ -42,19 +42,25 @@ jobs:
             ~/.cache/electron-builder
           key: ${{ runner.os }}-electron-cache
 
-      # 5️⃣ Устанавливаем зависимости (если не восстановились из кеша)
-      - name: 📦 Install dependencies (safe)
+      # 5️⃣ Устанавливаем зависимости (читая lockfile для воспроизводимости)
+      - name: 📦 Install dependencies (ci)
         if: steps.node-cache.outputs.cache-hit != 'true'
         run: |
-          Write-Host "🧹 Cleaning node_modules and lock file..."
-          Remove-Item -Recurse -Force node_modules -ErrorAction SilentlyContinue
-          Remove-Item -Force package-lock.json -ErrorAction SilentlyContinue
-          Write-Host "📦 Installing dependencies..."
-          npm install --include=optional --force
+          Write-Host "📦 Installing dependencies using npm ci..."
+          npm ci --prefer-offline --no-audit --no-fund
+        shell: pwsh
+
+      # 5.1️⃣ Rebuild native modules for Electron (important for @vscode/sqlite3)
+      - name: 🔧 Rebuild native modules for Electron (@vscode/sqlite3)
+        run: |
+          Write-Host "� Rebuilding native modules for Electron (win x64)..."
+          npx electron-rebuild -f -w @vscode/sqlite3 --arch=x64 --electron-version=37.0.0
         shell: pwsh
 
       # 6️⃣ Сборка portable-версии QuantBot
       - name: 🏗️ Build portable Windows app
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
         run: npm run build:win:portable:cross -- --publish never
 
       # 7️⃣ Собираем артефакты (.exe, .yml, .blockmap) для загрузки

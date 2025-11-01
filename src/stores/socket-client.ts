@@ -1,348 +1,123 @@
-import { io, Socket } from "socket.io-client";
-import type { ServerToClientEvents, ClientToServerEvents } from "../types/socket-events";
-import type { 
-  ProjectData, 
-  SortedRequestOptions,
-  GetAllDataRequest,
-  SortedUrlsResponse,
-  UrlData,
-  ProjectStatsSync,
-  CrawlerStatus,
-  QueueUpdate,
-  TableUpdate,
-  Stats,
-  ProjectSummary
-} from "../types/schema";
-
-const port = 8090;
-const host = import.meta.env.VITE_SOCKET_HOST || "localhost";
+// Switched from socket.io to Electron ipcRenderer-based transport
+// Uses `window.ipcRenderer.invoke/on/off` exposed by preload
+import type { ProjectData, SortedRequestOptions, GetAllDataRequest, SortedUrlsResponse } from "../types/schema";
 
 // Stable per-window instance id for debugging
 const clientInstanceId = (() => {
   const w = window as any;
-  if (!w.__socketClientInstanceId) {
-    w.__socketClientInstanceId = `renderer-${Math.random().toString(36).slice(2, 8)}-${Date.now()}`;
+  if (!w.__ipcClientInstanceId) {
+    w.__ipcClientInstanceId = `renderer-${Math.random().toString(36).slice(2, 8)}-${Date.now()}`;
   }
-  return w.__socketClientInstanceId as string;
+  return w.__ipcClientInstanceId as string;
 })();
 
-// Singleton pattern to prevent multiple socket instances during HMR
-let socket: Socket<ServerToClientEvents, ClientToServerEvents>;
-
-// Check if socket already exists in window (for HMR)
-if (import.meta.hot) {
-  // In dev mode, reuse existing socket if available
-  if ((window as any).__appSocket) {
-    console.log('Reusing existing socket connection from previous HMR');
-    socket = (window as any).__appSocket;
-  } else {
-    console.log('Creating new socket connection');
-    socket = io(`ws://${host}:${port}`, {
-      autoConnect: true,
-      reconnection: true,
-      reconnectionAttempts: 5,
-      reconnectionDelay: 1000,
-      timeout: 20000,
-      transports: ["websocket"],
-      path: "/socket",
-      query: { clientInstanceId },
-    });
-    // Store socket in window for HMR reuse
-    (window as any).__appSocket = socket;
-  }
-} else {
-  // Production: create socket normally
-  socket = io(`ws://${host}:${port}/`, {
-    autoConnect: true,
-    reconnection: true,
-    reconnectionAttempts: 5,
-    reconnectionDelay: 1000,
-    timeout: 20000,
-    transports: ["websocket"],
-    path: "/socket",
-    query: { clientInstanceId },
+// Ensure renderer asks main to register handlers
+try {
+  // ignore result for now
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  (window as any).ipcRenderer.invoke('socket:connect', { clientInstanceId }).catch((e: any) => {
+    console.warn('ipc socket connect failed', e);
   });
-}
-// Avoid duplicate base listeners across HMR reloads
-const wAny = window as any;
-if (!wAny.__socketBaseListenersRegistered) {
-  wAny.__socketBaseListenersRegistered = true;
-  socket.on("connect", () => {
-    console.log("Socket connected:", { id: socket.id, port, clientInstanceId });
-  });
-  socket.on("connect_error", (error: Error) => {
-    console.error("Socket connection error:", error.message);
-    console.log("Make sure the socket.io server is running on port", port);
-  });
-  socket.on("disconnect", (reason: string) => {
-    console.log("Socket disconnected:", reason);
-  });
-  // System events
-  socket.on("reconnect", (attemptNumber: number) => {
-    console.log("Socket reconnected after", attemptNumber, "attempts");
-  });
-  socket.on("reconnect_error", (error: Error) => {
-    console.error("Socket reconnection failed:", error.message);
-  });
-} else {
-  // In case of HMR re-evaluation, skip re-binding base listeners
-  console.log("socket-client: base listeners already registered, skipping re-bind");
+} catch (e) {
+  console.warn('ipc socket connect error', e);
 }
 
 // Type-safe socket client wrapper class
 class TypedSocketClient {
-  private socket: Socket<ServerToClientEvents, ClientToServerEvents>;
+  // wrapper that uses ipcRenderer.invoke/send to interact with main
+  private clientId: string;
 
-  constructor(socketInstance: Socket<ServerToClientEvents, ClientToServerEvents>) {
-    this.socket = socketInstance;
+  constructor(clientId: string) {
+    this.clientId = clientId;
+  }
+
+  private emit(eventName: string, ...args: any[]) {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (window as any).ipcRenderer.invoke('socket:emit', {
+        clientInstanceId: this.clientId,
+        eventName,
+        args,
+      });
+    } catch (e) {
+      console.warn('ipc emit failed', e);
+    }
   }
 
   // Project management emits
-  getAllProjects() {
-    this.socket.emit("get-all-projects");
-  }
-
-  getProject(projectId: string | number) {
-    this.socket.emit("get-project", projectId);
-  }
-
-  changeProject(projectId: string | number) {
-    this.socket.emit("change-project", projectId);
-  }
-
-  saveNewProject(data: ProjectData) {
-    this.socket.emit("save-new-project", data);
-  }
-
-  updateProject(data: ProjectData) {
-    this.socket.emit("update-project", data);
-  }
-
-  deleteProject(projectId: string | number | null) {
-    this.socket.emit("delete-project", projectId);
-  }
-
-  deleteAll(projectId: string | number | null) {
-    this.socket.emit("delete-all", projectId);
-  }
-
-  clearEmbeddingsCache() {
-    this.socket.emit("clear-embeddings-cache");
-  }
+  getAllProjects() { this.emit('get-all-projects'); }
+  getProject(projectId: string | number) { this.emit('get-project', projectId); }
+  changeProject(projectId: string | number) { this.emit('change-project', projectId); }
+  saveNewProject(data: ProjectData) { this.emit('save-new-project', data); }
+  updateProject(data: ProjectData) { this.emit('update-project', data); }
+  deleteProject(projectId: string | number | null) { this.emit('delete-project', projectId); }
+  deleteAll(projectId: string | number | null) { this.emit('delete-all', projectId); }
+  clearEmbeddingsCache() { this.emit('clear-embeddings-cache'); }
 
   // Crawler emits
-  startCrawler(data: ProjectData) {
-    this.socket.emit("startCrauler", data);
-  }
-
-  freezeQueue() {
-    this.socket.emit("freezeQueue");
-  }
+  startCrawler(data: ProjectData) { this.emit('startCrauler', data); }
+  freezeQueue() { this.emit('freezeQueue'); }
 
   // Table emits
-  getSortedUrls(options: SortedRequestOptions) {
-    this.socket.emit("get-sorted-urls", options);
-  }
-
-  getAllData(req: GetAllDataRequest) {
-    this.socket.emit("get-all-data", req);
-  }
+  getSortedUrls(options: SortedRequestOptions) { this.emit('get-sorted-urls', options); }
+  getAllData(req: GetAllDataRequest) { this.emit('get-all-data', req); }
 
   // Stats emits
-  syncProjectStats(projectId: number) {
-    this.socket.emit("sync-project-stats", projectId);
+  syncProjectStats(projectId: number) { this.emit('sync-project-stats', projectId); }
+
+  // Listeners wired via preload ipcRenderer.on/off
+  on(channel: string, cb: (...args: any[]) => void) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (window as any).ipcRenderer.on(channel, (_e: any, ...args: any[]) => cb(...args));
+    return () => (window as any).ipcRenderer.off(channel, cb);
   }
 
-  // Event listeners with proper typing
-  onAllProjectsData(callback: (data: ProjectSummary[]) => void) {
-    this.socket.on("all-projects-data", callback);
-    return () => this.socket.off("all-projects-data", callback);
+  once(channel: string, cb: (...args: any[]) => void) {
+    const wrapper = (_e: any, ...args: any[]) => {
+      cb(...args);
+      (window as any).ipcRenderer.off(channel, wrapper);
+    };
+    (window as any).ipcRenderer.on(channel, wrapper);
+    return () => (window as any).ipcRenderer.off(channel, wrapper);
   }
 
-  onProjectData(callback: (data: ProjectData | null) => void) {
-    this.socket.on("project-data", callback);
-    return () => this.socket.off("project-data", callback);
-  }
-
-  onNewProjectData(callback: (newDoc: { id: string | number }) => void) {
-    this.socket.on("new-project-data", callback);
-    return () => this.socket.off("new-project-data", callback);
-  }
-
-  onStopping(callback: (data: CrawlerStatus) => void) {
-    this.socket.on("stopping", callback);
-    return () => this.socket.off("stopping", callback);
-  }
-
-  onStopped(callback: (data: CrawlerStatus) => void) {
-    this.socket.on("stopped", callback);
-    return () => this.socket.off("stopped", callback);
-  }
-
-  onComplete(callback: () => void) {
-    this.socket.on("complete", callback);
-    return () => this.socket.off("complete", callback);
-  }
-
-  onFetched(callback: (data: QueueUpdate) => void) {
-    this.socket.on("fetched", callback);
-    return () => this.socket.off("fetched", callback);
-  }
-
-  onQueue(callback: (data: QueueUpdate) => void) {
-    this.socket.on("queue", callback);
-    return () => this.socket.off("queue", callback);
-  }
-
-  onStatsUpdate(callback: (stats: Partial<Stats>) => void) {
-    this.socket.on("statsUpdate", callback);
-    return () => this.socket.off("statsUpdate", callback);
-  }
-
-  onDataUpdated(callback: (data: TableUpdate) => void) {
-    this.socket.on("data-updated", callback);
-    return () => this.socket.off("data-updated", callback);
-  }
-
-  onUrlsAllData(callback: (data: UrlData[]) => void) {
-    this.socket.on("urls-all-data", callback);
-    return () => this.socket.off("urls-all-data", callback);
-  }
-
-  onProjectStatssynced(callback: (payload: ProjectStatsSync) => void) {
-    this.socket.on("project-stats-synced", callback);
-    return () => this.socket.off("project-stats-synced", callback);
-  }
-
-  onDeleted(callback: (count: number) => void) {
-    this.socket.on("deleted", callback);
-    return () => this.socket.off("deleted", callback);
-  }
-
-  onCrawlerDataCleared(callback: (data: { projectId: string | number }) => void) {
-    this.socket.on("crawler-data-cleared", callback);
-    return () => this.socket.off("crawler-data-cleared", callback);
-  }
-
-  onDeleteError(callback: (errorMessage: string) => void) {
-    this.socket.on("delete-error", callback);
-    return () => this.socket.off("delete-error", callback);
-  }
-
-  onProjectDeleted(callback: () => void) {
-    this.socket.on("projectDeleted", callback);
-    return () => this.socket.off("projectDeleted", callback);
-  }
-
-  onProjectDeleteError(callback: (errorMessage: string) => void) {
-    this.socket.on("projectDeleteError", callback);
-    return () => this.socket.off("projectDeleteError", callback);
-  }
-
-  onProjectSaveError(callback: (errorMessage: string) => void) {
-    this.socket.on("project-save-error", callback);
-    return () => this.socket.off("project-save-error", callback);
-  }
-
-  // Stat-specific listeners
-  onDisallow(callback: (count: number) => void) {
-    this.socket.on("disallow", callback);
-    return () => this.socket.off("disallow", callback);
-  }
-
-  onStatHtml(callback: (data: { count: number; projectId: string | number }) => void) {
-    this.socket.on("stat-html", callback);
-    return () => this.socket.off("stat-html", callback);
-  }
-
-  onStatJscss(callback: (data: { count: number; projectId: string | number }) => void) {
-    this.socket.on("stat-jscss", callback);
-    return () => this.socket.off("stat-jscss", callback);
-  }
-
-  onStatImage(callback: (data: { count: number; projectId: string | number }) => void) {
-    this.socket.on("stat-image", callback);
-    return () => this.socket.off("stat-image", callback);
-  }
-
-  onStatRedirect(callback: (data: { count: number; projectId: string | number }) => void) {
-    this.socket.on("stat-redirect", callback);
-    return () => this.socket.off("stat-redirect", callback);
-  }
-
-  onStatError(callback: (data: { count: number; projectId: string | number }) => void) {
-    this.socket.on("stat-error", callback);
-    return () => this.socket.off("stat-error", callback);
-  }
-
-  onStatDepth3(callback: (data: { count: number; projectId: string | number }) => void) {
-    this.socket.on("stat-depth3", callback);
-    return () => this.socket.off("stat-depth3", callback);
-  }
-
-  onStatDepth5(callback: (data: { count: number; projectId: string | number }) => void) {
-    this.socket.on("stat-depth5", callback);
-    return () => this.socket.off("stat-depth5", callback);
-  }
-
-  onStatDepth6(callback: (data: { count: number; projectId: string | number }) => void) {
-    this.socket.on("stat-depth6", callback);
-    return () => this.socket.off("stat-depth6", callback);
-  }
-
-  onStatOther(callback: (data: { count: number; projectId: string | number }) => void) {
-    this.socket.on("stat-other", callback);
-    return () => this.socket.off("stat-other", callback);
-  }
-
-  // Dynamic event helper for sorted urls data
-  onSortedUrlsData(requestId: string, callback: (response: SortedUrlsResponse) => void) {
-    const eventName = `sorted-urls-data-${requestId}` as `sorted-urls-data-${string}`;
-    this.socket.once(eventName, callback);
-    return () => this.socket.off(eventName, callback);
-  }
-
-  // Raw socket access for advanced usage
-  get raw() {
-    return this.socket;
-  }
-
-  // Connection status helpers
-  get connected() {
-    return this.socket.connected;
-  }
-
-  get disconnected() {
-    return this.socket.disconnected;
-  }
-
-  connect() {
-    this.socket.connect();
-  }
-
-  disconnect() {
-    this.socket.disconnect();
-  }
-
-  // Connection event listeners
-  onConnect(callback: () => void) {
-    this.socket.on("connect", callback);
-    return () => this.socket.off("connect", callback);
-  }
-
-  onDisconnect(callback: (reason: string) => void) {
-    this.socket.on("disconnect", callback);
-    return () => this.socket.off("disconnect", callback);
-  }
-
-  onConnectError(callback: (error: Error) => void) {
-    this.socket.on("connect_error", callback);
-    return () => this.socket.off("connect_error", callback);
+  // Compatibility typed listener helpers (wrap common event names)
+  onAllProjectsData(cb: (data: any) => void) { return this.on('all-projects-data', cb); }
+  onProjectData(cb: (data: any) => void) { return this.on('project-data', cb); }
+  onNewProjectData(cb: (data: any) => void) { return this.on('new-project-data', cb); }
+  onStopping(cb: (data: any) => void) { return this.on('stopping', cb); }
+  onStopped(cb: (data: any) => void) { return this.on('stopped', cb); }
+  onComplete(cb: () => void) { return this.on('complete', cb); }
+  onFetched(cb: (data: any) => void) { return this.on('fetched', cb); }
+  onQueue(cb: (data: any) => void) { return this.on('queue', cb); }
+  onStatsUpdate(cb: (data: any) => void) { return this.on('statsUpdate', cb); }
+  onDataUpdated(cb: (data: any) => void) { return this.on('data-updated', cb); }
+  onUrlsAllData(cb: (data: any) => void) { return this.on('urls-all-data', cb); }
+  onProjectStatssynced(cb: (data: any) => void) { return this.on('project-stats-synced', cb); }
+  onDeleted(cb: (data: any) => void) { return this.on('deleted', cb); }
+  onCrawlerDataCleared(cb: (data: any) => void) { return this.on('crawler-data-cleared', cb); }
+  onDeleteError(cb: (err: any) => void) { return this.on('delete-error', cb); }
+  onProjectDeleted(cb: () => void) { return this.on('projectDeleted', cb); }
+  onProjectDeleteError(cb: (err: any) => void) { return this.on('projectDeleteError', cb); }
+  onProjectSaveError(cb: (err: any) => void) { return this.on('project-save-error', cb); }
+  onDisallow(cb: (n: number) => void) { return this.on('disallow', cb); }
+  onStatHtml(cb: (data: any) => void) { return this.on('stat-html', cb); }
+  onStatJscss(cb: (data: any) => void) { return this.on('stat-jscss', cb); }
+  onStatImage(cb: (data: any) => void) { return this.on('stat-image', cb); }
+  onStatRedirect(cb: (data: any) => void) { return this.on('stat-redirect', cb); }
+  onStatError(cb: (data: any) => void) { return this.on('stat-error', cb); }
+  onStatDepth3(cb: (data: any) => void) { return this.on('stat-depth3', cb); }
+  onStatDepth5(cb: (data: any) => void) { return this.on('stat-depth5', cb); }
+  onStatDepth6(cb: (data: any) => void) { return this.on('stat-depth6', cb); }
+  onStatOther(cb: (data: any) => void) { return this.on('stat-other', cb); }
+  onSortedUrlsData(requestId: string, cb: (data: any) => void) {
+    const eventName = `sorted-urls-data-${requestId}`;
+    return this.on(eventName, cb);
   }
 }
 
 // Create typed client instance
-export const typedSocketClient = new TypedSocketClient(socket);
+export const typedSocketClient = new TypedSocketClient(clientInstanceId);
 
 // Legacy exports for backward compatibility
 export const emitGetAllProjects = () => typedSocketClient.getAllProjects();
@@ -363,19 +138,20 @@ export const emitClearEmbeddingsCache = () => typedSocketClient.clearEmbeddingsC
 export const onSortedUrlsData = (
   requestId: string,
   handler: (response: SortedUrlsResponse) => void
-) => typedSocketClient.onSortedUrlsData(requestId, handler);
+) => {
+  const eventName = `sorted-urls-data-${requestId}`;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  (window as any).ipcRenderer.on(eventName, (_e: any, payload: any) => handler(payload));
+  return () => (window as any).ipcRenderer.off(eventName, handler as any);
+};
 
 // Disconnect socket (useful for cleanup during HMR)
 export const disconnectSocket = () => {
-  console.log('Disconnecting socket...');
-  socket.disconnect();
+  try { (window as any).ipcRenderer.invoke('socket:disconnect', { clientInstanceId }); } catch (e) {}
 };
 
-// Reconnect socket
-export const reconnectSocket = () => {
-  console.log('Reconnecting socket...');
-  socket.connect();
-};
+// Reconnect is a no-op for IPC (reconnect handled by page lifecycle)
+export const reconnectSocket = () => {};
 
 // HMR cleanup
 if (import.meta.hot) {
@@ -388,5 +164,50 @@ if (import.meta.hot) {
     // Don't disconnect - we want to reuse the socket
   });
 }
+
+// Provide a lightweight compatibility `socket` object (default export)
+// so existing modules that import `socket` continue to work.
+type IpcSocket = {
+  on(channel: string, cb: (payload: any) => void): void;
+  off(channel: string, cb?: (payload: any) => void): void;
+  once(channel: string, cb: (payload: any) => void): void;
+  emit(eventName: string, ...args: any[]): void;
+  connect(): void;
+  disconnect(): void;
+  connected: boolean;
+  disconnected: boolean;
+};
+
+export const socket: IpcSocket = {
+  on(channel: string, cb: (...args: any[]) => void) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (window as any).ipcRenderer.on(channel, (_e: any, ...args: any[]) => cb(...args));
+  },
+  off(channel: string, cb?: (...args: any[]) => void) {
+    try { (window as any).ipcRenderer.off(channel, cb); } catch (e) {}
+  },
+  once(channel: string, cb: (...args: any[]) => void) {
+    const wrapper = (_e: any, ...args: any[]) => {
+      cb(...args);
+      (window as any).ipcRenderer.off(channel, wrapper);
+    };
+    (window as any).ipcRenderer.on(channel, wrapper);
+  },
+  emit(eventName: string, ...args: any[]) {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (window as any).ipcRenderer.invoke('socket:emit', { clientInstanceId, eventName, args });
+    } catch (e) {}
+  },
+  connect() {
+    try { (window as any).ipcRenderer.invoke('socket:connect', { clientInstanceId }); } catch (e) {}
+  },
+  disconnect() {
+    try { (window as any).ipcRenderer.invoke('socket:disconnect', { clientInstanceId }); } catch (e) {}
+  },
+  // compatibility flags
+  connected: true,
+  disconnected: false,
+} as any;
 
 export default socket;

@@ -50,6 +50,7 @@
     "autoprefixer": "^10.4.21",
     "electron": "^37.0.0",
     "electron-builder": "^24.13.3",
+    "electron-rebuild": "^3.2.9",
     "icon-gen": "^4.0.0",
     "postcss": "^8.5.6",
     "tailwindcss": "^4.1.14",

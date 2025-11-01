@@ -1,0 +1,63 @@
+name: CI — Windows build for PRs
+
+on:
+  push:
+    branches:
+      - 'feature/**'
+  pull_request:
+    branches:
+      - master
+      - release
+
+permissions:
+  contents: read
+
+jobs:
+  build-windows:
+    name: Build Windows (portable)
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+
+      - name: Cache node_modules
+        uses: actions/cache@v4
+        with:
+          path: |
+            node_modules
+          key: ${{ runner.os }}-node-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-node-
+
+      - name: Install dependencies (ci)
+        run: |
+          npm ci --prefer-offline --no-audit --no-fund
+        shell: pwsh
+
+      - name: Rebuild native modules for Electron (@vscode/sqlite3)
+        run: |
+          npx electron-rebuild -f -w @vscode/sqlite3 --arch=x64 --electron-version=37.0.0
+        shell: pwsh
+
+      - name: Build portable Windows app
+        run: npm run build:win:portable:cross -- --publish never
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+
+      - name: Collect release artifacts
+        run: |
+          New-Item -ItemType Directory -Force -Path artifacts | Out-Null
+          Copy-Item -Path "release\**\*.*" -Destination artifacts -Recurse -Force -ErrorAction SilentlyContinue
+        shell: pwsh
+
+      - name: Upload artifacts for inspection
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-build-artifacts
+          path: artifacts
