@@ -25,6 +25,7 @@
     "socket/**/*",
     "electron/db-worker.cjs",
     "node_modules/better-sqlite3/**",
+    "node_modules/bindings/**",
     "node_modules/keytar/**",
   ],
   mac: {
