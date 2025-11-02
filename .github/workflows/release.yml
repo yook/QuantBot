@@ -22,6 +22,15 @@ jobs:
         with:
           node-version: "22.x"
 
+      # 2.1️⃣ Устанавливаем версию из Git-тега
+      - name: 🔖 Set version from Git tag
+        run: |
+          $tagName = "${{ github.ref_name }}"
+          $version = $tagName.Substring(1) # Удаляем префикс "v"
+          Write-Host "Updating package.json version to $version"
+          npm version $version --no-git-tag-version
+        shell: pwsh
+
       # 3️⃣ Кешируем node_modules, чтобы ускорить установку зависимостей
       - name: 🧰 Cache node_modules
         uses: actions/cache@v4
@@ -50,18 +59,11 @@ jobs:
           npm ci --prefer-offline --no-audit --no-fund
         shell: pwsh
 
-      # 5.1️⃣ Rebuild native modules for Electron (important for @vscode/sqlite3)
+      # 5.1️⃣ Пересборка нативных модулей для Electron (важно для better-sqlite3)
       - name: 🔧 Rebuild native modules for Electron (better-sqlite3)
         run: |
           Write-Host "🔁 Rebuilding native modules for Electron (win x64)..."
-          npx electron-rebuild -f -w better-sqlite3 --arch=x64 --electron-version=37.0.0
-        shell: pwsh
-
-      # Workaround: ensure platform-specific Rollup native optional dependency is present
-      - name: Install Rollup native for Windows (workaround npm optional deps bug)
-        run: |
-          Write-Host "Installing @rollup/rollup-win32-x64-msvc to avoid optional deps issue"
-          npm i @rollup/rollup-win32-x64-msvc --no-save
+          npx electron-rebuild -f -w better-sqlite3
         shell: pwsh
 
       # 6️⃣ Сборка portable-версии QuantBot
