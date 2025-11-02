@@ -15,6 +15,7 @@
     "socket/**/*",
     "worker/**/*",
     "electron/db-worker.cjs",
+    "node_modules/**/*"
   ],
   // Unpack only worker scripts and native modules required by the socket server.
   // Native modules (.node) cannot be loaded from inside ASAR, so we keep them
