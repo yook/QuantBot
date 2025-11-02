@@ -6,52 +6,19 @@ const path = require("path");
 const os = require("os");
 const fs = require("fs");
 
-// --- Emergency File Logger ---
-// This logger writes synchronously to a file. It's used for critical diagnostics
-// when the worker might crash before it can establish IPC communication.
-const emergencyLogPath = path.join(
-  os.tmpdir(),
-  `quantbot-worker-log-${process.pid}.txt`
-);
-function emergencyLog(message) {
-  try {
-    fs.appendFileSync(
-      emergencyLogPath,
-      `[${new Date().toISOString()}] ${message}\n`
-    );
-  } catch (e) {
-    // Cannot do anything if this fails
-  }
-}
-
-emergencyLog("DB Worker process started.");
-emergencyLog(`PID: ${process.pid}`);
-emergencyLog(`ARCH: ${process.arch}`);
-emergencyLog(`PLATFORM: ${process.platform}`);
-emergencyLog(`VERSIONS: ${JSON.stringify(process.versions, null, 2)}`);
-emergencyLog(`DB_PATH from env: ${process.env.DB_PATH}`);
-
 // Determine DB path - use DB_PATH env var or fallback
 let dbPath = process.env.DB_PATH;
 
 if (!dbPath) {
-  const fallbackPath = path.join(os.homedir(), ".quantbot", "quantbot.db");
-  emergencyLog(`DB_PATH not set, falling back to: ${fallbackPath}`);
-  dbPath = fallbackPath;
+  // Fallback to default location
+  const userDataPath = path.join(os.homedir(), ".quantbot");
+  dbPath = path.join(userDataPath, "quantbot.db");
 }
 
 // Ensure directory exists
-try {
-  const dbDir = path.dirname(dbPath);
-  if (!fs.existsSync(dbDir)) {
-    emergencyLog(`DB directory does not exist, creating: ${dbDir}`);
-    fs.mkdirSync(dbDir, { recursive: true });
-  }
-} catch (e) {
-  emergencyLog(
-    `FATAL: Failed to create DB directory. Error: ${e.message}\n${e.stack}`
-  );
-  process.exit(1);
+const dbDir = path.dirname(dbPath);
+if (!fs.existsSync(dbDir)) {
+  fs.mkdirSync(dbDir, { recursive: true });
 }
 
 console.error("[DB Worker] Starting with DB path:", dbPath);
@@ -66,54 +33,48 @@ console.error("[DB Worker] Versions:", {
 // Load better-sqlite3 (should work in Node process)
 let db = null;
 try {
-  emergencyLog("Attempting to require('better-sqlite3')...");
   const Database = require("better-sqlite3");
-  emergencyLog("require('better-sqlite3') successful.");
-
-  emergencyLog(`Attempting to connect to DB at: ${dbPath}`);
   db = new Database(dbPath);
-  emergencyLog("DB connection successful.");
-
   db.pragma("journal_mode = WAL");
   db.pragma("synchronous = NORMAL");
   db.pragma("cache_size = -200000");
   db.pragma("mmap_size = 268435456");
   db.pragma("auto_vacuum = INCREMENTAL");
   db.pragma("temp_store = MEMORY");
-  emergencyLog("PRAGMA settings applied.");
 
   // Initialize database schema
   initializeSchema();
-  emergencyLog("Schema initialization complete.");
 
   console.error("[DB Worker] Database initialized successfully");
 } catch (err) {
-  const errorMessage = `[DB Worker] FATAL: ${err.message}\n${err.stack}`;
-  emergencyLog(errorMessage);
   try {
-    console.error(errorMessage);
+    console.error(
+      "[DB Worker] Failed to initialize database:",
+      err && err.message ? err.message : err
+    );
+    if (err && err.stack) console.error("[DB Worker] Stack:", err.stack);
   } catch (e) {}
   process.exit(1);
 }
 
 process.on("uncaughtException", (err) => {
-  const errorMessage = `[DB Worker] UNCAUGHT EXCEPTION: ${err.message}\n${err.stack}`;
-  emergencyLog(errorMessage);
   try {
-    console.error(errorMessage);
+    console.error(
+      "[DB Worker] uncaughtException:",
+      err && err.message ? err.message : err
+    );
+    if (err && err.stack)
+      console.error("[DB Worker] uncaughtException stack:", err.stack);
   } catch (e) {}
-  process.exit(1); // Exit on uncaught exception
+  process.exit(1);
 });
 
-process.on("unhandledRejection", (reason, promise) => {
-  const reasonMsg =
-    reason instanceof Error
-      ? `${reason.message}\n${reason.stack}`
-      : String(reason);
-  const errorMessage = `[DB Worker] UNHANDLED REJECTION: ${reasonMsg}`;
-  emergencyLog(errorMessage);
+process.on("unhandledRejection", (reason) => {
   try {
-    console.error(errorMessage, promise);
+    console.error(
+      "[DB Worker] unhandledRejection:",
+      reason && reason.message ? reason.message : reason
+    );
   } catch (e) {}
 });
 
