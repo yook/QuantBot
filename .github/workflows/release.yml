@@ -66,6 +66,13 @@ jobs:
           npx electron-rebuild -f -w better-sqlite3
         shell: pwsh
 
+      # Workaround: Установка нативной зависимости Rollup для Windows
+      - name: Install Rollup native for Windows (workaround npm optional deps bug)
+        run: |
+          Write-Host "Installing @rollup/rollup-win32-x64-msvc to avoid optional deps issue"
+          npm i @rollup/rollup-win32-x64-msvc --no-save
+        shell: pwsh
+
       # 6️⃣ Сборка portable-версии QuantBot
       - name: 🏗️ Build portable Windows app
         env:
