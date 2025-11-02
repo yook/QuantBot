@@ -462,7 +462,9 @@ function startDbWorker(): boolean {
 
   // In packaged builds, run Electron binary in Node mode
   const execCmd = app.isPackaged ? process.execPath : "node";
-  console.log("Starting DB worker:", execCmd, workerPath);
+  const execArgs = app.isPackaged ? [workerPath] : [workerPath];
+
+  console.log("Starting DB worker:", execCmd, ...execArgs);
 
   // Set DB path via environment variable
   // In dev: use local repo path; In production: use userData (writable)
@@ -473,11 +475,14 @@ function startDbWorker(): boolean {
   console.log("DB path:", dbPath);
 
   try {
-    const env: NodeJS.ProcessEnv = { ...process.env, DB_PATH: dbPath } as any;
+    // For packaged apps, we must run the worker as a node process.
+    // We pass ELECTRON_RUN_AS_NODE to the env of the spawned process.
+    const env: NodeJS.ProcessEnv = { ...process.env, DB_PATH: dbPath };
     if (app.isPackaged) {
       env.ELECTRON_RUN_AS_NODE = '1';
     }
-    const proc = spawn(execCmd, [workerPath], {
+
+    const proc = spawn(execCmd, execArgs, {
       stdio: ['pipe', 'pipe', 'pipe'],
       shell: false,
       env,
