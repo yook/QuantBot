@@ -665,17 +665,13 @@ export default defineComponent({
     onMounted(() => {
       if (project.currentProjectId)
         typingStore.loadSamples(project.currentProjectId);
-      // attach socket listener for per-row update acknowledgements
-      if (socket && socket.on) {
-        // при стратегии syncLabelPhrases перехват обновления per-id не обязателен
-      }
+      // IPC-based architecture: no socket listeners needed
+      // Data is managed through Pinia stores
     });
 
-    // cleanup socket listeners on unmount
+    // cleanup on unmount
     onUnmounted(() => {
-      try {
-        if (socket && socket.off) socket.off("typing:samples:updated");
-      } catch (e) {}
+      // No socket cleanup needed in IPC architecture
     });
 
     watch(

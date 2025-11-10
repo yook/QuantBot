@@ -1,14 +1,21 @@
-import { app, BrowserWindow, shell, ipcMain } from "electron";
+import { app, BrowserWindow, shell, ipcMain, dialog } from "electron";
 import path from "path";
 import { fileURLToPath } from "url";
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn } from "node:child_process";
 import fs from "fs";
 import os from "os";
+import Database from "better-sqlite3";
 
 // Автообновление
 import { autoUpdater } from "electron-updater";
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
+// Define __filename and __dirname for ES modules (needed for better-sqlite3 and bindings)
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+// Make them globally available for CommonJS dependencies
+(globalThis as any).__filename = __filename;
+(globalThis as any).__dirname = __dirname;
 
 // The built directory structure
 //
@@ -33,7 +40,168 @@ process.env.VITE_PUBLIC = VITE_DEV_SERVER_URL
 // Main window will be created at runtime inside createWindow()
 
 let win: BrowserWindow | null;
-let dbWorkerProcess: ChildProcess | null = null;
+let db: Database.Database | null = null;
+
+// ===== Database Initialization =====
+function initializeDatabase() {
+  try {
+    // Determine DB path
+    let dbPath = process.env.DB_PATH;
+    if (!dbPath) {
+      const userDataPath = path.join(os.homedir(), ".quantbot");
+      dbPath = path.join(userDataPath, "quantbot.db");
+    }
+
+    // Ensure directory exists
+    const dbDir = path.dirname(dbPath);
+    if (!fs.existsSync(dbDir)) {
+      fs.mkdirSync(dbDir, { recursive: true });
+    }
+
+    console.log("[Main] Initializing database at:", dbPath);
+
+    console.log("[Main] Creating Database instance...");
+    db = new Database(dbPath);
+    console.log("[Main] Database instance created");
+    
+    console.log("[Main] Setting pragmas...");
+    db.pragma("journal_mode = WAL");
+    db.pragma("synchronous = NORMAL");
+    db.pragma("cache_size = -200000");
+    db.pragma("mmap_size = 268435456");
+    db.pragma("auto_vacuum = INCREMENTAL");
+    db.pragma("temp_store = MEMORY");
+    console.log("[Main] Pragmas set");
+
+    // Initialize schema
+    console.log("[Main] Creating tables...");
+    // Projects table
+    db.prepare(
+      `CREATE TABLE IF NOT EXISTS projects (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        url  TEXT NOT NULL,
+        freezed INTEGER DEFAULT 0,
+        queue_size INTEGER DEFAULT 0,
+        crawler TEXT,
+        parser  TEXT,
+        ui_columns TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      )`
+    ).run();
+    db.prepare(
+      "CREATE INDEX IF NOT EXISTS idx_projects_url ON projects(url);"
+    ).run();
+
+    // URLs table
+    db.prepare(
+      `CREATE TABLE IF NOT EXISTS urls (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        project_id INTEGER NOT NULL,
+        type TEXT,
+        url TEXT NOT NULL,
+        referrer TEXT,
+        depth INTEGER,
+        code INTEGER,
+        contentType TEXT,
+        protocol TEXT,
+        location TEXT,
+        actualDataSize INTEGER,
+        requestTime INTEGER,
+        requestLatency INTEGER,
+        downloadTime INTEGER,
+        status TEXT,
+        date TEXT,
+        content TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY(project_id) REFERENCES projects(id)
+      )`
+    ).run();
+    db.prepare(
+      "CREATE INDEX IF NOT EXISTS idx_urls_project ON urls(project_id);"
+    ).run();
+    db.prepare(
+      "CREATE UNIQUE INDEX IF NOT EXISTS idx_urls_project_url ON urls(project_id, url);"
+    ).run();
+
+    // Keywords table
+    db.prepare(
+      `CREATE TABLE IF NOT EXISTS keywords (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        project_id INTEGER NOT NULL,
+        keyword TEXT NOT NULL,
+        category_id INTEGER,
+        color TEXT,
+        disabled INTEGER DEFAULT 0,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY(project_id) REFERENCES projects(id)
+      )`
+    ).run();
+    db.prepare(
+      "CREATE INDEX IF NOT EXISTS idx_keywords_project ON keywords(project_id);"
+    ).run();
+    db.prepare(
+      "CREATE UNIQUE INDEX IF NOT EXISTS idx_keywords_project_keyword ON keywords(project_id, keyword);"
+    ).run();
+
+    // Categories table
+    db.prepare(
+      `CREATE TABLE IF NOT EXISTS categories (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        project_id INTEGER NOT NULL,
+        name TEXT NOT NULL,
+        color TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY(project_id) REFERENCES projects(id)
+      )`
+    ).run();
+    db.prepare(
+      "CREATE INDEX IF NOT EXISTS idx_categories_project ON categories(project_id);"
+    ).run();
+    db.prepare(
+      "CREATE UNIQUE INDEX IF NOT EXISTS idx_categories_project_name ON categories(project_id, name);"
+    ).run();
+
+    // Typing samples table
+    db.prepare(
+      `CREATE TABLE IF NOT EXISTS typing_samples (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        project_id INTEGER NOT NULL,
+        url TEXT NOT NULL,
+        sample TEXT NOT NULL,
+        date TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY(project_id) REFERENCES projects(id)
+      )`
+    ).run();
+    db.prepare(
+      "CREATE INDEX IF NOT EXISTS idx_typing_samples_project ON typing_samples(project_id);"
+    ).run();
+
+    // Stopwords table
+    db.prepare(
+      `CREATE TABLE IF NOT EXISTS stop_words (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        project_id INTEGER NOT NULL,
+        word TEXT NOT NULL,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY(project_id) REFERENCES projects(id)
+      )`
+    ).run();
+    db.prepare(
+      "CREATE INDEX IF NOT EXISTS idx_stop_words_project ON stop_words(project_id);"
+    ).run();
+    db.prepare(
+      "CREATE UNIQUE INDEX IF NOT EXISTS idx_stop_words_project_word ON stop_words(project_id, word);"
+    ).run();
+
+    console.log("[Main] Database schema initialized successfully");
+  } catch (err: any) {
+    console.error("[Main] Failed to initialize database:", err.message);
+    throw err;
+  }
+}
 
 // --- Bridge main-process logs to renderer console ---
 type LogLevel = 'log' | 'info' | 'warn' | 'error';
@@ -75,39 +243,13 @@ console.error = (...args: any[]) => {
   sendLogToRenderer('error', args);
 };
 
-// DB Worker IPC bridge
-let dbRequestId = 0;
-const dbPendingRequests = new Map<number, { resolve: Function; reject: Function }>();
-
-function dbCall(method: string, ...params: any[]): Promise<any> {
-  return new Promise((resolve, reject) => {
-    if (!dbWorkerProcess || dbWorkerProcess.killed) {
-      return reject(new Error('DB worker not running'));
-    }
-
-    const id = ++dbRequestId;
-    dbPendingRequests.set(id, { resolve, reject });
-
-    const request = JSON.stringify({ id, method, params }) + '\n';
-    dbWorkerProcess.stdin?.write(request);
-
-    // Timeout after 30s
-    setTimeout(() => {
-      if (dbPendingRequests.has(id)) {
-        dbPendingRequests.delete(id);
-        reject(new Error('DB request timeout'));
-      }
-    }, 30000);
-  });
-}
-
 // Register IPC handlers for renderer DB operations
 function registerIpcHandlers() {
   // Projects
   ipcMain.handle('db:projects:getAll', async () => {
     try {
       console.log('[IPC] db:projects:getAll called');
-      const result = await dbCall('projects:getAll');
+      const result = db!.prepare('SELECT * FROM projects ORDER BY id DESC').all();
       console.log('[IPC] db:projects:getAll result:', Array.isArray(result) ? `count=${result.length}` : result);
       return { success: true, data: result };
     } catch (error: any) {
@@ -118,7 +260,7 @@ function registerIpcHandlers() {
 
   ipcMain.handle('db:projects:get', async (_event, id) => {
     try {
-      const result = await dbCall('projects:get', id);
+      const result = db!.prepare('SELECT * FROM projects WHERE id = ?').get(id);
       return { success: true, data: result };
     } catch (error: any) {
       return { success: false, error: error.message };
@@ -128,7 +270,7 @@ function registerIpcHandlers() {
   ipcMain.handle('db:projects:insert', async (_event, name, url) => {
     try {
       console.log('[IPC] db:projects:insert payload:', { name, url });
-      const result = await dbCall('projects:insert', name, url);
+      const result = db!.prepare('INSERT INTO projects (name, url) VALUES (?, ?)').run(name, url);
       console.log('[IPC] db:projects:insert result:', result);
       return { success: true, data: result };
     } catch (error: any) {
@@ -139,7 +281,7 @@ function registerIpcHandlers() {
 
   ipcMain.handle('db:projects:update', async (_event, name, url, id) => {
     try {
-      const result = await dbCall('projects:update', name, url, id);
+      const result = db!.prepare('UPDATE projects SET name = ?, url = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(name, url, id);
       return { success: true, data: result };
     } catch (error: any) {
       return { success: false, error: error.message };
@@ -148,7 +290,7 @@ function registerIpcHandlers() {
 
   ipcMain.handle('db:projects:delete', async (_event, id) => {
     try {
-      const result = await dbCall('projects:delete', id);
+      const result = db!.prepare('DELETE FROM projects WHERE id = ?').run(id);
       return { success: true, data: result };
     } catch (error: any) {
       return { success: false, error: error.message };
@@ -158,7 +300,7 @@ function registerIpcHandlers() {
   // Keywords
   ipcMain.handle('db:keywords:getAll', async (_event, projectId) => {
     try {
-      const result = await dbCall('keywords:getAll', projectId);
+      const result = db!.prepare('SELECT * FROM keywords WHERE project_id = ? ORDER BY id').all(projectId);
       return { success: true, data: result };
     } catch (error: any) {
       return { success: false, error: error.message };
@@ -167,7 +309,44 @@ function registerIpcHandlers() {
 
   ipcMain.handle('db:keywords:getWindow', async (_event, projectId, skip, limit, sort, searchQuery) => {
     try {
-      const result = await dbCall('keywords:getWindow', projectId, skip, limit, sort, searchQuery);
+      let sql = 'SELECT * FROM keywords WHERE project_id = ?';
+      const params: any[] = [projectId];
+      
+      if (searchQuery && searchQuery.trim()) {
+        sql += ' AND keyword LIKE ?';
+        params.push(`%${searchQuery}%`);
+      }
+      
+      // Sort
+      if (sort && sort.column) {
+        const direction = sort.direction === 'desc' ? 'DESC' : 'ASC';
+        sql += ` ORDER BY ${sort.column} ${direction}`;
+      } else {
+        sql += ' ORDER BY id';
+      }
+      
+      // Pagination
+      sql += ' LIMIT ? OFFSET ?';
+      params.push(limit, skip);
+      
+      const rows = db!.prepare(sql).all(...params);
+
+      // Get total count for this query
+      let countSql = 'SELECT COUNT(*) as total FROM keywords WHERE project_id = ?';
+      const countParams: any[] = [projectId];
+      if (searchQuery && searchQuery.trim()) {
+        countSql += ' AND keyword LIKE ?';
+        countParams.push(`%${searchQuery}%`);
+      }
+      const countResult = db!.prepare(countSql).get(...countParams);
+
+      const result = {
+        keywords: rows,
+        total: countResult.total,
+        skip,
+        limit,
+      };
+
       return { success: true, data: result };
     } catch (error: any) {
       return { success: false, error: error.message };
@@ -176,7 +355,9 @@ function registerIpcHandlers() {
 
   ipcMain.handle('db:keywords:insert', async (_event, keyword, projectId, categoryId, color, disabled) => {
     try {
-      const result = await dbCall('keywords:insert', keyword, projectId, categoryId, color, disabled);
+      const result = db!.prepare(
+        'INSERT INTO keywords (keyword, project_id, category_id, color, disabled) VALUES (?, ?, ?, ?, ?)'
+      ).run(keyword, projectId, categoryId, color, disabled);
       return { success: true, data: result };
     } catch (error: any) {
       return { success: false, error: error.message };
@@ -185,7 +366,9 @@ function registerIpcHandlers() {
 
   ipcMain.handle('db:keywords:update', async (_event, keyword, categoryId, color, disabled, id) => {
     try {
-      const result = await dbCall('keywords:update', keyword, categoryId, color, disabled, id);
+      const result = db!.prepare(
+        'UPDATE keywords SET keyword = ?, category_id = ?, color = ?, disabled = ? WHERE id = ?'
+      ).run(keyword, categoryId, color, disabled, id);
       return { success: true, data: result };
     } catch (error: any) {
       return { success: false, error: error.message };
@@ -194,7 +377,7 @@ function registerIpcHandlers() {
 
   ipcMain.handle('db:keywords:delete', async (_event, id) => {
     try {
-      const result = await dbCall('keywords:delete', id);
+      const result = db!.prepare('DELETE FROM keywords WHERE id = ?').run(id);
       return { success: true, data: result };
     } catch (error: any) {
       return { success: false, error: error.message };
@@ -210,7 +393,30 @@ function registerIpcHandlers() {
     });
     
     try {
-      const result = await dbCall('keywords:insertBulk', keywords, projectId);
+      if (!Array.isArray(keywords)) {
+        throw new Error(`Expected keywords to be an array, got ${typeof keywords}`);
+      }
+      if (!projectId) {
+        throw new Error('Project ID is required');
+      }
+
+      const insertStmt = db!.prepare(
+        'INSERT OR IGNORE INTO keywords (keyword, project_id) VALUES (?, ?)'
+      );
+      let inserted = 0;
+      const insertMany = db!.transaction((kws: string[]) => {
+        for (const kw of kws) {
+          const info = insertStmt.run(kw, projectId);
+          if (info.changes > 0) inserted++;
+        }
+      });
+      insertMany(keywords);
+      
+      const result = {
+        inserted,
+        total: keywords.length,
+        skipped: keywords.length - inserted,
+      };
       console.log('[Main IPC] db:keywords:insertBulk success:', result);
       return { success: true, data: result };
     } catch (error: any) {
@@ -221,7 +427,9 @@ function registerIpcHandlers() {
 
   ipcMain.handle('db:keywords:updateCategory', async (_event, id, categoryName, categorySimilarity) => {
     try {
-      const result = await dbCall('keywords:updateCategory', id, categoryName, categorySimilarity);
+      const result = db!.prepare(
+        'UPDATE keywords SET category_name = ?, category_similarity = ? WHERE id = ?'
+      ).run(categoryName, categorySimilarity, id);
       return { success: true, data: result };
     } catch (error: any) {
       return { success: false, error: error.message };
@@ -230,7 +438,9 @@ function registerIpcHandlers() {
 
   ipcMain.handle('db:keywords:updateClass', async (_event, id, className, classSimilarity) => {
     try {
-      const result = await dbCall('keywords:updateClass', id, className, classSimilarity);
+      const result = db!.prepare(
+        'UPDATE keywords SET class_name = ?, class_similarity = ? WHERE id = ?'
+      ).run(className, classSimilarity, id);
       return { success: true, data: result };
     } catch (error: any) {
       return { success: false, error: error.message };
@@ -239,7 +449,9 @@ function registerIpcHandlers() {
 
   ipcMain.handle('db:keywords:updateCluster', async (_event, id, cluster) => {
     try {
-      const result = await dbCall('keywords:updateCluster', id, cluster);
+      const result = db!.prepare(
+        'UPDATE keywords SET cluster = ? WHERE id = ?'
+      ).run(cluster, id);
       return { success: true, data: result };
     } catch (error: any) {
       return { success: false, error: error.message };
@@ -248,7 +460,7 @@ function registerIpcHandlers() {
 
   ipcMain.handle('db:keywords:deleteByProject', async (_event, projectId) => {
     try {
-      const result = await dbCall('keywords:deleteByProject', projectId);
+      const result = db!.prepare('DELETE FROM keywords WHERE project_id = ?').run(projectId);
       return { success: true, data: result };
     } catch (error: any) {
       return { success: false, error: error.message };
@@ -258,7 +470,7 @@ function registerIpcHandlers() {
   // Categories
   ipcMain.handle('db:categories:getAll', async (_event, projectId) => {
     try {
-      const result = await dbCall('categories:getAll', projectId);
+      const result = db!.prepare('SELECT * FROM categories WHERE project_id = ?').all(projectId);
       return { success: true, data: result };
     } catch (error: any) {
       return { success: false, error: error.message };
@@ -267,7 +479,9 @@ function registerIpcHandlers() {
 
   ipcMain.handle('db:categories:insert', async (_event, name, projectId, color) => {
     try {
-      const result = await dbCall('categories:insert', name, projectId, color);
+      const result = db!.prepare(
+        'INSERT INTO categories (name, project_id, color) VALUES (?, ?, ?)'
+      ).run(name, projectId, color);
       return { success: true, data: result };
     } catch (error: any) {
       return { success: false, error: error.message };
@@ -276,7 +490,9 @@ function registerIpcHandlers() {
 
   ipcMain.handle('db:categories:update', async (_event, name, color, id) => {
     try {
-      const result = await dbCall('categories:update', name, color, id);
+      const result = db!.prepare(
+        'UPDATE categories SET name = ?, color = ? WHERE id = ?'
+      ).run(name, color, id);
       return { success: true, data: result };
     } catch (error: any) {
       return { success: false, error: error.message };
@@ -285,7 +501,7 @@ function registerIpcHandlers() {
 
   ipcMain.handle('db:categories:delete', async (_event, id) => {
     try {
-      const result = await dbCall('categories:delete', id);
+      const result = db!.prepare('DELETE FROM categories WHERE id = ?').run(id);
       return { success: true, data: result };
     } catch (error: any) {
       return { success: false, error: error.message };
@@ -295,7 +511,7 @@ function registerIpcHandlers() {
   // Typing
   ipcMain.handle('db:typing:getAll', async (_event, projectId) => {
     try {
-      const result = await dbCall('typing:getAll', projectId);
+      const result = db!.prepare('SELECT * FROM typing_samples WHERE project_id = ?').all(projectId);
       return { success: true, data: result };
     } catch (error: any) {
       return { success: false, error: error.message };
@@ -304,7 +520,9 @@ function registerIpcHandlers() {
 
   ipcMain.handle('db:typing:insert', async (_event, projectId, url, sample, date) => {
     try {
-      const result = await dbCall('typing:insert', projectId, url, sample, date);
+      const result = db!.prepare(
+        'INSERT INTO typing_samples (project_id, url, sample, date) VALUES (?, ?, ?, ?)'
+      ).run(projectId, url, sample, date);
       return { success: true, data: result };
     } catch (error: any) {
       return { success: false, error: error.message };
@@ -313,7 +531,9 @@ function registerIpcHandlers() {
 
   ipcMain.handle('db:typing:update', async (_event, url, sample, date, id) => {
     try {
-      const result = await dbCall('typing:update', url, sample, date, id);
+      const result = db!.prepare(
+        'UPDATE typing_samples SET url = ?, sample = ?, date = ? WHERE id = ?'
+      ).run(url, sample, date, id);
       return { success: true, data: result };
     } catch (error: any) {
       return { success: false, error: error.message };
@@ -322,7 +542,7 @@ function registerIpcHandlers() {
 
   ipcMain.handle('db:typing:delete', async (_event, id) => {
     try {
-      const result = await dbCall('typing:delete', id);
+      const result = db!.prepare('DELETE FROM typing_samples WHERE id = ?').run(id);
       return { success: true, data: result };
     } catch (error: any) {
       return { success: false, error: error.message };
@@ -331,7 +551,7 @@ function registerIpcHandlers() {
 
   ipcMain.handle('db:typing:deleteByProject', async (_event, projectId) => {
     try {
-      const result = await dbCall('typing:deleteByProject', projectId);
+      const result = db!.prepare('DELETE FROM typing_samples WHERE project_id = ?').run(projectId);
       return { success: true, data: result };
     } catch (error: any) {
       return { success: false, error: error.message };
@@ -341,7 +561,7 @@ function registerIpcHandlers() {
   // Stopwords
   ipcMain.handle('db:stopwords:getAll', async (_event, projectId) => {
     try {
-      const result = await dbCall('stopwords:getAll', projectId);
+      const result = db!.prepare('SELECT * FROM stop_words WHERE project_id = ?').all(projectId);
       return { success: true, data: result };
     } catch (error: any) {
       return { success: false, error: error.message };
@@ -350,7 +570,9 @@ function registerIpcHandlers() {
 
   ipcMain.handle('db:stopwords:insert', async (_event, projectId, word) => {
     try {
-      const result = await dbCall('stopwords:insert', projectId, word);
+      const result = db!.prepare(
+        'INSERT OR IGNORE INTO stop_words (project_id, word) VALUES (?, ?)'
+      ).run(projectId, word);
       return { success: true, data: result };
     } catch (error: any) {
       return { success: false, error: error.message };
@@ -359,7 +581,7 @@ function registerIpcHandlers() {
 
   ipcMain.handle('db:stopwords:delete', async (_event, id) => {
     try {
-      const result = await dbCall('stopwords:delete', id);
+      const result = db!.prepare('DELETE FROM stop_words WHERE id = ?').run(id);
       return { success: true, data: result };
     } catch (error: any) {
       return { success: false, error: error.message };
@@ -368,7 +590,7 @@ function registerIpcHandlers() {
 
   ipcMain.handle('db:stopwords:deleteByProject', async (_event, projectId) => {
     try {
-      const result = await dbCall('stopwords:deleteByProject', projectId);
+      const result = db!.prepare('DELETE FROM stop_words WHERE project_id = ?').run(projectId);
       return { success: true, data: result };
     } catch (error: any) {
       return { success: false, error: error.message };
@@ -378,7 +600,7 @@ function registerIpcHandlers() {
   // URLs
   ipcMain.handle('db:urls:getAll', async (_event, projectId) => {
     try {
-      const result = await dbCall('urls:getAll', projectId);
+      const result = db!.prepare('SELECT * FROM urls WHERE project_id = ?').all(projectId);
       return { success: true, data: result };
     } catch (error: any) {
       return { success: false, error: error.message };
@@ -387,7 +609,23 @@ function registerIpcHandlers() {
 
   ipcMain.handle('db:urls:getSorted', async (_event, options) => {
     try {
-      const result = await dbCall('urls:getSorted', options);
+      const project_id = options.id;
+      const limit = options.limit || 50;
+      const offset = options.skip || 0;
+
+      let sortBy = 'id';
+      let order = 'ASC';
+
+      if (options.sort && typeof options.sort === 'object') {
+        const sortKeys = Object.keys(options.sort);
+        if (sortKeys.length > 0) {
+          sortBy = sortKeys[0];
+          order = options.sort[sortBy] === -1 ? 'DESC' : 'ASC';
+        }
+      }
+
+      const sql = `SELECT * FROM urls WHERE project_id = ? ORDER BY ${sortBy} ${order} LIMIT ? OFFSET ?`;
+      const result = db!.prepare(sql).all(project_id, limit, offset);
       return { success: true, data: result };
     } catch (error: any) {
       return { success: false, error: error.message };
@@ -396,7 +634,7 @@ function registerIpcHandlers() {
 
   ipcMain.handle('db:urls:count', async (_event, projectId) => {
     try {
-      const result = await dbCall('urls:count', projectId);
+      const result = db!.prepare('SELECT COUNT(*) as count FROM urls WHERE project_id = ?').get(projectId);
       return { success: true, data: result };
     } catch (error: any) {
       return { success: false, error: error.message };
@@ -447,104 +685,6 @@ if (!gotSingleInstanceLock) {
   app.quit();
 }
 
-// Start DB worker process
-function startDbWorker(): boolean {
-  if (dbWorkerProcess) {
-    console.log('DB worker already running');
-    return true;
-  }
-
-  // In dev: use source file from electron/ directory
-  // In production: use copied file from dist-electron/
-  const workerPath = app.isPackaged
-    ? path.join(process.resourcesPath, "app.asar.unpacked", "electron", "db-worker.cjs")
-    : path.join(__dirname, "..", "electron", "db-worker.cjs");
-
-  // In packaged builds, run Electron binary in Node mode
-  const execCmd = app.isPackaged ? process.execPath : "node";
-  const execArgs = app.isPackaged ? [workerPath] : [workerPath];
-
-  console.log("Starting DB worker:", execCmd, ...execArgs);
-
-  // Set DB path via environment variable
-  // In dev: use local repo path; In production: use userData (writable)
-  const dbPath = app.isPackaged
-    ? path.join(app.getPath('userData'), 'projects.db')
-    : path.join(__dirname, '..', 'db', 'projects.db');
-
-  console.log("DB path:", dbPath);
-
-  try {
-    // For packaged apps, we must run the worker as a node process.
-    // We pass ELECTRON_RUN_AS_NODE to the env of the spawned process.
-    const env: NodeJS.ProcessEnv = { ...process.env, DB_PATH: dbPath };
-    if (app.isPackaged) {
-      env.ELECTRON_RUN_AS_NODE = '1';
-    }
-
-    const proc = spawn(execCmd, execArgs, {
-      stdio: ['pipe', 'pipe', 'pipe'],
-      shell: false,
-      env,
-    });
-
-    dbWorkerProcess = proc;
-
-    // Handle responses from worker
-    let buffer = '';
-    proc.stdout?.setEncoding('utf8');
-    proc.stdout?.on('data', (chunk) => {
-      buffer += chunk;
-      const lines = buffer.split('\n');
-      buffer = lines.pop() || '';
-
-      for (const line of lines) {
-        if (!line.trim()) continue;
-        try {
-          const response = JSON.parse(line);
-          const pending = dbPendingRequests.get(response.id);
-          if (pending) {
-            dbPendingRequests.delete(response.id);
-            if (response.error) {
-              pending.reject(new Error(response.error));
-            } else {
-              pending.resolve(response.result);
-            }
-          }
-        } catch (err) {
-          console.error('Failed to parse DB worker response:', err);
-        }
-      }
-    });
-
-    proc.stderr?.setEncoding('utf8');
-    proc.stderr?.on('data', (data) => {
-      const text = data.toString().trim();
-      console.log('[DB Worker]', text);
-    });
-
-    proc.on('error', (err) => {
-      console.error('DB worker process error:', err);
-      dbWorkerProcess = null;
-    });
-
-    proc.on('exit', (code, sig) => {
-      console.log('DB worker exited', code, sig);
-      dbWorkerProcess = null;
-      // Reject all pending requests
-      for (const [id, pending] of dbPendingRequests.entries()) {
-        pending.reject(new Error('DB worker exited'));
-        dbPendingRequests.delete(id);
-      }
-    });
-
-    return true;
-  } catch (e: any) {
-    console.error("Failed to start DB worker:", e?.message || String(e));
-    return false;
-  }
-}
-
 // Worker process runners for categorization, typing, clustering
 async function startCategorizationWorker(projectId: number) {
   const workerPath = path.join(__dirname, '..', 'worker', 'assignCategorization.cjs');
@@ -553,8 +693,8 @@ async function startCategorizationWorker(projectId: number) {
   
   try {
     // Load categories and keywords from DB
-    const categories = await dbCall('categories:getAll', projectId);
-    const keywords = await dbCall('keywords:getAll', projectId);
+    const categories = db!.prepare('SELECT * FROM categories WHERE project_id = ?').all(projectId);
+    const keywords = db!.prepare('SELECT * FROM keywords WHERE project_id = ?').all(projectId);
 
     if (!keywords || keywords.length === 0) {
       console.warn(`No keywords found for project ${projectId}`);
@@ -632,8 +772,8 @@ async function startCategorizationWorker(projectId: number) {
           
           // Update keyword in DB
           if (obj.id && obj.bestCategoryName !== undefined) {
-            dbCall('keywords:updateCategory', obj.id, obj.bestCategoryName, obj.similarity || null)
-              .catch(err => console.error('Failed to update keyword category:', err));
+            db!.prepare('UPDATE keywords SET category_name = ?, category_similarity = ? WHERE id = ?')
+              .run(obj.bestCategoryName, obj.similarity || null, obj.id);
           }
 
           // Send progress update
@@ -706,8 +846,8 @@ async function startTypingWorker(projectId: number) {
   
   try {
     // Load typing samples and keywords from DB
-    const typingSamples = await dbCall('typing:getAll', projectId);
-    const keywords = await dbCall('keywords:getAll', projectId);
+    const typingSamples = db!.prepare('SELECT * FROM typing_samples WHERE project_id = ?').all(projectId);
+    const keywords = db!.prepare('SELECT * FROM keywords WHERE project_id = ?').all(projectId);
 
     // Create temporary directory and input file
     const tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'typing-'));
@@ -742,8 +882,8 @@ async function startTypingWorker(projectId: number) {
           
           // Update keyword in DB
           if (obj.id && obj.className !== undefined) {
-            dbCall('keywords:updateClass', obj.id, obj.className, obj.similarity || null)
-              .catch(err => console.error('Failed to update keyword class:', err));
+            db!.prepare('UPDATE keywords SET class_name = ?, class_similarity = ? WHERE id = ?')
+              .run(obj.className, obj.similarity || null, obj.id);
           }
 
           // Send progress
@@ -815,7 +955,7 @@ async function startClusteringWorker(projectId: number, algorithm: string, eps: 
   
   try {
     // Load keywords from DB
-    const keywords = await dbCall('keywords:getAll', projectId);
+    const keywords = db!.prepare('SELECT * FROM keywords WHERE project_id = ?').all(projectId) as any[];
 
     if (!keywords || keywords.length === 0) {
       console.warn(`No keywords found for project ${projectId}`);
@@ -866,8 +1006,8 @@ async function startClusteringWorker(projectId: number, algorithm: string, eps: 
           
           // Update keyword cluster in DB
           if (obj.id && obj.cluster !== undefined) {
-            dbCall('keywords:updateCluster', obj.id, obj.cluster)
-              .catch(err => console.error('Failed to update keyword cluster:', err));
+            db!.prepare('UPDATE keywords SET cluster = ? WHERE id = ?')
+              .run(obj.cluster, obj.id);
           }
 
           // Send progress
@@ -927,15 +1067,6 @@ async function startClusteringWorker(projectId: number, algorithm: string, eps: 
         message: error.message || 'Failed to start worker',
       });
     }
-  }
-}
-
-// Stop DB worker
-function stopDbWorker() {
-  if (dbWorkerProcess) {
-    console.log('Stopping DB worker...');
-    dbWorkerProcess.kill('SIGTERM');
-    dbWorkerProcess = null;
   }
 }
 
@@ -1021,34 +1152,55 @@ app.on("activate", () => {
 });
 
 app.on("before-quit", () => {
-  stopDbWorker(); // Ensure DB worker is stopped before quit
+  // Close database connection
+  if (db) {
+    console.log('[Main] Closing database...');
+    db.close();
+    db = null;
+  }
 });
 
 app.whenReady().then(() => {
-  console.log('[Main] App ready, starting DB worker...');
-  const ok = startDbWorker();
-  if (!ok) {
-    console.error('[Main] Failed to start DB worker');
+  console.log('[Main] App ready, initializing database...');
+  try {
+    initializeDatabase();
+    console.log('[Main] Database initialized successfully');
+  } catch (error: any) {
+    console.error('[Main] Fatal: Failed to initialize database:', error);
+    console.error('[Main] Stack:', error.stack);
+    dialog.showErrorBox('Database Error', `Failed to initialize database: ${error.message}`);
     app.quit();
     return;
   }
 
-  console.log('[Main] DB worker started, registering IPC handlers...');
-  registerIpcHandlers(); // Register IPC handlers
-  // Probe DB readiness with a lightweight query
-  (async () => {
-    try {
-      const projects = await dbCall('projects:getAll');
-      console.log('[Main] DB ready: projects count =', Array.isArray(projects) ? projects.length : 'n/a');
-    } catch (e: any) {
-      console.error('[Main] DB readiness check failed:', e?.message || e);
-    }
-  })();
+  console.log('[Main] Registering IPC handlers...');
+  try {
+    registerIpcHandlers();
+    console.log('[Main] IPC handlers registered');
+  } catch (error: any) {
+    console.error('[Main] Fatal: Failed to register IPC handlers:', error);
+    console.error('[Main] Stack:', error.stack);
+    app.quit();
+    return;
+  }
   
   console.log('[Main] Creating window...');
-  createWindow(); // Then create window
+  try {
+    createWindow();
+    console.log('[Main] Window created');
+  } catch (error: any) {
+    console.error('[Main] Fatal: Failed to create window:', error);
+    console.error('[Main] Stack:', error.stack);
+    app.quit();
+    return;
+  }
 
   // Проверка обновлений и уведомление пользователя
+  console.log('[Main] Checking for updates...');
   autoUpdater.checkForUpdatesAndNotify();
+}).catch((error) => {
+  console.error('[Main] Fatal error in app.whenReady:', error);
+  console.error('[Main] Stack:', error.stack);
+  app.quit();
 });
 

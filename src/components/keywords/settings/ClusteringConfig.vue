@@ -212,20 +212,8 @@ const diagnostics = ref({
   hist: [],
 });
 
-// listen for clustering diagnostics emitted by server when worker runs
-socket.on("keywords:clustering-diagnostics", (payload) => {
-  try {
-    if (!payload || !payload.projectId) return;
-    const d = payload.diagnostics || payload;
-    diagnostics.value = {
-      sample: d.sample || 0,
-      medianNNsim: d.medianNNsim || 0,
-      p75: d.p75 || 0,
-      suggestedThreshold: d.suggestedThreshold || 0,
-      hist: Array.isArray(d.hist) ? d.hist : [],
-    };
-  } catch (e) {}
-});
+// IPC-based architecture: clustering diagnostics are handled differently
+// No socket listeners needed - data flows through IPC handlers
 
 // debounce timer for saving settings
 let saveTimer = null;
