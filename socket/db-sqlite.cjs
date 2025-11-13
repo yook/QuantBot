@@ -61,10 +61,15 @@ fs.mkdirSync(dbDir, { recursive: true });
 // Path to SQLite database
 const dbPath = path.join(dbDir, "projects.db");
 
+console.log('[socket/db-sqlite] Using dbDir:', dbDir);
+console.log('[socket/db-sqlite] Using dbPath:', dbPath);
+console.log('[socket/db-sqlite] process.env.QUANTBOT_DB_DIR:', process.env.QUANTBOT_DB_DIR);
+
 // Open database connection (single, minimal)
 let db;
 try {
   db = new Database(dbPath);
+  console.log('[socket/db-sqlite] Database opened successfully');
 } catch (err) {
   console.error("SQLite open error:", err);
 }

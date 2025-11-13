@@ -221,9 +221,9 @@ function parseInputText(text) {
 
 async function addStopWords() {
   const items = parseInputText(stopWordsText.value);
-  console.log('[StopWords] addStopWords called with items:', items);
-  console.log('[StopWords] currentProjectId:', currentProjectId.value);
-  
+  console.log("[StopWords] addStopWords called with items:", items);
+  console.log("[StopWords] currentProjectId:", currentProjectId.value);
+
   if (items.length === 0) {
     ElMessage.warning("Ничего не введено");
     return;
@@ -243,18 +243,26 @@ async function addStopWords() {
   try {
     let added = 0;
     for (const word of items) {
-      console.log('[StopWords] Inserting word:', word, 'for project:', currentProjectId.value);
-      const result = await ipcClient.insertStopword(currentProjectId.value, word);
-      console.log('[StopWords] Insert result:', result);
+      console.log(
+        "[StopWords] Inserting word:",
+        word,
+        "for project:",
+        currentProjectId.value
+      );
+      const result = await ipcClient.insertStopword(
+        currentProjectId.value,
+        word
+      );
+      console.log("[StopWords] Insert result:", result);
       added++;
       addProgress.value = Math.round((added / items.length) * 100);
     }
 
     ElMessage.success(`Добавлено ${added} стоп-слов`);
     stopWordsText.value = "";
-    console.log('[StopWords] Loading stopwords list...');
+    console.log("[StopWords] Loading stopwords list...");
     await loadData();
-    console.log('[StopWords] Stopwords list loaded');
+    console.log("[StopWords] Stopwords list loaded");
 
     // Перезагружаем данные keywords, чтобы обновились колонки "Целевой запрос" и "Правило исключения"
     if (keywordsStore.currentProjectId) {

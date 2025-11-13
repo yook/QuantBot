@@ -90,6 +90,9 @@ function initializeDatabase() {
 
   console.log("[Main] Initializing database at:", dbPath);
   resolvedDbPath = dbPath; // remember for worker spawning
+  
+  // Set QUANTBOT_DB_DIR for socket/db-sqlite.cjs module to use the same DB
+  process.env.QUANTBOT_DB_DIR = path.dirname(dbPath);
 
     // Also write the DB path into a small log file next to the database for quick inspection
     try {
@@ -1331,7 +1334,10 @@ async function startCategorizationWorker(projectId: number) {
     console.log(`Created input file: ${inputPath}`);
 
     const child = spawn(process.execPath, [workerPath, `--projectId=${projectId}`, `--inputFile=${inputPath}`], {
-      env: Object.assign({}, process.env, { ELECTRON_RUN_AS_NODE: '1' }),
+      env: Object.assign({}, process.env, { 
+        ELECTRON_RUN_AS_NODE: '1',
+        QUANTBOT_DB_DIR: resolvedDbPath ? path.dirname(resolvedDbPath) : undefined,
+      }),
       stdio: ['ignore', 'pipe', 'pipe'],
     });
 
@@ -1464,7 +1470,10 @@ async function startTypingWorker(projectId: number) {
     console.log(`Created typing input file: ${inputPath}`);
 
     const child = spawn(process.execPath, [workerPath, `--projectId=${projectId}`, `--inputFile=${inputPath}`], {
-      env: Object.assign({}, process.env, { ELECTRON_RUN_AS_NODE: '1' }),
+      env: Object.assign({}, process.env, { 
+        ELECTRON_RUN_AS_NODE: '1',
+        QUANTBOT_DB_DIR: resolvedDbPath ? path.dirname(resolvedDbPath) : undefined,
+      }),
       stdio: ['ignore', 'pipe', 'pipe'],
     });
 
@@ -1637,7 +1646,10 @@ async function startClusteringWorker(projectId: number, algorithm: string, eps: 
     }
     
     const child = spawn(process.execPath, args, {
-      env: Object.assign({}, process.env, { ELECTRON_RUN_AS_NODE: '1' }),
+      env: Object.assign({}, process.env, { 
+        ELECTRON_RUN_AS_NODE: '1',
+        QUANTBOT_DB_DIR: resolvedDbPath ? path.dirname(resolvedDbPath) : undefined,
+      }),
       stdio: ['ignore', 'pipe', 'pipe'],
     });
 
@@ -1907,7 +1919,10 @@ function startCrawlerWorker(project: { id: number; url: string; crawler?: any; p
     const workerPath = path.join(__dirname, '..', 'worker', 'crawlerWorker.cjs');
     console.log('[CrawlerWorker] Spawning worker', { workerPath, projectId: project.id, url: project.url });
     crawlerChild = spawn(process.execPath, [workerPath, `--config=${cfgPath}`], {
-      env: Object.assign({}, process.env, { ELECTRON_RUN_AS_NODE: '1' }),
+      env: Object.assign({}, process.env, { 
+        ELECTRON_RUN_AS_NODE: '1',
+        QUANTBOT_DB_DIR: resolvedDbPath ? path.dirname(resolvedDbPath) : undefined,
+      }),
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     crawlerChild.stdout?.setEncoding('utf8');
