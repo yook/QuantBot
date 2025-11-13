@@ -18,12 +18,28 @@
 const Database = require("better-sqlite3");
 const path = require("path");
 const fs = require("fs");
+const os = require("os");
 
-// Use unified database path function
-// In production (ASAR), __dirname points to app.asar/socket, so we need to go up to app.asar root
-const appRoot = path.join(__dirname, '..');
-const dbPathModule = path.join(appRoot, 'electron', 'db-path.cjs');
-const { getDatabasePath } = require(dbPathModule);
+/**
+ * Unified database path resolution (inlined to avoid ASAR import issues)
+ * Same logic as electron/db-path.cjs but embedded here
+ */
+function getDatabasePath(isDev = false) {
+  // Allow override via environment variable
+  if (process.env.DB_PATH) {
+    return process.env.DB_PATH;
+  }
+
+  // In development mode, use local db folder for easier debugging
+  if (isDev) {
+    const repoRoot = process.env.APP_ROOT || process.cwd();
+    return path.join(repoRoot, 'db', 'quantbot.db');
+  }
+
+  // In production, use user's home directory
+  const userDataPath = path.join(os.homedir(), '.quantbot');
+  return path.join(userDataPath, 'quantbot.db');
+}
 
 // Determine DB path using unified function
 let dbPath;
