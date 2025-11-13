@@ -51,7 +51,7 @@ const currentPageComponent = computed(() => {
       <AppMenu />
     </el-aside>
     <el-container class="app-right is-vertical">
-      <el-main class="app-content">
+      <el-main class="app-content p-1">
         <component :is="currentPageComponent" v-if="currentPageComponent" />
         <div v-else class="placeholder-content">
           <el-empty description="Страница в разработке" />

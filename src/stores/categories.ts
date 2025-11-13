@@ -188,27 +188,28 @@ export const useCategoriesStore = defineStore("categories", () => {
 
     try {
       // Парсим категории из текста (каждая строка - категория)
-      const lines = categoriesText.split('\n').map(line => line.trim()).filter(Boolean);
+  const lines = categoriesText.split('\n').map(line => line.trim()).filter(Boolean);
       
       for (let i = 0; i < lines.length; i++) {
         const category = lines[i];
-        // Разделяем на имя и цвет (формат: "Название|#цвет")
-        const parts = category.split('|');
-        const name = parts[0].trim();
-        const color = parts[1]?.trim() || '#409EFF'; // Цвет по умолчанию
-        
-        await ipcClient.insertCategory(name, Number(currentProjectId.value), color);
-        
-        // Обновляем прогресс
+  // Берём только имя (цвет удалён)
+  const name = category.split('|')[0].trim();
+
+  const res = await ipcClient.insertCategory(name, Number(currentProjectId.value));
+        if (!res) {
+          throw new Error(`Не удалось добавить категорию: ${name}`);
+        }
+
+        // Обновляем прогресс только после успешной вставки
         const progress = Math.round(((i + 1) / lines.length) * 100);
         setAddProgress(progress, `Обработано ${i + 1} из ${lines.length}`, true);
       }
-      
+
       ElMessage.success(`Добавлено ${lines.length} категорий`);
       await loadCategories(currentProjectId.value as string | number);
     } catch (error: any) {
       console.error("Error adding categories:", error);
-      ElMessage.error(`Ошибка: ${error.message}`);
+      ElMessage.error(`Ошибка: ${error?.message || error}`);
     } finally {
       resetAddProgress();
     }

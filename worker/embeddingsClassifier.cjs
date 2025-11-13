@@ -14,7 +14,12 @@
 const axios = require("axios");
 const fs = require("fs");
 const path = require("path");
-const { embeddingsCacheGet, embeddingsCachePut, updateTypingSampleEmbeddings, upsertTypingModel } = require("../socket/db-sqlite.cjs");
+const {
+  embeddingsCacheGet,
+  embeddingsCachePut,
+  updateTypingSampleEmbeddings,
+  upsertTypingModel,
+} = require("../socket/db-sqlite.cjs");
 
 const OPENAI_EMBED_URL = "https://api.openai.com/v1/embeddings";
 const DEFAULT_MODEL = "text-embedding-3-small";
@@ -50,7 +55,7 @@ async function fetchEmbeddings(texts, opts = {}) {
   for (let i = 0; i < texts.length; i++) {
     const text = texts[i];
     try {
-      const row = await embeddingsCacheGet(text);
+      const row = await embeddingsCacheGet(text, model);
       if (row && Array.isArray(row.embedding) && row.embedding.length) {
         results[i] = row.embedding;
         continue;
@@ -78,7 +83,7 @@ async function fetchEmbeddings(texts, opts = {}) {
       if (Array.isArray(emb) && emb.length) {
         results[idx] = emb;
         try {
-          await embeddingsCachePut(text, emb);
+          await embeddingsCachePut(text, emb, model);
         } catch (_) {
           // ignore cache write errors
         }
@@ -135,6 +140,26 @@ async function trainClassifier(samples, opts = {}) {
     embeddings = await fetchEmbeddings(texts, opts);
   } else {
     embeddings = samples.map((s) => s.embedding);
+  }
+
+  // Validate embeddings: no missing entries and all numbers must be finite
+  for (let i = 0; i < embeddings.length; i++) {
+    const e = embeddings[i];
+    if (!Array.isArray(e) || e.length === 0) {
+      throw new Error(
+        `Missing embedding for sample index ${i} (label=${
+          samples[i] && samples[i].label
+        })`
+      );
+    }
+    for (let j = 0; j < e.length; j++) {
+      const v = e[j];
+      if (typeof v !== "number" || !isFinite(v)) {
+        throw new Error(
+          `Invalid embedding value at sample ${i} dim ${j}: ${String(v)}`
+        );
+      }
+    }
   }
 
   // Build label mapping

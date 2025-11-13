@@ -93,13 +93,17 @@ if (db) {
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
     )`
   ).run();
-  db.prepare("CREATE INDEX IF NOT EXISTS idx_projects_url ON projects(url);").run();
+  db.prepare(
+    "CREATE INDEX IF NOT EXISTS idx_projects_url ON projects(url);"
+  ).run();
 
   // Добавляем колонку queue_size в существующую таблицу, если она еще не существует
   const columns = db.prepare("PRAGMA table_info(projects);").all();
   const hasQueueSize = columns.some((col) => col.name === "queue_size");
   if (!hasQueueSize) {
-    db.prepare("ALTER TABLE projects ADD COLUMN queue_size INTEGER DEFAULT 0;").run();
+    db.prepare(
+      "ALTER TABLE projects ADD COLUMN queue_size INTEGER DEFAULT 0;"
+    ).run();
   }
 
   // Схема таблицы urls (единая коллекция для всех типов с привязкой к проекту)
@@ -127,7 +131,9 @@ if (db) {
         FOREIGN KEY(project_id) REFERENCES projects(id)
       )`
     ).run();
-    db.prepare("CREATE INDEX IF NOT EXISTS idx_urls_project ON urls(project_id);").run();
+    db.prepare(
+      "CREATE INDEX IF NOT EXISTS idx_urls_project ON urls(project_id);"
+    ).run();
     db.prepare(
       "CREATE UNIQUE INDEX IF NOT EXISTS idx_urls_project_url ON urls(project_id, url);"
     ).run();
@@ -179,7 +185,7 @@ if (db) {
     db.prepare(
       "CREATE UNIQUE INDEX IF NOT EXISTS idx_keywords_project_keyword ON keywords(project_id, keyword);"
     ).run();
-    
+
     // Add columns for categorization if they don't exist
     const alterColumns = [
       "ALTER TABLE keywords ADD COLUMN category_id INTEGER;",
@@ -189,10 +195,10 @@ if (db) {
       "ALTER TABLE keywords ADD COLUMN class_similarity REAL;",
       "ALTER TABLE keywords ADD COLUMN cluster_label TEXT;",
       "ALTER TABLE keywords ADD COLUMN target_query INTEGER DEFAULT 1;",
-      "ALTER TABLE keywords ADD COLUMN blocking_rule TEXT;"
+      "ALTER TABLE keywords ADD COLUMN blocking_rule TEXT;",
     ];
-    
-    alterColumns.forEach(sql => {
+
+    alterColumns.forEach((sql) => {
       try {
         db.prepare(sql).run();
       } catch (err) {
@@ -201,7 +207,7 @@ if (db) {
         }
       }
     });
-    
+
     // Indexes for new columns
     db.prepare(
       "CREATE INDEX IF NOT EXISTS idx_keywords_category_id ON keywords(category_id);"
@@ -282,29 +288,34 @@ if (db) {
     db.prepare(
       `CREATE TABLE IF NOT EXISTS embeddings_cache (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        key TEXT UNIQUE NOT NULL,
+        key TEXT NOT NULL,
+        vector_model TEXT,
         embedding BLOB,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP
       )`
     ).run();
     db.prepare(
-      "CREATE INDEX IF NOT EXISTS idx_embeddings_cache_key ON embeddings_cache(key);"
+      "CREATE UNIQUE INDEX IF NOT EXISTS idx_embeddings_cache_key ON embeddings_cache(key, vector_model);"
     ).run();
   } catch (err) {
     console.error("Error creating embeddings_cache table:", err);
   }
-  // Ensure embedding column exists (TEXT, JSON encoded) - safe to run even if column exists
+  // Ensure vector_model column exists for older DBs that lack it
   try {
-    db.prepare("ALTER TABLE typing_samples ADD COLUMN embedding TEXT;").run();
+    db.prepare(
+      "ALTER TABLE embeddings_cache ADD COLUMN vector_model TEXT;"
+    ).run();
   } catch (err) {
-    if (!/duplicate column name/i.test(err.message)) {
-      // Some SQLite versions may report different messages; log unexpected errors
+    // ignore duplicate column errors, warn otherwise
+    if (!/duplicate column name/i.test(String((err && err.message) || err))) {
       console.warn(
-        "Could not add embedding column to typing_samples:",
-        err.message
+        "Could not add vector_model column to embeddings_cache:",
+        err && err.message ? err.message : err
       );
     }
   }
+  // Do not add or rely on embedding column in typing_samples anymore.
+  // Embeddings are stored in `embeddings_cache` (key + vector_model) only.
 
   // typing_embeddings таблица больше не используется: удаляем её, если миграция еще не проведена
   try {
@@ -1171,7 +1182,7 @@ async function getUrlsStats(projectId) {
       lastUpdated: new Date().toISOString(),
     };
   }
-};
+}
 
 // Функция для сохранения ошибок
 const saveError = async (projectId, data, socket) => {
@@ -1362,10 +1373,30 @@ const keywordsFindByProject = async (projectId, options = {}) => {
       }
     }
 
-    // Добавляем поиск по keyword, если указан
-    if (query) {
-      sqlQuery += " AND keyword LIKE ?";
-      params.push(`%${query}%`);
+    // Support special token: target:1|0 or target:true/false
+    let explicitTarget = null;
+    if (typeof query === "string" && query.trim()) {
+      const mq = query.trim();
+      const m = mq.match(/^target:\s*(1|0|true|false|yes|no)$/i);
+      if (m) {
+        const v = m[1].toLowerCase();
+        explicitTarget = v === "1" || v === "true" || v === "yes" ? 1 : 0;
+      }
+    }
+
+    if (explicitTarget !== null) {
+      if (explicitTarget === 1) {
+        sqlQuery += " AND (target_query IS NULL OR target_query = ?)";
+        params.push(1);
+      } else {
+        sqlQuery += " AND target_query = ?";
+        params.push(explicitTarget);
+      }
+    } else if (query) {
+      // Search across multiple text columns: keyword, blocking_rule, category_name, class_name
+      sqlQuery +=
+        " AND (keyword LIKE ? OR blocking_rule LIKE ? OR category_name LIKE ? OR class_name LIKE ?)";
+      params.push(`%${query}%`, `%${query}%`, `%${query}%`, `%${query}%`);
     }
 
     // Добавляем сортировку, если указана
@@ -1420,9 +1451,29 @@ const keywordsCountByProject = async (projectId, query = null) => {
     let sql = "SELECT COUNT(*) as count FROM keywords WHERE project_id = ?";
     let params = [projectId];
 
-    if (query) {
-      sql += " AND keyword LIKE ?";
-      params.push(`%${query}%`);
+    // Support target: token for counts as well
+    let explicitTargetCount = null;
+    if (typeof query === "string" && query.trim()) {
+      const mq = query.trim();
+      const m = mq.match(/^target:\s*(1|0|true|false|yes|no)$/i);
+      if (m) {
+        const v = m[1].toLowerCase();
+        explicitTargetCount = v === "1" || v === "true" || v === "yes" ? 1 : 0;
+      }
+    }
+
+    if (explicitTargetCount !== null) {
+      if (explicitTargetCount === 1) {
+        sql += " AND (target_query IS NULL OR target_query = ?)";
+        params.push(1);
+      } else {
+        sql += " AND target_query = ?";
+        params.push(explicitTargetCount);
+      }
+    } else if (query) {
+      sql +=
+        " AND (keyword LIKE ? OR blocking_rule LIKE ? OR category_name LIKE ? OR class_name LIKE ?)";
+      params.push(`%${query}%`, `%${query}%`, `%${query}%`, `%${query}%`);
     }
 
     const result = await dbGet(sql, params);
@@ -1642,6 +1693,9 @@ const keywordsApplyStopWords = async (projectId) => {
     );
     const stopWords = (stopRows || []).map((r) => r.word).filter(Boolean);
 
+    console.log(
+      `Applying stop-words for project ${projectId}, stopWordsCount=${stopWords.length}`
+    );
     if (stopWords.length === 0) {
       // No stopwords: clear blocking_rule and set all to target_query=1
       const res = await dbRun(
@@ -2204,7 +2258,7 @@ const typingSamplesUpdate = async (id, fields = {}) => {
     }
     if (setParts.length === 0) return false;
     params.push(id);
-       const sql = `UPDATE typing_samples SET ${setParts.join(", ")} WHERE id = ?`;
+    const sql = `UPDATE typing_samples SET ${setParts.join(", ")} WHERE id = ?`;
     const res = await dbRun(sql, params);
     const changes = res && res.changes ? res.changes : 0;
     if (changes > 0 && newLabel !== oldLabel) {
@@ -2237,23 +2291,24 @@ const updateTypingSampleEmbeddings = async (projectId, items, vectorModel) => {
       ? Array.from(it.vector)
       : Array.from(new Float32Array(it.vector));
     if (!vecArray || vecArray.length === 0) continue;
-
-    const payload = {
-      model: vectorModel || null,
-      dim: it.dim || vecArray.length,
-      vector: vecArray,
-      savedAt,
-    };
-
+    // Save embedding to embeddings_cache using the sample text as key.
     try {
-      const res = await dbRun(
-        `UPDATE typing_samples SET embedding = ? WHERE id = ? AND project_id = ?`,
-        [JSON.stringify(payload), it.sample_id, projectId]
+      // Lookup sample text
+      const row = await dbGet(
+        `SELECT text FROM typing_samples WHERE id = ? AND project_id = ? LIMIT 1`,
+        [it.sample_id, projectId]
       );
-      if (res && res.changes) updated += res.changes;
+      const key = row && row.text ? row.text : null;
+      if (!key) continue;
+      const embJson = Buffer.from(JSON.stringify(vecArray));
+      await dbRun(
+        `INSERT OR REPLACE INTO embeddings_cache (key, vector_model, embedding, created_at) VALUES (?, ?, ?, ?)`,
+        [key, vectorModel || null, embJson, new Date().toISOString()]
+      );
+      updated += 1;
     } catch (error) {
       console.error(
-        "Failed to update typing sample embedding:",
+        "Failed to save embedding to embeddings_cache for sample:",
         it.sample_id,
         error
       );
@@ -2310,17 +2365,29 @@ const getTypingModel = async (projectId) => {
 };
 
 // Embeddings cache helpers
-const embeddingsCacheGet = async (key) => {
+// embeddings_cache helpers
+// key: textual key (usually the input text), vectorModel: optional model name (e.g. 'text-embedding-3-small')
+const embeddingsCacheGet = async (key, vectorModel) => {
   try {
-    const row = await dbGet(
-      `SELECT id, key, embedding, created_at FROM embeddings_cache WHERE key = ? LIMIT 1`,
-      [key]
-    );
+    let row;
+    if (typeof vectorModel === "string" && vectorModel.length > 0) {
+      row = await dbGet(
+        `SELECT id, key, vector_model, embedding, created_at FROM embeddings_cache WHERE key = ? AND vector_model = ? LIMIT 1`,
+        [key, vectorModel]
+      );
+    } else {
+      // Backwards-compatible lookup when vectorModel is not provided
+      row = await dbGet(
+        `SELECT id, key, vector_model, embedding, created_at FROM embeddings_cache WHERE key = ? LIMIT 1`,
+        [key]
+      );
+    }
     if (!row) return null;
     try {
       return {
         id: row.id,
         key: row.key,
+        vector_model: row.vector_model,
         embedding: row.embedding ? JSON.parse(row.embedding.toString()) : null,
         created_at: row.created_at,
       };
@@ -2328,6 +2395,7 @@ const embeddingsCacheGet = async (key) => {
       return {
         id: row.id,
         key: row.key,
+        vector_model: row.vector_model,
         embedding: null,
         created_at: row.created_at,
       };
@@ -2338,12 +2406,12 @@ const embeddingsCacheGet = async (key) => {
   }
 };
 
-const embeddingsCachePut = async (key, embedding) => {
+const embeddingsCachePut = async (key, embedding, vectorModel) => {
   try {
     const embJson = embedding ? Buffer.from(JSON.stringify(embedding)) : null;
     await dbRun(
-      `INSERT OR REPLACE INTO embeddings_cache (key, embedding, created_at) VALUES (?, ?, ?)`,
-      [key, embJson, new Date().toISOString()]
+      `INSERT OR REPLACE INTO embeddings_cache (key, vector_model, embedding, created_at) VALUES (?, ?, ?, ?)`,
+      [key, vectorModel || null, embJson, new Date().toISOString()]
     );
     return true;
   } catch (error) {

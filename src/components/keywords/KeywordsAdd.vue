@@ -20,16 +20,29 @@
           :striped-flow="keywordsStore.running"
           :duration="7"
         />
-        <el-button
+        <el-dropdown
           v-if="!keywordsStore.running"
-          class="add-start ml-3"
-          type="primary"
           size="large"
-          :loading="keywordsStore.running"
-          @click="keywordsStore.startCategorization"
+          split-button
+          type="primary"
+          class="ml-3"
+          @click="startAll"
         >
           <el-icon class="text-2xl"><VideoPlay /></el-icon>
-        </el-button>
+          <template #dropdown>
+            <el-dropdown-menu>
+              <el-dropdown-item @click="startTypingOnly">
+                Классификация
+              </el-dropdown-item>
+              <el-dropdown-item @click="startClusteringOnly">
+                Кластеризация
+              </el-dropdown-item>
+              <el-dropdown-item @click="startCategorizationOnly">
+                Категоризация
+              </el-dropdown-item>
+            </el-dropdown-menu>
+          </template>
+        </el-dropdown>
 
         <el-button
           v-if="keywordsStore.running"
@@ -64,7 +77,7 @@
           <!-- Прогресс-бар в левой части -->
           <div
             v-if="keywordsStore.isAddingWithProgress"
-            class="flex items-center gap-3 flex-shrink-0"
+            class="flex items-center gap-3 shrink-0"
           >
             <el-progress
               :text-inside="true"
@@ -135,12 +148,12 @@ function submitSite() {
   if (!validator.isURL(url)) {
     ElMessage.error(t("isNotURL"));
   } else {
-    project.start(url);
+    project.startCrawlerIPC(url);
   }
 }
 
 function freezeQueue() {
-  project.freeze();
+  project.stopCrawlerIPC();
 }
 
 async function addKeywords() {
@@ -186,6 +199,20 @@ function refreshTable() {
   if (keywordsStore.currentProjectId) {
     keywordsStore.loadKeywords(keywordsStore.currentProjectId);
   }
+}
+
+// Запуск процессов из выпадающего меню
+function startAll() {
+  keywordsStore.startAllProcesses();
+}
+function startCategorizationOnly() {
+  keywordsStore.startCategorizationOnly();
+}
+function startTypingOnly() {
+  keywordsStore.startTypingOnly();
+}
+function startClusteringOnly() {
+  keywordsStore.startClusteringOnly();
 }
 
 // TODO: IPC migration - socket listeners removed, using async/await now

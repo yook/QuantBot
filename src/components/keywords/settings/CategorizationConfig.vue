@@ -14,11 +14,11 @@
           <div class="text-sm">
             <div class="mb-2">
               <h3></h3>
-              <strong>Цель:</strong><br />
+              <strong>Цель</strong><br />
               Присвоение каждому запросу той категории, с которой у него
               максимальное семантическое сходство.
               <br /><br />
-              <strong>Описание:</strong><br />
+              <strong>Описание</strong><br />
               Для каждого запроса вычисляется embedding (векторное
               представление) с помощью OpenAI Embeddings. Аналогично, для каждой
               категории формируется embedding (например, embedding названия
@@ -28,7 +28,7 @@
               косинусного сходства.
             </div>
             <div>
-              <strong>Алгоритм:</strong><br />
+              <strong>Алгоритм</strong><br />
               • Для каждого запроса вычислить embedding.<br />
               • Для каждой категории вычислить embedding.<br />
               • Рассчитать косинусное сходство между embedding запроса и
@@ -131,15 +131,11 @@ function startCategorization() {
     ElMessage.error("Проект не выбран");
     return;
   }
-
   if (!categoriesData.value || categoriesData.value.length === 0) {
-    ElMessage.warning(
-      "Нет категорий для категоризации. Сначала добавьте категории."
-    );
+    ElMessage.warning("Нет категорий. Сначала добавьте категории.");
     return;
   }
-
-  keywordsStore.startCategorization();
+  keywordsStore.startCategorizationOnly();
 }
 
 // Регистрация обработчиков при монтировании
@@ -258,13 +254,18 @@ watch(
 import { watch } from "vue";
 
 watch(
-  () => categoriesStore.isAddingWithProgress,
-  (isAdding) => {
-    if (!isAdding && categories.value) {
-      // Если добавление завершено и поле не пустое, очищаем его
+  () => ({
+    running: categoriesStore.isAddingWithProgress,
+    progress: categoriesStore.addProgress,
+  }),
+  (state) => {
+    const { running, progress } = state || {};
+    // Очищаем поле только при успешном завершении (100%)
+    if (!running && progress === 100 && categories.value) {
       categories.value = "";
     }
-  }
+  },
+  { deep: true }
 );
 </script>
 

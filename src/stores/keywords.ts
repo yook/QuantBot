@@ -54,15 +54,62 @@ export const useKeywordsStore = defineStore("keywords", () => {
   const typingPercent = ref(0);
   const clusteringPercent = ref(0);
 
+  // Целевые флаги: какие процессы пользователь намерен запускать (используются для прогресса/сброса)
+  const targetCategorization = ref(false);
+  const targetTyping = ref(false);
+  const targetClustering = ref(false);
+
   function updateOverallProgress() {
-    // Weighted equally: each of the 3 processes contributes 1/3 to overall percentage
-    const parts = [categorizationPercent.value, typingPercent.value, clusteringPercent.value];
-    const sum = parts.reduce((a, b) => a + (isFinite(b) ? b : 0), 0);
-    percentage.value = Math.round(sum / 3);
-    // running if any process is running and not all finished
-    running.value =
-      (categorizationRunning.value || typingRunning.value || clusteringRunning.value) &&
-      !(categorizationFinished.value && typingFinished.value && clusteringFinished.value);
+    // Учитываем только те процессы, которые пользователь запустил (target*)
+    const targets = [
+      targetCategorization.value ? categorizationPercent.value : null,
+      targetTyping.value ? typingPercent.value : null,
+      targetClustering.value ? clusteringPercent.value : null,
+    ].filter((v) => v !== null) as number[];
+
+    if (targets.length === 0) {
+      percentage.value = 0;
+    } else {
+      const sum = targets.reduce((a, b) => a + (isFinite(b) ? b : 0), 0);
+      percentage.value = Math.round(sum / targets.length);
+    }
+
+    const anyRunning =
+      (targetCategorization.value && categorizationRunning.value) ||
+      (targetTyping.value && typingRunning.value) ||
+      (targetClustering.value && clusteringRunning.value);
+
+    const allTargetFinished =
+      (!targetCategorization.value || categorizationFinished.value) &&
+      (!targetTyping.value || typingFinished.value) &&
+      (!targetClustering.value || clusteringFinished.value);
+
+    running.value = anyRunning && !allTargetFinished;
+  }
+
+  // Читаемый текст для ошибки 429 (rate limit / квота)
+  const RATE_LIMIT_MESSAGE = [
+    'Вы превысили лимит запросов/токенов за минуту или другой промежуток времени (rate limit) вашей организации. ',
+    'OpenAI Help Center',
+    '',
+    'У вас закончился доступный квота / баланс / кредит или установлен месячный лимит расхода, который вы достигли. ',
+    'OpenAI Developer Community',
+    '',
+    'Ваш ключ API привязан к организации, у которой либо нет активного платёжного метода, либо ключ создан до перехода на платную версию, или баланс ещё не активирован.'
+  ].join('\n');
+
+  function mapErrorMessage(payload?: any): string {
+    if (!payload) return 'Произошла ошибка';
+    // Support both object payloads and plain strings
+    if (typeof payload === 'object') {
+      if (payload.status === 429) return RATE_LIMIT_MESSAGE;
+      const msg = payload.message || '';
+      if (/429/.test(String(msg)) || /rate limit/i.test(String(msg))) return RATE_LIMIT_MESSAGE;
+      return msg || 'Произошла ошибка';
+    }
+    const msg = String(payload);
+    if (/429/.test(msg) || /rate limit/i.test(msg)) return RATE_LIMIT_MESSAGE;
+    return msg || 'Произошла ошибка';
   }
 
   // Getters
@@ -334,51 +381,146 @@ export const useKeywordsStore = defineStore("keywords", () => {
     });
   }
 
-  // Запуск процесса категоризации через IPC
-  async function startCategorization() {
+  // Вспомогательное: сбросить состояние прогресса/флагов
+  function resetProcessState() {
+    categorizationRunning.value = false;
+    typingRunning.value = false;
+    clusteringRunning.value = false;
+    categorizationFinished.value = false;
+    typingFinished.value = false;
+    clusteringFinished.value = false;
+    categorizationPercent.value = 0;
+    typingPercent.value = 0;
+    clusteringPercent.value = 0;
+    running.value = false;
+    percentage.value = 0;
+    targetCategorization.value = false;
+    targetTyping.value = false;
+    targetClustering.value = false;
+  }
+
+  // Запуск всех процессов последовательно (сохранено для удобства)
+  async function startAllProcesses() {
     if (!currentProjectId.value) {
       ElMessage.error("Проект не выбран");
       return;
     }
-
+    resetProcessState();
+    // Отмечаем цели
+    targetCategorization.value = true;
+    targetTyping.value = true;
+    targetClustering.value = true;
+    running.value = true;
+    updateOverallProgress();
     try {
-      // Сбрасываем состояние процессов
-      categorizationRunning.value = false;
-      typingRunning.value = false;
-      clusteringRunning.value = false;
-      categorizationFinished.value = false;
-      typingFinished.value = false;
-      clusteringFinished.value = false;
-      categorizationPercent.value = 0;
-      typingPercent.value = 0;
-      clusteringPercent.value = 0;
-      running.value = true;
-      percentage.value = 0;
-
-      console.log("[Keywords] Starting categorization, typing, and clustering for project", currentProjectId.value);
-
-      // Получаем параметры кластеризации из настроек проекта
       const epsFromProject = Number((projectStore?.data as any)?.clustering_eps ?? 0.5);
       const algorithm = String((projectStore?.data as any)?.clustering_algorithm ?? "components");
       const dbscanEps = Number((projectStore?.data as any)?.clustering_dbscan_eps ?? 0.3);
       const dbscanMinPts = Number((projectStore?.data as any)?.clustering_dbscan_minPts ?? 2);
 
-      // Запускаем процессы через IPC
       await ipcClient.startCategorization(Number(currentProjectId.value));
+      categorizationRunning.value = true;
+      updateOverallProgress();
+
       await ipcClient.startTyping(Number(currentProjectId.value));
+      typingRunning.value = true;
+      updateOverallProgress();
+
       await ipcClient.startClustering(
         Number(currentProjectId.value),
         algorithm,
         algorithm === "components" ? epsFromProject : dbscanEps,
         algorithm === "dbscan" ? dbscanMinPts : undefined
       );
+      clusteringRunning.value = true;
+      updateOverallProgress();
 
-      ElMessage.success("Процессы категоризации запущены");
+      ElMessage.success("Все процессы запущены");
+    } catch (err: any) {
+      console.error("Error starting processes:", err);
+      ElMessage.error(`Ошибка запуска процессов: ${err.message}`);
+      running.value = anyProcessRunning();
+    }
+  }
+
+  // Запуск только категоризации
+  async function startCategorizationOnly() {
+    if (!currentProjectId.value) {
+      ElMessage.error("Проект не выбран");
+      return;
+    }
+    try {
+      // Сброс и установка цели только для категоризации
+      resetProcessState();
+      targetCategorization.value = true;
+      categorizationRunning.value = true;
+      running.value = true;
+      updateOverallProgress();
+  await ipcClient.startCategorization(Number(currentProjectId.value));
     } catch (err: any) {
       console.error("Error starting categorization:", err);
+      categorizationRunning.value = false;
+      running.value = anyProcessRunning();
       ElMessage.error(`Ошибка запуска категоризации: ${err.message}`);
-      running.value = false;
     }
+  }
+
+  // Запуск только типизации
+  async function startTypingOnly() {
+    if (!currentProjectId.value) {
+      ElMessage.error("Проект не выбран");
+      return;
+    }
+    try {
+      resetProcessState();
+      targetTyping.value = true;
+      typingRunning.value = true;
+      running.value = true;
+      updateOverallProgress();
+  await ipcClient.startTyping(Number(currentProjectId.value));
+    } catch (err: any) {
+  console.error("Error starting typing:", err);
+  typingRunning.value = false;
+  running.value = anyProcessRunning();
+  ElMessage.error(`Ошибка запуска классификации: ${err.message}`);
+    }
+  }
+
+  // Запуск только кластеризации
+  async function startClusteringOnly() {
+    if (!currentProjectId.value) {
+      ElMessage.error("Проект не выбран");
+      return;
+    }
+    try {
+      const epsFromProject = Number((projectStore?.data as any)?.clustering_eps ?? 0.5);
+      const algorithm = String((projectStore?.data as any)?.clustering_algorithm ?? "components");
+      const dbscanEps = Number((projectStore?.data as any)?.clustering_dbscan_eps ?? 0.3);
+      const dbscanMinPts = Number((projectStore?.data as any)?.clustering_dbscan_minPts ?? 2);
+
+      resetProcessState();
+      targetClustering.value = true;
+      clusteringRunning.value = true;
+      running.value = true;
+      updateOverallProgress();
+      await ipcClient.startClustering(
+        Number(currentProjectId.value),
+        algorithm,
+        algorithm === "components" ? epsFromProject : dbscanEps,
+        algorithm === "dbscan" ? dbscanMinPts : undefined
+      );
+    } catch (err: any) {
+      console.error("Error starting clustering:", err);
+      clusteringRunning.value = false;
+      running.value = anyProcessRunning();
+      ElMessage.error(`Ошибка запуска кластеризации: ${err.message}`);
+    }
+  }
+
+  function anyProcessRunning() {
+    return (
+      categorizationRunning.value || typingRunning.value || clusteringRunning.value
+    );
   }
 
   // Очистить все ключевые слова в текущем проекте
@@ -671,19 +813,16 @@ export const useKeywordsStore = defineStore("keywords", () => {
 
   // Проверка завершения всех процессов
   function checkBothProcessesFinished() {
-    if (
-      categorizationFinished.value &&
-      typingFinished.value &&
-      clusteringFinished.value
-    ) {
-      categorizationPercent.value = 100;
-      typingPercent.value = 100;
-      clusteringPercent.value = 100;
-      updateOverallProgress();
+    const allTargetFinished =
+      (!targetCategorization.value || categorizationFinished.value) &&
+      (!targetTyping.value || typingFinished.value) &&
+      (!targetClustering.value || clusteringFinished.value);
+
+    updateOverallProgress();
+
+    if (allTargetFinished) {
       running.value = false;
-      console.log("Все процессы завершены успешно");
-    } else {
-      updateOverallProgress();
+      console.log("Выбранные процессы завершены");
     }
   }
 
@@ -696,7 +835,7 @@ export const useKeywordsStore = defineStore("keywords", () => {
       console.log("data:", data);
       console.log("currentProjectId:", currentProjectId.value);
       console.log("data.projectId:", data.projectId);
-      console.log("Match:", data.projectId === currentProjectId.value);
+  console.log("Match:", String(data.projectId) === String(currentProjectId.value));
       console.log("data.skip:", data.skip);
       console.log(
         "data.keywords.length:",
@@ -709,7 +848,7 @@ export const useKeywordsStore = defineStore("keywords", () => {
         console.log("Timeout cancelled for keywords:list");
       }
 
-      if (data.projectId === currentProjectId.value) {
+  if (String(data.projectId) === String(currentProjectId.value)) {
         // Если пришёл ответ не для последнего запрошенного окна, игнорируем его
         if (
           typeof data.skip === "number" &&
@@ -793,7 +932,7 @@ export const useKeywordsStore = defineStore("keywords", () => {
     });
 
   socket.on("keywords:loaded-more", (data) => {
-      if (data.projectId === currentProjectId.value) {
+  if (String(data.projectId) === String(currentProjectId.value)) {
         // Для окна данных заменяем, а не добавляем
         setKeywords(data.keywords);
         windowStart.value = data.skip;
@@ -807,7 +946,7 @@ export const useKeywordsStore = defineStore("keywords", () => {
     // Receive single-row updates (e.g. from categorization worker)
   socket.on("keywords:updated", (data) => {
       try {
-        if (!data || data.projectId !== currentProjectId.value || !data.keyword)
+        if (!data || String(data.projectId) !== String(currentProjectId.value) || !data.keyword)
           return;
 
         const updated = data.keyword;
@@ -1051,7 +1190,7 @@ export const useKeywordsStore = defineStore("keywords", () => {
     // Categorization events
     ipcClient.on('keywords:categorization-progress', (data: any) => {
       console.log('[Keywords Store] Received categorization-progress:', data);
-      if (data.projectId === currentProjectId.value) {
+      if (String(data.projectId) === String(currentProjectId.value)) {
         categorizationRunning.value = true;
         categorizationPercent.value = Math.max(0, Math.min(100, data.progress || 0));
         checkBothProcessesFinished();
@@ -1060,29 +1199,32 @@ export const useKeywordsStore = defineStore("keywords", () => {
 
     ipcClient.on('keywords:categorization-finished', (data: any) => {
       console.log('[Keywords Store] Received categorization-finished:', data);
-      if (data.projectId === currentProjectId.value) {
+      if (String(data.projectId) === String(currentProjectId.value)) {
         categorizationRunning.value = false;
         categorizationFinished.value = true;
         categorizationPercent.value = 100;
         checkBothProcessesFinished();
-        // Reload keywords to show updated categories
+        // Reload keywords to show updated categories (сохраняем окно и сортировку)
         if (currentProjectId.value) {
-          loadKeywords(currentProjectId.value);
+          loadKeywords(currentProjectId.value as number, {
+            skip: windowStart.value,
+            limit: windowSize.value,
+            sort: sort.value,
+          });
         }
       }
     });
 
     ipcClient.on('keywords:categorization-error', (data: any) => {
-      if (data.projectId === currentProjectId.value) {
+      if (!data || String(data.projectId) !== String(currentProjectId.value)) return;
         categorizationRunning.value = false;
         running.value = false;
-        ElMessage.error(data.message || "Ошибка категоризации");
-      }
+        ElMessage.error(mapErrorMessage(data));
     });
 
     // Typing events
     ipcClient.on('keywords:typing-progress', (data: any) => {
-      if (data.projectId === currentProjectId.value) {
+      if (String(data.projectId) === String(currentProjectId.value)) {
         typingRunning.value = true;
         typingPercent.value = Math.max(0, Math.min(100, data.progress || 0));
         checkBothProcessesFinished();
@@ -1090,25 +1232,32 @@ export const useKeywordsStore = defineStore("keywords", () => {
     });
 
     ipcClient.on('keywords:typing-finished', (data: any) => {
-      if (data.projectId === currentProjectId.value) {
+      if (String(data.projectId) === String(currentProjectId.value)) {
         typingRunning.value = false;
         typingFinished.value = true;
         typingPercent.value = 100;
         checkBothProcessesFinished();
+        // После завершения типизации перезагрузим текущее окно, чтобы гарантированно увидеть class_name
+        if (currentProjectId.value) {
+          loadKeywords(currentProjectId.value as number, {
+            skip: windowStart.value,
+            limit: windowSize.value,
+            sort: sort.value,
+          });
+        }
       }
     });
 
     ipcClient.on('keywords:typing-error', (data: any) => {
-      if (data.projectId === currentProjectId.value) {
+      if (!data || String(data.projectId) !== String(currentProjectId.value)) return;
         typingRunning.value = false;
         running.value = false;
-        ElMessage.error(data.message || "Ошибка типизации");
-      }
+        ElMessage.error(mapErrorMessage(data));
     });
 
     // Clustering events
     ipcClient.on('keywords:clustering-progress', (data: any) => {
-      if (data.projectId === currentProjectId.value) {
+      if (String(data.projectId) === String(currentProjectId.value)) {
         clusteringRunning.value = true;
         clusteringPercent.value = Math.max(0, Math.min(100, data.progress || 0));
         checkBothProcessesFinished();
@@ -1116,19 +1265,41 @@ export const useKeywordsStore = defineStore("keywords", () => {
     });
 
     ipcClient.on('keywords:clustering-finished', (data: any) => {
-      if (data.projectId === currentProjectId.value) {
+      if (String(data.projectId) === String(currentProjectId.value)) {
         clusteringRunning.value = false;
         clusteringFinished.value = true;
         clusteringPercent.value = 100;
         checkBothProcessesFinished();
+        // Перезагружаем окно, чтобы отобразить изменения кластеров
+        if (currentProjectId.value) {
+          loadKeywords(currentProjectId.value as number, {
+            skip: windowStart.value,
+            limit: windowSize.value,
+            sort: sort.value,
+          });
+        }
       }
     });
 
     ipcClient.on('keywords:clustering-error', (data: any) => {
-      if (data.projectId === currentProjectId.value) {
+      if (String(data.projectId) === String(currentProjectId.value)) {
         clusteringRunning.value = false;
         running.value = false;
         ElMessage.error(data.message || "Ошибка кластеризации");
+      }
+    });
+
+    // Единичные обновления строк (категоризация/типизация/кластеризация) — приходят по мере работы воркеров
+    ipcClient.on('keywords:updated', (data: any) => {
+      try {
+        if (!data || String(data.projectId) !== String(currentProjectId.value) || !data.keyword) return;
+        const updated: any = data.keyword;
+        const idx = keywords.value.findIndex((k) => (k as any).id == updated.id);
+        if (idx !== -1) {
+          keywords.value[idx] = { ...keywords.value[idx], ...updated } as any;
+        }
+      } catch (e) {
+        console.error('[Keywords Store] Error handling IPC keywords:updated', e);
       }
     });
   }
@@ -1177,7 +1348,11 @@ export const useKeywordsStore = defineStore("keywords", () => {
     // saveKeywords, // TODO: IPC migration
     resetAddProgress,
     sortKeywords,
-    startCategorization, // Stub - shows warning message
+  // Запуски процессов
+  startAllProcesses,
+  startCategorizationOnly,
+  startTypingOnly,
+  startClusteringOnly,
     // New actions/flags
     // startCategorization, // TODO: IPC migration
     // Background process flags

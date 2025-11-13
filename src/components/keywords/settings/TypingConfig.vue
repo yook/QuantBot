@@ -590,7 +590,7 @@ export default defineComponent({
       });
     }
 
-    function addSamples() {
+    async function addSamples() {
       if (!project.currentProjectId) {
         ElMessage.error(t("select_project") || "Выберите проект");
         return;
@@ -637,12 +637,14 @@ export default defineComponent({
         return;
       }
       const parsed = [{ label, text }];
-      typingStore.addSamples(project.currentProjectId, parsed);
-      setTimeout(() => {
-        sampleLabel.value = "";
-        sampleText.value = "";
-        input.value = [];
-      }, 300);
+      const ok = await typingStore.addSamples(project.currentProjectId, parsed);
+      if (ok) {
+        setTimeout(() => {
+          sampleLabel.value = "";
+          sampleText.value = "";
+          input.value = [];
+        }, 300);
+      }
     }
 
     function clearAll() {

@@ -94,13 +94,13 @@ class IPCClient {
     return result.success ? result.data : [];
   }
 
-  async insertCategory(name: string, projectId: number, color: string) {
-    const result = await this.ipc.invoke('db:categories:insert', name, projectId, color);
+  async insertCategory(name: string, projectId: number) {
+    const result = await this.ipc.invoke('db:categories:insert', name, projectId);
     return result.success ? result.data : null;
   }
 
-  async updateCategory(name: string, color: string, id: number) {
-    const result = await this.ipc.invoke('db:categories:update', name, color, id);
+  async updateCategory(name: string, id: number) {
+    const result = await this.ipc.invoke('db:categories:update', name, id);
     return result.success ? result.data : null;
   }
 
@@ -191,7 +191,26 @@ class IPCClient {
   async getUrlsSorted(options: SortedRequestOptions) {
     // Serialize options to plain object to avoid IPC cloning errors
     const plainOptions = JSON.parse(JSON.stringify(options));
+    console.log('🔌 [IPC Client] getUrlsSorted sending to Electron:', plainOptions);
     const result = await this.ipc.invoke('db:urls:getSorted', plainOptions);
+    console.log('🔌 [IPC Client] getUrlsSorted response:', {
+      success: result.success,
+      dataLength: result.data?.length || 0,
+      db: plainOptions.db,
+    });
+    return result.success ? result.data : [];
+  }
+
+  async getAllUrlsForExport(options: SortedRequestOptions) {
+    // Export-specific method that doesn't interfere with UI state
+    const plainOptions = JSON.parse(JSON.stringify(options));
+    console.log('📤 [IPC Client] getAllUrlsForExport sending to Electron:', plainOptions);
+    const result = await this.ipc.invoke('db:urls:getAllForExport', plainOptions);
+    console.log('📤 [IPC Client] getAllUrlsForExport response:', {
+      success: result.success,
+      dataLength: result.data?.length || 0,
+      db: plainOptions.db,
+    });
     return result.success ? result.data : [];
   }
 
@@ -288,7 +307,55 @@ export const socket: IpcSocket = {
     ipcClient.once(channel, cb);
   },
   emit(_eventName: string, ..._args: any[]) {
-    console.warn('[IPC Socket] emit() is deprecated - use ipcClient methods directly');
+    const eventName = _eventName;
+    const arg0 = _args[0] || {};
+    try {
+      switch (eventName) {
+        case 'integrations:get':
+          ipcClient['ipc']?.invoke('integrations:get', arg0.projectId ?? null, arg0.service);
+          break;
+        case 'integrations:setKey':
+          ipcClient['ipc']?.invoke('integrations:setKey', arg0.projectId ?? null, arg0.service, arg0.key);
+          break;
+        case 'integrations:delete':
+          ipcClient['ipc']?.invoke('integrations:delete', arg0.projectId ?? null, arg0.service);
+          break;
+        case 'get-embeddings-cache-size':
+          try {
+            ipcClient['ipc']?.invoke('embeddings:getCacheSize').then((res: any) => {
+              const payload = res && res.success ? (res.data || { size: 0 }) : { size: 0 };
+              // Trigger local renderer listeners via ipcRenderer.emit
+              ipcClient['ipc']?.emit('embeddings-cache-size', null, payload);
+            }).catch((e: any) => {
+              console.error('[IPC Socket] embeddings:getCacheSize invoke error:', e?.message || e);
+              ipcClient['ipc']?.emit('embeddings-cache-size', null, { size: 0 });
+            });
+          } catch (e: any) {
+            console.error('[IPC Socket] embeddings:getCacheSize error:', e?.message || e);
+            ipcClient['ipc']?.emit('embeddings-cache-size', null, { size: 0 });
+          }
+          break;
+        case 'clear-embeddings-cache':
+          try {
+            ipcClient['ipc']?.invoke('embeddings:clearCache').then(() => {
+              ipcClient['ipc']?.emit('embeddings-cache-cleared', null, {});
+              ipcClient['ipc']?.invoke('embeddings:getCacheSize').then((res2: any) => {
+                const payload = res2 && res2.success ? (res2.data || { size: 0 }) : { size: 0 };
+                ipcClient['ipc']?.emit('embeddings-cache-size', null, payload);
+              });
+            }).catch((e: any) => {
+              console.error('[IPC Socket] embeddings:clearCache invoke error:', e?.message || e);
+            });
+          } catch (e: any) {
+            console.error('[IPC Socket] embeddings:clearCache error:', e?.message || e);
+          }
+          break;
+        default:
+          console.warn('[IPC Socket] emit deprecated / unsupported event:', eventName);
+      }
+    } catch (e: any) {
+      console.error('[IPC Socket] emit mapping error', eventName, e?.message || e);
+    }
   },
   connect() {
     // no-op

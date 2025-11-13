@@ -52,6 +52,9 @@ const messages = {
       find: 'Find',
       new: 'New',
     },
+    table: {
+      date: 'Date'
+    },
     crawler: {
       isNotURL: 'Invalid URL',
       start: 'Start',
@@ -194,6 +197,9 @@ const messages = {
       find: 'Найти',
       new: 'Новый',
     },
+    table: {
+      date: 'Дата'
+    },
     crawler: {
       isNotURL: 'Некорректный URL',
       start: 'Старт',
@@ -279,9 +285,9 @@ const messages = {
       ban: 'Запрещено',
       contentType: 'Тип контента',
       code: 'Код ответа HTTP',
-      200: 'Успешные 2XX',
-      301: 'Редиректы 3XX',
-      error: 'Ошибки 4XX-5XX',
+      200: '2XX',
+      301: '3XX',
+      error: '4XX-5XX',
       depth: 'Уровень вложенности',
       '6more': '6 и больше',
     },

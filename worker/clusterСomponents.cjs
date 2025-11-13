@@ -408,7 +408,17 @@ if (require.main === module) {
     }
 
     console.error(`[clustering worker] Generated ${clusters.length} clusters`);
-    for (const c of clusters) process.stdout.write(JSON.stringify(c) + "\n");
+    // Emit compact per-item assignments only (no vectors in stdout)
+    let clusterIdx = 1;
+    for (const c of clusters) {
+      const items = Array.isArray(c.items) ? c.items : [];
+      for (const it of items) {
+        if (!it || typeof it.id === "undefined" || it.id === null) continue;
+        const line = { id: it.id, cluster: clusterIdx };
+        process.stdout.write(JSON.stringify(line) + "\n");
+      }
+      clusterIdx++;
+    }
   } catch (e) {
     console.error(e && e.message ? e.message : String(e));
     process.exit(1);

@@ -21,6 +21,12 @@ const path = require("path");
 async function attachEmbeddingsToKeywords(keywords, opts = {}) {
   const chunkSize = opts.chunkSize || 50;
   const fetchOptions = opts.fetchOptions || {};
+  // Determine vector model to use for cache lookups/writes. If not provided in
+  // fetchOptions, fall back to env EMBEDDING_MODEL or the known default.
+  const modelUsed =
+    fetchOptions.model ||
+    process.env.EMBEDDING_MODEL ||
+    "text-embedding-3-small";
 
   if (!Array.isArray(keywords) || keywords.length === 0) {
     return { total: 0, embedded: 0, fetched: 0 };
@@ -32,6 +38,7 @@ async function attachEmbeddingsToKeywords(keywords, opts = {}) {
     const kw = keywords[i];
     const text = typeof kw.keyword === "string" ? kw.keyword.trim() : "";
     keywords[i].embedding = null;
+    keywords[i].embeddingSource = "unknown";
     if (!text) continue;
     if (!textToIndices.has(text)) textToIndices.set(text, []);
     textToIndices.get(text).push(i);
@@ -41,7 +48,7 @@ async function attachEmbeddingsToKeywords(keywords, opts = {}) {
 
   for (const [text, indices] of textToIndices.entries()) {
     try {
-      const cached = await db.embeddingsCacheGet(text);
+      const cached = await db.embeddingsCacheGet(text, modelUsed);
       if (
         cached &&
         Array.isArray(cached.embedding) &&
@@ -49,6 +56,7 @@ async function attachEmbeddingsToKeywords(keywords, opts = {}) {
       ) {
         for (const idx of indices) {
           keywords[idx].embedding = cached.embedding;
+          keywords[idx].embeddingSource = "cache";
         }
         continue;
       }
@@ -62,7 +70,10 @@ async function attachEmbeddingsToKeywords(keywords, opts = {}) {
 
   for (let start = 0; start < toFetch.length; start += chunkSize) {
     const chunk = toFetch.slice(start, start + chunkSize);
-    const vectors = await fetchEmbeddings(chunk, fetchOptions);
+    const vectors = await fetchEmbeddings(
+      chunk,
+      Object.assign({}, fetchOptions, { model: modelUsed })
+    );
     for (let i = 0; i < chunk.length; i++) {
       const vec = vectors[i];
       const text = chunk[i];
@@ -71,9 +82,10 @@ async function attachEmbeddingsToKeywords(keywords, opts = {}) {
         const idxs = textToIndices.get(text) || [];
         for (const idx of idxs) {
           keywords[idx].embedding = vec;
+          keywords[idx].embeddingSource = "openai";
         }
         try {
-          await db.embeddingsCachePut(text, vec);
+          await db.embeddingsCachePut(text, vec, modelUsed);
         } catch (e) {
           // ignore cache write errors
         }

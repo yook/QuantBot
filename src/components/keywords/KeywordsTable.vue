@@ -122,9 +122,9 @@ const allColumns = [
   { prop: "keyword", name: "Ключевой запрос", width: 400, disabled: true },
   { prop: "target_query", name: "Целевой запрос", width: 100 },
   { prop: "blocking_rule", name: "Правило исключения", width: 240 },
-  { prop: "created_at", name: "Created", width: 180 },
+  { prop: "created_at", name: t("table.date"), width: 180 },
   { prop: "category_info", name: "Категория", width: 240 },
-  { prop: "class_info", name: "Тип", width: 240 },
+  { prop: "class_info", name: "Класс", width: 240 },
   { prop: "cluster_label", name: "Кластер", width: 150 },
   { prop: "_actions", name: "Actions", width: 50 },
 ];

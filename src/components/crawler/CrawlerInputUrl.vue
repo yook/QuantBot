@@ -80,12 +80,12 @@ function submitSite() {
   if (!validator.isURL(url)) {
     ElMessage.error(t("crawler.isNotURL"));
   } else {
-    project.start(url);
+    project.startCrawlerIPC(url);
   }
 }
 
 function freezeQueue() {
-  project.freeze();
+  project.stopCrawlerIPC();
 }
 </script>
 

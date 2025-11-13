@@ -37,11 +37,12 @@ export const useTypingStore = defineStore("typing", () => {
   }
 
   async function addSamples(projectId: string | number, parsedSamples: any[]) {
-    if (!projectId || !Array.isArray(parsedSamples)) return;
+    if (!projectId || !Array.isArray(parsedSamples)) return false;
     currentProjectId.value = projectId;
     
-    // Normalize each sample: lowercase phrases, deduplicate
-    const norm = [];
+    // Normalize each sample: split by comma/newline, lowercase, dedupe
+    // Then insert each distinct part as its own typing sample (one sample per row).
+    const entriesToInsert: Array<{ label: string; text: string }> = [];
     for (const s of parsedSamples) {
       if (!s || !s.label || !s.text) continue;
       const label = String(s.label).trim();
@@ -52,12 +53,14 @@ export const useTypingStore = defineStore("typing", () => {
         .filter(Boolean);
       const unique = Array.from(new Set(parts));
       if (unique.length === 0) continue;
-      norm.push({ label, text: unique.join(", ") });
+      for (const part of unique) {
+        entriesToInsert.push({ label, text: part });
+      }
     }
-    if (norm.length === 0) return;
-    
+    if (entriesToInsert.length === 0) return false;
+
     try {
-      for (const sample of norm) {
+      for (const sample of entriesToInsert) {
         await ipcClient.insertTyping(
           Number(projectId),
           sample.label,
@@ -66,8 +69,10 @@ export const useTypingStore = defineStore("typing", () => {
         );
       }
       await loadSamples(projectId);
+      return true;
     } catch (error) {
       console.error("Error adding typing samples:", error);
+      return false;
     }
   }
 

@@ -35,7 +35,15 @@
     "descriptionLength",
     "linksLength"
   ],
-  "disallow": ["url", "referrer", "depth", "protocol", "errorType"],
+  "disallow": [
+    "url",
+    "error_type",
+    "referrer",
+    "depth",
+    "protocol",
+    "error_message",
+    "created_at"
+  ],
   "redirect": [
     "url",
     "referrer",

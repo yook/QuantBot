@@ -23,30 +23,67 @@ export interface ExportRequest {
 export async function downloadDataFromProject(req: ExportRequest) {
   const { projectId, currentDb, header, allColumns } = req;
 
-  // Fetch full dataset via IPC based on currentDb
+  // Fetch full dataset via dedicated export IPC
   const pid = projectId ? Number(projectId) : undefined;
   if (!pid) throw new Error("Invalid projectId");
 
   let data: any[] = [];
-  if (currentDb === "urls") {
-    data = (await ipcClient.getUrlsAll(pid)) || [];
-  } else if (currentDb === "keywords") {
-    data = (await ipcClient.getKeywordsAll(pid)) || [];
-  } else {
-    // Fallback: try urls
-    data = (await ipcClient.getUrlsAll(pid)) || [];
+  
+  console.log('[Export] Fetching data for:', { currentDb, projectId: pid });
+  
+  // Use dedicated export method that doesn't interfere with UI state
+  try {
+    data = await ipcClient.getAllUrlsForExport({
+      id: pid,
+      db: currentDb,
+      sort: { id: 1 },
+      skip: 0,
+      limit: 0, // Not used by export handler, but kept for interface compatibility
+    });
+  } catch (err) {
+    console.error('[Export] Error fetching data:', err);
+    throw new Error(`Failed to fetch data for ${currentDb}: ${err}`);
   }
 
   if (!Array.isArray(data) || data.length === 0) {
     throw new Error("No data received for export");
   }
 
+  console.log('[Export] Received rows:', data.length);
+
   const filterCol = allColumns.filter((item: ColumnDef) => header.includes(item.prop));
+  
+  console.log('[Export] Processing columns:', {
+    headerProvided: header,
+    headerLength: header.length,
+    filterColLength: filterCol.length,
+    allColumnsLength: allColumns.length,
+  });
+
+  // If no header is provided, use all available columns from the first row
+  let effectiveHeader = header;
+  if (!header || header.length === 0) {
+    if (data.length > 0) {
+      effectiveHeader = Object.keys(data[0]);
+      console.log('[Export] No header provided, using all columns from data:', effectiveHeader);
+    } else {
+      console.error('[Export] No header and no data - cannot export');
+      throw new Error("No columns configured for export");
+    }
+  }
 
   const headerData: Record<string, string> = {};
-  filterCol.forEach((item: ColumnDef) => {
-    headerData[item.prop] = item.name;
-  });
+  if (filterCol.length > 0) {
+    filterCol.forEach((item: ColumnDef) => {
+      headerData[item.prop] = item.name;
+    });
+  } else {
+    // Use column names as headers if no column definitions found
+    effectiveHeader.forEach((prop: string) => {
+      const colDef = allColumns.find((c: ColumnDef) => c.prop === prop);
+      headerData[prop] = colDef?.name || prop;
+    });
+  }
 
   const book = XLSX.utils.book_new();
 
@@ -54,14 +91,18 @@ export async function downloadDataFromProject(req: ExportRequest) {
 
   const newArr = arr
     .map((el: Record<string, any>) => {
+      // Format date fields
       if (el.date) {
         el.date = moment(el.date).format("YYYY-MM-DD HH:mm:ss");
+      }
+      if (el.created_at) {
+        el.created_at = moment(el.created_at).format("YYYY-MM-DD HH:mm:ss");
       }
       return el;
     })
     .map((el: Record<string, any>) => {
       const obj: Record<string, any> = {};
-      header.forEach((item: string) => {
+      effectiveHeader.forEach((item: string) => {
         obj[item] = el[item];
       });
       return obj;
@@ -70,7 +111,7 @@ export async function downloadDataFromProject(req: ExportRequest) {
   newArr.unshift(headerData);
 
   const wd = XLSX.utils.json_to_sheet(newArr, {
-    header: header,
+    header: effectiveHeader,
     skipHeader: true,
   });
   XLSX.utils.book_append_sheet(book, wd, currentDb);
@@ -102,6 +143,15 @@ export async function exportCrawlerData(): Promise<boolean> {
   const header = (project.data.columns && project.data.columns[project.currentDb])
     ? project.data.columns[project.currentDb]
     : [];
+  
+  console.log('[Export] exportCrawlerData called:', {
+    currentDb: project.currentDb,
+    header: header,
+    headerLength: header.length,
+    allColumnsLength: project.allColumns.length,
+    tableDataLength: project.tableDataLength,
+  });
+  
   try {
     await downloadDataFromProject({
       projectId: project.data.id as number | string | undefined,
@@ -157,7 +207,7 @@ export function downloadKeywords(exportColumns: any[]) {
           width: 140,
         });
       } else if (c.prop === "class_info") {
-        cols.push({ prop: "class_name", name: "Тип", width: 240 });
+  cols.push({ prop: "class_name", name: "Класс", width: 240 });
         cols.push({
           prop: "class_similarity",
           name: "Достоверность типа",

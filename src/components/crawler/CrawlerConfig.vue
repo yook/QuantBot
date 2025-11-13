@@ -215,7 +215,7 @@
 </template>
 
 <script setup>
-import { ref, onDeactivated } from "vue";
+import { ref, watch, onUnmounted } from "vue";
 import { useProjectStore } from "../../stores/project";
 import { QuestionFilled } from "@element-plus/icons-vue";
 import { useI18n } from "vue-i18n";
@@ -231,8 +231,25 @@ const project = useProjectStore();
 //   }
 // );.
 
-onDeactivated(() => {
-  console.log(`x is onUnmounted`);
+// Автосохранение настроек краулера при любых изменениях (debounce)
+let saveTimer = null;
+watch(
+  () => project.data.crawler,
+  () => {
+    if (saveTimer) clearTimeout(saveTimer);
+    saveTimer = setTimeout(() => {
+      project.updateProject();
+    }, 300);
+  },
+  { deep: true }
+);
+
+// Гарантируем сохранение при закрытии диалога/размонтировании компонента
+onUnmounted(() => {
+  if (saveTimer) {
+    clearTimeout(saveTimer);
+    saveTimer = null;
+  }
   project.updateProject();
 });
 
@@ -241,7 +258,7 @@ onDeactivated(() => {
 // });
 
 const saveData = (currentValue) => {
-  console.log("save", currentValue);
+  console.log("[CrawlerConfig] save trigger", currentValue);
   project.updateProject();
 };
 </script>

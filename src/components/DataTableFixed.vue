@@ -2206,12 +2206,12 @@ html.dark .custom-table tbody tr.even-row {
 /* Стили для наведения с увеличенной специфичностью */
 .custom-table tbody tr.odd-row:hover,
 .custom-table tbody tr.even-row:hover {
-  background: #f0f0f0 !important; /* light hover */
+  background: #f0f0f0 !important; /* light theme hover restored */
 }
 
 html.dark .custom-table tbody tr.odd-row:hover,
 html.dark .custom-table tbody tr.even-row:hover {
-  background: var(--el-fill-color-darker) !important;
+  background: #2d3748 !important; /* dark theme hover */
 }
 
 /* Ховер для фиксированной колонки */
@@ -2277,50 +2277,26 @@ html.dark .custom-table tbody tr.even-row:hover {
 
 /* Дополнительные стили для четных и нечетных строк с фиксированным столбцом */
 .custom-table tbody tr.odd-row .fixed-column {
-  background-color: var(--el-bg-color) !important;
+  /* Фиксированная колонка использует тот же фон, что и строка */
+  background-color: inherit !important;
   border-right: 1px solid var(--el-border-color);
-  backdrop-filter: none !important;
-  opacity: 1 !important;
-  /* Дополнительные свойства для полной непрозрачности */
-  -webkit-backdrop-filter: none !important;
-  background-blend-mode: normal !important;
-  mix-blend-mode: normal !important;
 }
 
 .custom-table tbody tr.even-row .fixed-column {
-  background-color: #f7f7f7 !important; /* Непрозрачный серый цвет вместо rgba */
+  /* Тот же фон, что и строка */
+  background-color: inherit !important;
   border-right: 1px solid var(--el-border-color);
-  backdrop-filter: none !important;
-  opacity: 1 !important;
-  /* Дополнительные свойства для полной непрозрачности */
-  -webkit-backdrop-filter: none !important;
-  background-blend-mode: normal !important;
-  mix-blend-mode: normal !important;
 }
 
 /* Темная тема для фиксированного столбца */
 html.dark .custom-table tbody tr.odd-row .fixed-column {
-  background-color: var(--el-bg-color) !important;
+  background-color: inherit !important;
   border-right: 1px solid var(--el-border-color-darker);
-  backdrop-filter: none !important;
-  opacity: 1 !important;
-  z-index: 10 !important; /* z-index для темной темы */
-  /* Дополнительные свойства для полной непрозрачности */
-  -webkit-backdrop-filter: none !important;
-  background-blend-mode: normal !important;
-  mix-blend-mode: normal !important;
 }
 
 html.dark .custom-table tbody tr.even-row .fixed-column {
-  background-color: #1e1e1e !important; /* Непрозрачный темно-серый цвет вместо rgba */
+  background-color: inherit !important;
   border-right: 1px solid var(--el-border-color-darker);
-  backdrop-filter: none !important;
-  opacity: 1 !important;
-  z-index: 10 !important; /* z-index для темной темы */
-  /* Дополнительные свойства для полной непрозрачности */
-  -webkit-backdrop-filter: none !important;
-  background-blend-mode: normal !important;
-  mix-blend-mode: normal !important;
 }
 
 /* Стили для фиксированного заголовка */
@@ -2460,23 +2436,12 @@ html.dark .row-number-cell {
 
 /* Стили для ховера с фиксированным столбцом */
 .custom-table tbody tr:hover .fixed-column {
-  background: #f0f0f0 !important; /* Непрозрачный серый цвет, синхронизирован с основным hover */
-  z-index: 10 !important; /* Поддерживаем высокий z-index при ховере */
-  /* Дополнительные свойства для полной непрозрачности */
-  backdrop-filter: none !important;
-  -webkit-backdrop-filter: none !important;
-  background-blend-mode: normal !important;
-  mix-blend-mode: normal !important;
+  /* Hover наследует фон строки */
+  background: inherit !important;
 }
 
 html.dark .custom-table tbody tr:hover .fixed-column {
-  background: #2b2b2b !important; /* Непрозрачный темно-серый цвет, синхронизирован с основным hover */
-  z-index: 10 !important; /* Поддерживаем высокий z-index при ховере */
-  /* Дополнительные свойства для полной непрозрачности */
-  backdrop-filter: none !important;
-  -webkit-backdrop-filter: none !important;
-  background-blend-mode: normal !important;
-  mix-blend-mode: normal !important;
+  background: inherit !important;
 }
 
 .cell-content {

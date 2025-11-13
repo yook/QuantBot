@@ -1,72 +1,6 @@
 <template>
   <div class="m-10">
-    <div class="py-2 items-center flex" v-for="item in parser" :key="item.prop">
-      <div class="w-40 mr-2">
-        {{ item.name }}
-      </div>
-      <div class="w-96 mr-2">
-        <el-input
-          disabled
-          placeholder="Selector: tag, id, class"
-          v-model="item.selector"
-          class="w-2"
-        >
-          <template #append>
-            <el-select
-              v-model="item.find"
-              placeholder="Select"
-              style="width: 115px"
-            >
-              <el-option label="Restaurant" value="1" />
-            </el-select>
-          </template>
-        </el-input>
-        <el-input disabled placeholder="Select" v-model="item.find" class="w-2">
-        </el-input>
-
-        <el-select
-          :disabled="true"
-          v-model="item.find"
-          placeholder="Select"
-          style="width: 115px"
-        >
-          <el-option value="text" label="text" />
-          <el-option value="attr" label="attr" />
-          <el-option value="hasClass" label="hasClass" />
-          <el-option value="quantity" label="quantity" />
-        </el-select>
-      </div>
-      <div class="mr-2" v-if="item.find === 'hasClass'">
-        <el-input
-          disabled
-          placeholder="class-name"
-          v-model="item.attrClass"
-          class="el-input-select"
-        />
-      </div>
-      <div class="mr-2" v-if="item.find === 'attr'">
-        <el-input
-          disabled
-          placeholder="attr"
-          v-model="item.attrClass"
-          class="el-input-select"
-        />
-      </div>
-      <div class="mr-2" v-if="item.find !== 'quantity'">
-        <el-checkbox
-          disabled
-          v-model="item.getLength"
-          label="Length"
-          border
-        ></el-checkbox>
-      </div>
-      <div class="flex-1 text-right">
-        <el-button type="primary" size="small" link @click="deleteCol(item)">
-          <el-icon><close /></el-icon>
-        </el-button>
-      </div>
-    </div>
-
+    <!-- Удалена дублирующая ручная верстка parser элементов; оставлена только таблица ниже -->
     <el-table
       :data="project.data.parser"
       table-layout="auto"
@@ -165,7 +99,7 @@
 
 <script setup>
 import { ref, reactive, inject } from "vue";
-import { Delete } from "@element-plus/icons-vue";
+import { Delete, Close } from "@element-plus/icons-vue";
 import { useProjectStore } from "../../stores/project";
 
 const project = useProjectStore();
