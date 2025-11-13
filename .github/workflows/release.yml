@@ -3,11 +3,6 @@ name: 🪟 Build and Release QuantBot (Windows)
 on:
   release:
     types: [published]
-  # Allow CI to run when an annotated tag (e.g. v1.0.39) is pushed.
-  # This makes `git tag -a v1.0.39 -m "..." && git push origin v1.0.39` trigger the workflow.
-  push:
-    tags:
-      - "v*"
 
 permissions:
   contents: write # нужно для загрузки файлов в релиз
