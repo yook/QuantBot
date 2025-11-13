@@ -7,7 +7,7 @@ on:
   # This makes `git tag -a v1.0.39 -m "..." && git push origin v1.0.39` trigger the workflow.
   push:
     tags:
-      - 'v*'
+      - "v*"
 
 permissions:
   contents: write # нужно для загрузки файлов в релиз
@@ -27,13 +27,27 @@ jobs:
         with:
           node-version: "22.x"
 
-      # 2.1️⃣ Устанавливаем версию из Git-тега
+      # 2.1️⃣ Устанавливаем версию из Git-тега (только если package.json отличается)
       - name: 🔖 Set version from Git tag
         run: |
           $tagName = "${{ github.ref_name }}"
           $version = $tagName.Substring(1) # Удаляем префикс "v"
-          Write-Host "Updating package.json version to $version"
-          npm version $version --no-git-tag-version
+          Write-Host "Tag name: $tagName -> target version: $version"
+
+          # Читаем текущий package.json и сравниваем версию
+          try {
+            $pkg = Get-Content -Raw -Path package.json | ConvertFrom-Json
+          } catch {
+            Write-Error "Не удалось прочитать package.json: $_"
+            exit 1
+          }
+
+          if ($pkg.version -eq $version) {
+            Write-Host "package.json already has version $version — skipping npm version"
+          } else {
+            Write-Host "Updating package.json version to $version"
+            npm version $version --no-git-tag-version
+          }
         shell: pwsh
 
       # 3️⃣ Кешируем node_modules, чтобы ускорить установку зависимостей
