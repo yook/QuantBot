@@ -667,10 +667,15 @@ function registerIpcHandlers() {
         // Use the socket DB helper which contains keywordsApplyStopWords implementation
         // require relative to project root
         // eslint-disable-next-line @typescript-eslint/no-var-requires
-        const socketDb = require(path.join(__dirname, '..', 'socket', 'db-sqlite.cjs'));
+        const socketDbPath = path.join(process.env.APP_ROOT || __dirname, 'socket', 'db-sqlite.cjs');
+        console.log('[Main IPC] Loading socket db-sqlite from:', socketDbPath);
+        const socketDb = require(socketDbPath);
         if (socketDb && typeof socketDb.keywordsApplyStopWords === 'function') {
           console.log('[Main IPC] Applying stop-words after insertBulk for project', projectId);
           await socketDb.keywordsApplyStopWords(projectId);
+          console.log('[Main IPC] Stop-words applied successfully after insertBulk');
+        } else {
+          console.warn('[Main IPC] keywordsApplyStopWords function not found in socket db-sqlite');
         }
       } catch (e) {
         console.error('[Main IPC] Error applying stop-words after insertBulk:', e);
@@ -860,9 +865,15 @@ function registerIpcHandlers() {
       // Apply stop-words rules to keywords after modification
       try {
         // eslint-disable-next-line @typescript-eslint/no-var-requires
-        const socketDb = require(path.join(__dirname, '..', 'socket', 'db-sqlite.cjs'));
+        const socketDbPath = path.join(process.env.APP_ROOT || __dirname, 'socket', 'db-sqlite.cjs');
+        console.log('[Main IPC] Loading socket db-sqlite from:', socketDbPath);
+        const socketDb = require(socketDbPath);
         if (socketDb && typeof socketDb.keywordsApplyStopWords === 'function') {
+          console.log('[Main IPC] Applying stop-words for project:', projectId);
           await socketDb.keywordsApplyStopWords(projectId);
+          console.log('[Main IPC] Stop-words applied successfully');
+        } else {
+          console.warn('[Main IPC] keywordsApplyStopWords function not found in socket db-sqlite');
         }
       } catch (e) {
         console.error('[Main IPC] Error applying stop-words after insert:', e);
@@ -886,9 +897,15 @@ function registerIpcHandlers() {
       if (projectId) {
         try {
           // eslint-disable-next-line @typescript-eslint/no-var-requires
-          const socketDb = require(path.join(__dirname, '..', 'socket', 'db-sqlite.cjs'));
+          const socketDbPath = path.join(process.env.APP_ROOT || __dirname, 'socket', 'db-sqlite.cjs');
+          console.log('[Main IPC] Loading socket db-sqlite from:', socketDbPath);
+          const socketDb = require(socketDbPath);
           if (socketDb && typeof socketDb.keywordsApplyStopWords === 'function') {
+            console.log('[Main IPC] Re-applying stop-words after deletion for project:', projectId);
             await socketDb.keywordsApplyStopWords(projectId);
+            console.log('[Main IPC] Stop-words re-applied successfully');
+          } else {
+            console.warn('[Main IPC] keywordsApplyStopWords function not found in socket db-sqlite');
           }
         } catch (e) {
           console.error('[Main IPC] Error applying stop-words after delete:', e);
@@ -904,6 +921,24 @@ function registerIpcHandlers() {
   ipcMain.handle('db:stopwords:deleteByProject', async (_event, projectId) => {
     try {
       const result = db!.prepare('DELETE FROM stop_words WHERE project_id = ?').run(projectId);
+      
+      // Re-apply stop-words rules (will reset all to target_query=1 since no stopwords left)
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        const socketDbPath = path.join(process.env.APP_ROOT || __dirname, 'socket', 'db-sqlite.cjs');
+        console.log('[Main IPC] Loading socket db-sqlite from:', socketDbPath);
+        const socketDb = require(socketDbPath);
+        if (socketDb && typeof socketDb.keywordsApplyStopWords === 'function') {
+          console.log('[Main IPC] Re-applying stop-words after deleteByProject for project:', projectId);
+          await socketDb.keywordsApplyStopWords(projectId);
+          console.log('[Main IPC] Stop-words re-applied successfully (all reset to target_query=1)');
+        } else {
+          console.warn('[Main IPC] keywordsApplyStopWords function not found in socket db-sqlite');
+        }
+      } catch (e) {
+        console.error('[Main IPC] Error applying stop-words after deleteByProject:', e);
+      }
+      
       return { success: true, data: result };
     } catch (error: any) {
       return { success: false, error: error.message };

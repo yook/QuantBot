@@ -251,7 +251,7 @@ async function addStopWords() {
 
     // Перезагружаем данные keywords, чтобы обновились колонки "Целевой запрос" и "Правило исключения"
     if (keywordsStore.currentProjectId) {
-      console.log('[StopWords] Reloading keywords after stopwords added');
+      console.log("[StopWords] Reloading keywords after stopwords added");
       await keywordsStore.loadKeywords(keywordsStore.currentProjectId, {
         skip: 0,
         limit: keywordsStore.windowSize,
@@ -288,7 +288,7 @@ async function removeRow(row) {
 
     // Перезагружаем данные keywords, чтобы обновились колонки "Целевой запрос" и "Правило исключения"
     if (keywordsStore.currentProjectId) {
-      console.log('[StopWords] Reloading keywords after stopword deleted');
+      console.log("[StopWords] Reloading keywords after stopword deleted");
       await keywordsStore.loadKeywords(keywordsStore.currentProjectId, {
         skip: 0,
         limit: keywordsStore.windowSize,
@@ -323,7 +323,7 @@ async function deleteAll() {
 
     // Перезагружаем данные keywords, чтобы обновились колонки "Целевой запрос" и "Правило исключения"
     if (keywordsStore.currentProjectId) {
-      console.log('[StopWords] Reloading keywords after all stopwords deleted');
+      console.log("[StopWords] Reloading keywords after all stopwords deleted");
       await keywordsStore.loadKeywords(keywordsStore.currentProjectId, {
         skip: 0,
         limit: keywordsStore.windowSize,
