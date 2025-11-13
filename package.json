@@ -4,7 +4,7 @@
   "description": "QuantBot — инструмент для краулинга и анализа сайтов",
   "author": "Yook",
   "private": true,
-  "version": "1.0.49",
+  "version": "1.0.50",
   "type": "module",
   "scripts": {
     "dev": "vite",
