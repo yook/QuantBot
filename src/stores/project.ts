@@ -276,16 +276,32 @@ export const useProjectStore = defineStore("project", {
       const projectData = await ipcClient.getProject(Number(id));
       if (projectData) {
         Object.assign(this.data, projectData);
-        if (!this.data.stats) this.data.stats = (newProjectJson as NewProjectFile).stats;
-        if (!this.data.columns) this.data.columns = {};
-        // Ensure parser is an array
-        if (!Array.isArray((this.data as any).parser)) {
-          (this.data as any).parser = (newProjectJson as NewProjectFile).parser || [];
+        
+        // Ensure stats exists
+        if (!this.data.stats) {
+          this.data.stats = (newProjectJson as NewProjectFile).stats;
         }
-        // Ensure crawler config exists
+        
+        // Ensure columns exists
+        if (!this.data.columns) {
+          this.data.columns = {};
+        }
+        
+        // Deep merge crawler config with defaults (preserve loaded values, add missing defaults)
         if (!this.data.crawler || typeof this.data.crawler !== 'object') {
           this.data.crawler = (newProjectJson as NewProjectFile).crawler;
+        } else {
+          this.data.crawler = { 
+            ...(newProjectJson as NewProjectFile).crawler, 
+            ...this.data.crawler 
+          };
         }
+        
+        // Ensure parser is an array with defaults if empty
+        if (!Array.isArray((this.data as any).parser) || (this.data as any).parser.length === 0) {
+          (this.data as any).parser = (newProjectJson as NewProjectFile).parser || [];
+        }
+        
         this.getsortedDb({ id: this.data.id as number | string, sort: this.sort, skip: 0, limit: 50, db: this.currentDb });
       }
       this.tableLoading = false;

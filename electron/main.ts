@@ -8,6 +8,7 @@ import Database from "better-sqlite3";
 import keytar from "keytar";
 import { createRequire } from 'module';
 const require = createRequire(import.meta.url);
+import newProjectDefaults from "../src/stores/schema/new-project.json" assert { type: "json" };
 
 // Автообновление
 import { autoUpdater } from "electron-updater";
@@ -411,12 +412,23 @@ function registerIpcHandlers() {
         }
         return fallback;
       };
+      
+      // Deep merge crawler config with defaults (preserve DB values, fill missing with defaults)
+      const crawlerFromDb = parseJson(row.crawler, {});
+      const crawler = { ...newProjectDefaults.crawler, ...crawlerFromDb };
+      
+      // Parser: use DB value if exists, otherwise defaults
+      const parserFromDb = parseJson(row.parser, []);
+      const parser = Array.isArray(parserFromDb) && parserFromDb.length > 0 
+        ? parserFromDb 
+        : newProjectDefaults.parser;
+      
       const data = {
         ...row,
-        crawler: parseJson(row.crawler, {}),
-        parser: parseJson(row.parser, []),
-        columns: parseJson(row.ui_columns, {}),
-        stats: parseJson(row.stats, null),
+        crawler,
+        parser,
+        columns: parseJson(row.ui_columns, newProjectDefaults.columns || {}),
+        stats: parseJson(row.stats, newProjectDefaults.stats || null),
       };
       return { success: true, data };
     } catch (error: any) {
@@ -427,7 +439,15 @@ function registerIpcHandlers() {
   ipcMain.handle('db:projects:insert', async (_event, name, url) => {
     try {
       console.log('[IPC] db:projects:insert payload:', { name, url });
-      const result = db!.prepare('INSERT INTO projects (name, url) VALUES (?, ?)').run(name, url);
+      // Инициализируем crawler и parser значениями по умолчанию из new-project.json
+      const defaultCrawler = JSON.stringify(newProjectDefaults.crawler || {});
+      const defaultParser = JSON.stringify(newProjectDefaults.parser || []);
+      const defaultStats = JSON.stringify(newProjectDefaults.stats || {});
+      const defaultColumns = JSON.stringify(newProjectDefaults.columns || {});
+      
+      const result = db!.prepare(
+        'INSERT INTO projects (name, url, crawler, parser, stats, ui_columns) VALUES (?, ?, ?, ?, ?, ?)'
+      ).run(name, url, defaultCrawler, defaultParser, defaultStats, defaultColumns);
       console.log('[IPC] db:projects:insert result:', result);
       return { success: true, data: result };
     } catch (error: any) {
