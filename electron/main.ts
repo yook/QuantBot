@@ -858,9 +858,20 @@ function registerIpcHandlers() {
 
   ipcMain.handle('db:stopwords:insert', async (_event, projectId, word) => {
     try {
-      const result = db!.prepare(
+      console.log('[Main IPC] db:stopwords:insert called with projectId:', projectId, 'word:', word);
+      console.log('[Main IPC] db instance:', db ? 'exists' : 'NULL');
+      
+      if (!db) {
+        console.error('[Main IPC] Database not initialized!');
+        return { success: false, error: 'Database not initialized' };
+      }
+      
+      const result = db.prepare(
         'INSERT OR IGNORE INTO stop_words (project_id, word) VALUES (?, ?)'
       ).run(projectId, word);
+      
+      console.log('[Main IPC] Insert result:', result);
+      console.log('[Main IPC] Changes:', result.changes, 'LastInsertRowid:', result.lastInsertRowid);
 
       // Apply stop-words rules to keywords after modification
       try {
@@ -880,6 +891,7 @@ function registerIpcHandlers() {
       }
       return { success: true, data: result };
     } catch (error: any) {
+      console.error('[Main IPC] db:stopwords:insert error:', error);
       return { success: false, error: error.message };
     }
   });

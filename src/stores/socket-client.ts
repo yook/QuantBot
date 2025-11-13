@@ -140,8 +140,14 @@ class IPCClient {
   }
 
   async insertStopword(projectId: number, word: string) {
+    console.log('[IPC Client] insertStopword called with projectId:', projectId, 'word:', word);
     const result = await this.ipc.invoke('db:stopwords:insert', projectId, word);
-    return result.success ? result.data : null;
+    console.log('[IPC Client] insertStopword result:', result);
+    if (!result.success) {
+      console.error('[IPC Client] insertStopword failed:', result.error);
+      throw new Error(result.error || 'Failed to insert stopword');
+    }
+    return result.data;
   }
 
   async deleteStopword(id: number) {
