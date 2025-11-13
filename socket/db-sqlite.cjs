@@ -33,12 +33,12 @@ function getDatabasePath(isDev = false) {
   // In development mode, use local db folder for easier debugging
   if (isDev) {
     const repoRoot = process.env.APP_ROOT || process.cwd();
-    return path.join(repoRoot, 'db', 'quantbot.db');
+    return path.join(repoRoot, "db", "quantbot.db");
   }
 
   // In production, use user's home directory
-  const userDataPath = path.join(os.homedir(), '.quantbot');
-  return path.join(userDataPath, 'quantbot.db');
+  const userDataPath = path.join(os.homedir(), ".quantbot");
+  return path.join(userDataPath, "quantbot.db");
 }
 
 // Determine DB path using unified function
