@@ -9,6 +9,7 @@ import keytar from "keytar";
 import { createRequire } from 'module';
 const require = createRequire(import.meta.url);
 import newProjectDefaults from "../src/stores/schema/new-project.json" assert { type: "json" };
+import { getDatabasePath } from "./db-path.js";
 
 // Автообновление
 import { autoUpdater } from "electron-updater";
@@ -69,18 +70,9 @@ function isRateLimitError(err: any): boolean {
 // ===== Database Initialization =====
 function initializeDatabase() {
   try {
-    // Determine DB path
-    let dbPath = process.env.DB_PATH;
-    if (!dbPath) {
-      // In dev (Vite dev server) keep DB inside the project for easier debugging
-      if (VITE_DEV_SERVER_URL) {
-        const repoRoot = process.env.APP_ROOT || __dirname;
-        dbPath = path.join(repoRoot, "db", "projects.db");
-      } else {
-        const userDataPath = path.join(os.homedir(), ".quantbot");
-        dbPath = path.join(userDataPath, "quantbot.db");
-      }
-    }
+    // Use unified database path function
+    const isDev = !!VITE_DEV_SERVER_URL;
+    const dbPath = getDatabasePath(isDev);
 
     // Ensure directory exists
     const dbDir = path.dirname(dbPath);
@@ -93,6 +85,7 @@ function initializeDatabase() {
   
   // Set QUANTBOT_DB_DIR for socket/db-sqlite.cjs module to use the same DB
   process.env.QUANTBOT_DB_DIR = path.dirname(dbPath);
+  process.env.DB_PATH = dbPath; // Also set DB_PATH for consistency
 
     // Also write the DB path into a small log file next to the database for quick inspection
     try {
@@ -1882,9 +1875,15 @@ app.whenReady().then(() => {
     return;
   }
 
-  // Проверка обновлений и уведомление пользователя
-  console.log('[Main] Checking for updates...');
-  autoUpdater.checkForUpdatesAndNotify();
+  // Проверка обновлений и уведомление пользователя (только для production releases)
+  if (process.env.NODE_ENV === 'production' && !process.env.VITE_DEV_SERVER_URL) {
+    console.log('[Main] Checking for updates...');
+    autoUpdater.checkForUpdatesAndNotify().catch(err => {
+      console.error('[Main] Auto-update check failed:', err.message);
+    });
+  } else {
+    console.log('[Main] Skipping auto-update check in development mode');
+  }
 }).catch((error) => {
   console.error('[Main] Fatal error in app.whenReady:', error);
   console.error('[Main] Stack:', error.stack);
