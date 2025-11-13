@@ -2,8 +2,8 @@
  * Unified database path resolution for all modules (CommonJS version)
  * Ensures main process, workers, and socket helpers use the same DB file
  */
-const path = require('path');
-const os = require('os');
+const path = require("path");
+const os = require("os");
 
 /**
  * Get the database file path
@@ -24,12 +24,12 @@ function getDatabasePath(isDev = false) {
   // In development mode, use local db folder for easier debugging
   if (isDevMode) {
     const repoRoot = process.env.APP_ROOT || process.cwd();
-    return path.join(repoRoot, 'db', 'quantbot.db');
+    return path.join(repoRoot, "db", "quantbot.db");
   }
 
   // In production, use user's home directory
-  const userDataPath = path.join(os.homedir(), '.quantbot');
-  return path.join(userDataPath, 'quantbot.db');
+  const userDataPath = path.join(os.homedir(), ".quantbot");
+  return path.join(userDataPath, "quantbot.db");
 }
 
 /**

@@ -604,6 +604,19 @@ function registerIpcHandlers() {
       const result = db!.prepare(
         'INSERT INTO keywords (keyword, project_id, category_id, disabled) VALUES (?, ?, ?, ?)'
       ).run(keyword, projectId, categoryId, disabled);
+      
+      // Apply stop-words rules after inserting new keyword
+      try {
+        const socketDbPath = path.join(process.env.APP_ROOT || __dirname, 'socket', 'db-sqlite.cjs');
+        const socketDb = require(socketDbPath);
+        if (socketDb && typeof socketDb.keywordsApplyStopWords === 'function') {
+          console.log('[Main IPC] Applying stop-words after keyword insert for project', projectId);
+          await socketDb.keywordsApplyStopWords(projectId);
+        }
+      } catch (e) {
+        console.error('[Main IPC] Error applying stop-words after keyword insert:', e);
+      }
+      
       return { success: true, data: result };
     } catch (error: any) {
       return { success: false, error: error.message };

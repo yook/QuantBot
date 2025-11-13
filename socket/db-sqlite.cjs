@@ -20,14 +20,19 @@ const path = require("path");
 const fs = require("fs");
 
 // Use unified database path function
-const { getDatabasePath } = require("../electron/db-path.cjs");
+// In production (ASAR), __dirname points to app.asar/socket, so we need to go up to app.asar root
+const appRoot = path.join(__dirname, '..');
+const dbPathModule = path.join(appRoot, 'electron', 'db-path.cjs');
+const { getDatabasePath } = require(dbPathModule);
 
 // Determine DB path using unified function
 let dbPath;
 if (process.env.DB_PATH) {
   dbPath = process.env.DB_PATH;
 } else {
-  const isDev = !!(process.env.VITE_DEV_SERVER_URL || process.env.NODE_ENV === "development");
+  const isDev = !!(
+    process.env.VITE_DEV_SERVER_URL || process.env.NODE_ENV === "development"
+  );
   dbPath = getDatabasePath(isDev);
 }
 
@@ -38,7 +43,10 @@ fs.mkdirSync(dbDir, { recursive: true });
 console.log("[socket/db-sqlite] Using dbDir:", dbDir);
 console.log("[socket/db-sqlite] Using dbPath:", dbPath);
 console.log("[socket/db-sqlite] process.env.DB_PATH:", process.env.DB_PATH);
-console.log("[socket/db-sqlite] process.env.QUANTBOT_DB_DIR:", process.env.QUANTBOT_DB_DIR);
+console.log(
+  "[socket/db-sqlite] process.env.QUANTBOT_DB_DIR:",
+  process.env.QUANTBOT_DB_DIR
+);
 
 // Open database connection (single, minimal)
 let db;
@@ -1485,6 +1493,20 @@ const keywordsInsert = async (projectId, keyword, createdAt = null) => {
     }
 
     const result = await dbRun(query, params);
+
+    // Apply stop-words rules after insertion if keyword was added
+    if (result.lastID) {
+      try {
+        await keywordsApplyStopWords(projectId);
+      } catch (applyError) {
+        console.error(
+          "Ошибка при применении стоп-слов после вставки:",
+          applyError
+        );
+        // Don't fail the insertion if stop-words application fails
+      }
+    }
+
     return result.lastID;
   } catch (error) {
     console.error("Ошибка при добавлении ключевого слова:", error);
@@ -1633,6 +1655,22 @@ const keywordsInsertBatch = async (
     console.log(
       `✅ Атомарная вставка завершена: ${successCount}/${filteredKeywords.length} ключевых слов добавлено`
     );
+
+    // Apply stop-words rules to all keywords after successful insertion
+    if (successCount > 0) {
+      console.log(
+        `🔄 Применяем стоп-слова к ${successCount} новым ключевым словам для проекта ${projectId}`
+      );
+      try {
+        const applyResult = await keywordsApplyStopWords(projectId);
+        console.log(
+          `✅ Стоп-слова применены: ${applyResult.updated} ключевых слов обновлено`
+        );
+      } catch (applyError) {
+        console.error("❌ Ошибка при применении стоп-слов:", applyError);
+        // Don't fail the whole operation if stop-words application fails
+      }
+    }
 
     return {
       success: true,
