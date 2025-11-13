@@ -138,8 +138,10 @@ import { Delete, InfoFilled } from "@element-plus/icons-vue";
 import DataTableFixed from "../../DataTableFixed.vue";
 import ipcClient from "../../../stores/socket-client";
 import { useProjectStore } from "../../../stores/project";
+import { useKeywordsStore } from "../../../stores/keywords";
 
 const project = useProjectStore();
+const keywordsStore = useKeywordsStore();
 
 const stopWordsText = ref("");
 const stopWords = ref([]);
@@ -246,6 +248,16 @@ async function addStopWords() {
     ElMessage.success(`Добавлено ${added} стоп-слов`);
     stopWordsText.value = "";
     await loadData();
+
+    // Перезагружаем данные keywords, чтобы обновились колонки "Целевой запрос" и "Правило исключения"
+    if (keywordsStore.currentProjectId) {
+      console.log('[StopWords] Reloading keywords after stopwords added');
+      await keywordsStore.loadKeywords(keywordsStore.currentProjectId, {
+        skip: 0,
+        limit: keywordsStore.windowSize,
+        sort: keywordsStore.sort,
+      });
+    }
   } catch (error) {
     console.error("Error adding stopwords:", error);
     ElMessage.error("Ошибка добавления стоп-слов");
@@ -273,6 +285,16 @@ async function removeRow(row) {
     await ipcClient.deleteStopword(row.id);
     ElMessage.success("Стоп-слово удалено");
     await loadData();
+
+    // Перезагружаем данные keywords, чтобы обновились колонки "Целевой запрос" и "Правило исключения"
+    if (keywordsStore.currentProjectId) {
+      console.log('[StopWords] Reloading keywords after stopword deleted');
+      await keywordsStore.loadKeywords(keywordsStore.currentProjectId, {
+        skip: 0,
+        limit: keywordsStore.windowSize,
+        sort: keywordsStore.sort,
+      });
+    }
   } catch (error) {
     if (error !== "cancel") {
       console.error("Error deleting stopword:", error);
@@ -298,6 +320,16 @@ async function deleteAll() {
     await ipcClient.deleteStopwordsByProject(currentProjectId.value);
     ElMessage.success("Все стоп-слова удалены");
     await loadData();
+
+    // Перезагружаем данные keywords, чтобы обновились колонки "Целевой запрос" и "Правило исключения"
+    if (keywordsStore.currentProjectId) {
+      console.log('[StopWords] Reloading keywords after all stopwords deleted');
+      await keywordsStore.loadKeywords(keywordsStore.currentProjectId, {
+        skip: 0,
+        limit: keywordsStore.windowSize,
+        sort: keywordsStore.sort,
+      });
+    }
   } catch (error) {
     if (error !== "cancel") {
       console.error("Error deleting all stopwords:", error);

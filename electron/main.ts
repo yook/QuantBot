@@ -875,22 +875,26 @@ function registerIpcHandlers() {
 
   ipcMain.handle('db:stopwords:delete', async (_event, id) => {
     try {
+      // Get project_id BEFORE deletion
+      const row: any = db!.prepare('SELECT project_id FROM stop_words WHERE id = ?').get(id);
+      const projectId = row ? row.project_id : null;
+      
+      // Now delete the stop word
       const result = db!.prepare('DELETE FROM stop_words WHERE id = ?').run(id);
-      // After deletion, determine projectId to re-apply rules
-      try {
-        const row: any = db!.prepare('SELECT project_id FROM stop_words WHERE id = ?').get(id);
-        const projectId = row ? row.project_id : null;
-        // If we couldn't get projectId from deleted row, best-effort: reapply for all projects is expensive; skip
-        if (projectId) {
+      
+      // Re-apply stop-words rules after deletion
+      if (projectId) {
+        try {
           // eslint-disable-next-line @typescript-eslint/no-var-requires
           const socketDb = require(path.join(__dirname, '..', 'socket', 'db-sqlite.cjs'));
           if (socketDb && typeof socketDb.keywordsApplyStopWords === 'function') {
             await socketDb.keywordsApplyStopWords(projectId);
           }
+        } catch (e) {
+          console.error('[Main IPC] Error applying stop-words after delete:', e);
         }
-      } catch (e) {
-        console.error('[Main IPC] Error applying stop-words after delete:', e);
       }
+      
       return { success: true, data: result };
     } catch (error: any) {
       return { success: false, error: error.message };
