@@ -60,7 +60,7 @@ import { Delete } from "@element-plus/icons-vue";
 import { ElMessageBox, ElMessage } from "element-plus";
 import { useI18n } from "vue-i18n";
 import { useProjectStore } from "../../stores/project";
-import socket from "../../stores/socket-client";
+import { socket } from "../../stores/socket-client";
 
 const { t } = useI18n();
 const project = useProjectStore();

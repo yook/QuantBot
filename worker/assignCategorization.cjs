@@ -21,7 +21,7 @@ const path = require("path");
 const {
   embeddingsCacheGet,
   embeddingsCachePut,
-} = require("../socket/db-sqlite.cjs");
+} = require("../electron/db/index.cjs");
 const OPENAI_EMBED_URL = "https://api.openai.com/v1/embeddings";
 const MODEL = "text-embedding-3-small";
 
@@ -78,7 +78,7 @@ async function fetchEmbeddings(texts) {
   // Check cache for each text
   for (let i = 0; i < texts.length; i++) {
     const text = texts[i];
-    const cached = await embeddingsCacheGet(text);
+    const cached = await embeddingsCacheGet(text, MODEL);
     if (cached && cached.embedding) {
       results[i] = cached.embedding;
     } else {
@@ -122,7 +122,7 @@ async function fetchEmbeddings(texts) {
           const index = toFetchIndices[j];
           results[index] = embedding;
           // Save to cache
-          await embeddingsCachePut(text, embedding);
+          await embeddingsCachePut(text, embedding, MODEL);
         }
       }
     } catch (err) {
@@ -221,6 +221,7 @@ async function main() {
       bestCategoryId: bestCat ? bestCat.id : null,
       bestCategoryName: bestCat ? bestCat.category_name : null,
       similarity: bestSim,
+      embeddingSource: kw.embeddingSource || "unknown",
     });
   }
 

@@ -1,5 +1,5 @@
-import * as xlsx from "xlsx";
-import socket from "./socket-client";
+import * as XLSX from "xlsx";
+import ipcClient from "./socket-client";
 import { toRaw } from "vue";
 import { useProjectStore } from "./project";
 import moment from "moment";
@@ -23,75 +23,102 @@ export interface ExportRequest {
 export async function downloadDataFromProject(req: ExportRequest) {
   const { projectId, currentDb, header, allColumns } = req;
 
-  return new Promise<void>((resolve, reject) => {
-    try {
-      const fields: Record<string, number> = {};
-      header.forEach((element: string) => {
-        if (element !== "_rowNumber") {
-          fields[element] = 1;
-        }
-      });
+  // Fetch full dataset via dedicated export IPC
+  const pid = projectId ? Number(projectId) : undefined;
+  if (!pid) throw new Error("Invalid projectId");
 
-      const requestData = {
-        id: projectId,
-        db: currentDb,
-        fields: fields,
-      };
+  let data: any[] = [];
+  
+  console.log('[Export] Fetching data for:', { currentDb, projectId: pid });
+  
+  // Use dedicated export method that doesn't interfere with UI state
+  try {
+    data = await ipcClient.getAllUrlsForExport({
+      id: pid,
+      db: currentDb,
+      sort: { id: 1 },
+      skip: 0,
+      limit: 0, // Not used by export handler, but kept for interface compatibility
+    });
+  } catch (err) {
+    console.error('[Export] Error fetching data:', err);
+    throw new Error(`Failed to fetch data for ${currentDb}: ${err}`);
+  }
 
-      socket.emit("get-all-data", requestData);
+  if (!Array.isArray(data) || data.length === 0) {
+    throw new Error("No data received for export");
+  }
 
-        socket.once("urls-all-data", (data: any[]) => {
-        if (!data || !Array.isArray(data) || data.length === 0) {
-          reject(new Error("No data received for export"));
-          return;
-        }
+  console.log('[Export] Received rows:', data.length);
 
-        const filterCol = allColumns.filter((item: ColumnDef) => {
-          return header.includes(item.prop);
-        });
-
-        const headerData: Record<string, string> = {};
-        filterCol.forEach((item: ColumnDef) => {
-          headerData[item.prop] = item.name;
-        });
-
-        const book = xlsx.utils.book_new();
-
-        const arr = data.slice();
-
-        const newArr = arr
-          .map((el: Record<string, any>) => {
-            if (el.date) {
-              el.date = moment(el.date).format("YYYY-MM-DD HH:mm:ss");
-            }
-            return el;
-          })
-          .map((el: Record<string, any>) => {
-            const obj: Record<string, any> = {};
-            header.forEach((item: string) => {
-              obj[item] = el[item];
-            });
-            return obj;
-          });
-
-        newArr.unshift(headerData);
-
-        const wd = xlsx.utils.json_to_sheet(newArr, {
-          header: header,
-          skipHeader: true,
-        });
-        xlsx.utils.book_append_sheet(book, wd, currentDb);
-
-        const fileName = `${currentDb}-report.xlsx`;
-        xlsx.writeFile(book, fileName);
-        console.log('[Export] Saved file:', fileName);
-
-        resolve();
-      });
-    } catch (err) {
-      reject(err);
-    }
+  const filterCol = allColumns.filter((item: ColumnDef) => header.includes(item.prop));
+  
+  console.log('[Export] Processing columns:', {
+    headerProvided: header,
+    headerLength: header.length,
+    filterColLength: filterCol.length,
+    allColumnsLength: allColumns.length,
   });
+
+  // If no header is provided, use all available columns from the first row
+  let effectiveHeader = header;
+  if (!header || header.length === 0) {
+    if (data.length > 0) {
+      effectiveHeader = Object.keys(data[0]);
+      console.log('[Export] No header provided, using all columns from data:', effectiveHeader);
+    } else {
+      console.error('[Export] No header and no data - cannot export');
+      throw new Error("No columns configured for export");
+    }
+  }
+
+  const headerData: Record<string, string> = {};
+  if (filterCol.length > 0) {
+    filterCol.forEach((item: ColumnDef) => {
+      headerData[item.prop] = item.name;
+    });
+  } else {
+    // Use column names as headers if no column definitions found
+    effectiveHeader.forEach((prop: string) => {
+      const colDef = allColumns.find((c: ColumnDef) => c.prop === prop);
+      headerData[prop] = colDef?.name || prop;
+    });
+  }
+
+  const book = XLSX.utils.book_new();
+
+  const arr = data.slice();
+
+  const newArr = arr
+    .map((el: Record<string, any>) => {
+      // Format date fields
+      if (el.date) {
+        el.date = moment(el.date).format("YYYY-MM-DD HH:mm:ss");
+      }
+      if (el.created_at) {
+        el.created_at = moment(el.created_at).format("YYYY-MM-DD HH:mm:ss");
+      }
+      return el;
+    })
+    .map((el: Record<string, any>) => {
+      const obj: Record<string, any> = {};
+      effectiveHeader.forEach((item: string) => {
+        obj[item] = el[item];
+      });
+      return obj;
+    });
+
+  newArr.unshift(headerData);
+
+  const wd = XLSX.utils.json_to_sheet(newArr, {
+    header: effectiveHeader,
+    skipHeader: true,
+  });
+  XLSX.utils.book_append_sheet(book, wd, currentDb);
+
+  const fileName = `${currentDb}-report.xlsx`;
+  XLSX.writeFile(book, fileName);
+  console.log('[Export] Saved file:', fileName);
 }
 
 // Convenience wrapper: export current DB table using project store state
@@ -116,6 +143,15 @@ export async function exportCrawlerData(): Promise<boolean> {
   const header = (project.data.columns && project.data.columns[project.currentDb])
     ? project.data.columns[project.currentDb]
     : [];
+  
+  console.log('[Export] exportCrawlerData called:', {
+    currentDb: project.currentDb,
+    header: header,
+    headerLength: header.length,
+    allColumnsLength: project.allColumns.length,
+    tableDataLength: project.tableDataLength,
+  });
+  
   try {
     await downloadDataFromProject({
       projectId: project.data.id as number | string | undefined,
@@ -142,11 +178,15 @@ export function downloadKeywords(exportColumns: any[]) {
     return;
   }
 
-  // Request all keywords from backend with full fields
-  socket.emit("keywords:export", { projectId: project.currentProjectId });
-
-  socket.once("keywords:export-data", (data: any) => {
-    if (!data || !data.keywords || data.keywords.length === 0) {
+  (async () => {
+    const pid = project.currentProjectId ? Number(project.currentProjectId) : undefined;
+    if (!pid) {
+      console.warn("Invalid project id");
+      return;
+    }
+    const keywordsData = await ipcClient.getKeywordsAll(pid);
+    const data = { keywords: keywordsData || [] } as any;
+    if (!data.keywords || data.keywords.length === 0) {
       console.warn("No keywords data received");
       return;
     }
@@ -167,7 +207,7 @@ export function downloadKeywords(exportColumns: any[]) {
           width: 140,
         });
       } else if (c.prop === "class_info") {
-        cols.push({ prop: "class_name", name: "Тип", width: 240 });
+  cols.push({ prop: "class_name", name: "Класс", width: 240 });
         cols.push({
           prop: "class_similarity",
           name: "Достоверность типа",
@@ -206,9 +246,9 @@ export function downloadKeywords(exportColumns: any[]) {
     });
 
     // Create workbook and worksheet
-    const wb = xlsx.utils.book_new();
-    const ws = xlsx.utils.json_to_sheet(exportData);
-    xlsx.utils.book_append_sheet(wb, ws, "Keywords");
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.json_to_sheet(exportData);
+    XLSX.utils.book_append_sheet(wb, ws, "Keywords");
 
     // Save file
     const date = new Date().toISOString().split("T")[0];
@@ -216,8 +256,8 @@ export function downloadKeywords(exportColumns: any[]) {
     const filename = `${projectName}-keywords-${date}.xlsx`;
 
     // Use SheetJS writeFile to trigger download (browser) / write file (electron)
-    xlsx.writeFile(wb, filename);
+    XLSX.writeFile(wb, filename);
     console.log('[Export] Saved keywords file:', filename);
-  });
+  })().catch((e) => console.error('[Export] keywords export error:', e));
 }
 

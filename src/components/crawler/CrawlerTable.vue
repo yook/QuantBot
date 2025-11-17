@@ -87,7 +87,7 @@
             label: 'name',
             disabled: 'disabled',
           }"
-          :data="project.allColumns"
+          :data="transferData"
         />
       </div>
 
@@ -111,6 +111,7 @@ import { exportCrawlerData } from "../../stores/export";
 import { ElMessage } from "element-plus";
 import DataTableFixed from "../DataTableFixed.vue";
 import { Grid, Download } from "@element-plus/icons-vue";
+import activeColumnsJson from "../../stores/schema/table-active-colums.json";
 
 const { t } = useI18n();
 
@@ -144,7 +145,7 @@ const loadWindow = (newWindowStart) => {
       id: project.data.id,
       sort: project.sort,
       skip: newWindowStart,
-      limit: 0,
+      limit: 300, // load a windowed chunk instead of all rows
       db: project.currentDb,
     });
   } catch (e) {
@@ -157,11 +158,12 @@ const sortData = (options) => {
     // Сохраняем текущую сортировку в store в числовом формате (совместно с DataTableFixed)
     project.sort = options;
 
+    // Request a paged result instead of full dataset to keep UI responsive
     project.getsortedDb({
       id: project.data.id,
       sort: options,
       skip: 0,
-      limit: 0,
+      limit: 300,
       db: project.currentDb,
     });
   } catch (e) {
@@ -175,7 +177,8 @@ const loadData = (projectId, options = {}) => {
       id: projectId || project.data.id,
       sort: project.sort,
       skip: options.skip || 0,
-      limit: options.limit || 0,
+      // default to a windowed load to avoid freezing the UI
+      limit: options.limit || 300,
       db: project.currentDb,
     });
   } catch (e) {
@@ -202,12 +205,32 @@ const rowHeight = 35; // Высота строки в пикселях (испо
 // Computed property для текущих колонок таблицы
 const currentTableColumns = computed({
   get() {
-    if (!project.data?.columns?.[project.currentDb]) {
-      // Если колонки не инициализированы, возвращаем все доступные колонки
-      const allColumns = project.allColumns || [];
-      return allColumns.map((col) => col.prop);
+    // If explicit columns are configured for the current DB, use them
+    if (project.data?.columns && project.data.columns[project.currentDb]) {
+      return project.data.columns[project.currentDb];
     }
-    return project.data.columns[project.currentDb];
+
+    // Try static defaults per table (urls, html, disallow, etc.)
+    const dbKey = project.currentDb;
+    if (
+      activeColumnsJson &&
+      typeof activeColumnsJson === "object" &&
+      activeColumnsJson[dbKey] &&
+      Array.isArray(activeColumnsJson[dbKey])
+    ) {
+      return activeColumnsJson[dbKey];
+    }
+
+    // Fallback: prefer a small sensible default to avoid showing many empty columns
+    const sensibleDefault = ["url", "created_at", "date"];
+    // Validate that these props exist in project's allColumns; if not, use all props
+    const availableProps = (project.allColumns || []).map((c) => c.prop);
+    const filtered = sensibleDefault.filter((p) => availableProps.includes(p));
+    if (filtered.length > 0) return filtered;
+
+    // Last resort: return all available column props
+    const allColumns = project.allColumns || [];
+    return allColumns.map((col) => col.prop);
   },
   set(value) {
     if (!project.data.columns) {
@@ -228,6 +251,29 @@ const currentTableColumns = computed({
 // Set cursor style for the entire document during resizing
 const documentStyle = computed(() => {
   return resizing.value ? { cursor: "col-resize" } : {};
+});
+
+// Dedup and normalize columns for Transfer: unique by `prop`, fill empty names with prop
+const transferColumns = computed(() => {
+  const source = project.allColumns || [];
+  const seen = new Set();
+  const result = [];
+  for (const c of source) {
+    if (!c || typeof c !== "object") continue;
+    const prop = c.prop;
+    if (!prop || typeof prop !== "string") continue;
+    if (seen.has(prop)) continue;
+    const name = c.name && String(c.name).trim() ? c.name : prop;
+    result.push({ ...c, name });
+    seen.add(prop);
+  }
+  return result;
+});
+
+// Ensure ElTransfer always receives an Array
+const transferData = computed(() => {
+  const d = transferColumns.value;
+  return Array.isArray(d) ? d : [];
 });
 
 const dataComp = computed(() => {
@@ -456,12 +502,7 @@ function changeCurrentPage(val) {
 }
 
 function handleTableChange(selectedDb) {
-  console.log(
-    `🔄 HTML Table: Изменение таблицы с "${project.currentDb}" на "${selectedDb}"`
-  );
-
-  // Устанавливаем новую базу данных
-  project.currentDb = selectedDb;
+  console.log(`🔄 HTML Table: Изменение таблицы на "${selectedDb}"`);
 
   // Reset column widths when changing tables
   columnWidths.value = {};
@@ -496,7 +537,7 @@ function handleTableChange(selectedDb) {
     id: project.data.id,
     sort: project.sort,
     skip: 0,
-    limit: 0, // 0 означает "без лимита" - загрузить все
+    limit: 300, // load a windowed chunk instead of all rows
     db: selectedDb,
   });
 }
@@ -516,7 +557,7 @@ function getsortedDb(sort) {
     id: project.data.id,
     sort: sort,
     skip: 0,
-    limit: 0, // 0 означает "без лимита" - загрузить все
+    limit: 300, // load a windowed chunk instead of all rows
     db: project.currentDb,
   });
 }
@@ -1458,7 +1499,7 @@ html.dark .custom-table tbody tr.even-row {
 /* Стили для наведения с увеличенной специфичностью */
 .custom-table tbody tr.odd-row:hover,
 .custom-table tbody tr.even-row:hover {
-  background: #f0f0f0 !important; /* light hover for light theme */
+  background: #f0f0f0 !important; /* light theme hover restored */
   height: 35px !important;
   max-height: 35px !important;
   min-height: 35px !important;
@@ -1467,7 +1508,7 @@ html.dark .custom-table tbody tr.even-row {
 /* Dark theme hover should use Element Plus variables so it respects central theme */
 html.dark .custom-table tbody tr.odd-row:hover,
 html.dark .custom-table tbody tr.even-row:hover {
-  background: var(--el-fill-color-darker) !important;
+  background: #2d3748 !important; /* dark theme hover */
   height: 35px !important;
   max-height: 35px !important;
   min-height: 35px !important;
@@ -1536,50 +1577,26 @@ html.dark .custom-table tbody tr.even-row:hover {
 
 /* Дополнительные стили для четных и нечетных строк с фиксированным столбцом */
 .custom-table tbody tr.odd-row .fixed-column {
-  background-color: var(--el-bg-color) !important;
+  /* Совпадает с цветом строки */
+  background-color: inherit !important;
   border-right: 1px solid var(--el-border-color);
-  backdrop-filter: none !important;
-  opacity: 1 !important;
-  /* Дополнительные свойства для полной непрозрачности */
-  -webkit-backdrop-filter: none !important;
-  background-blend-mode: normal !important;
-  mix-blend-mode: normal !important;
 }
 
 .custom-table tbody tr.even-row .fixed-column {
-  background-color: #f7f7f7 !important; /* Непрозрачный серый цвет вместо rgba */
+  /* Совпадает с цветом строки */
+  background-color: inherit !important;
   border-right: 1px solid var(--el-border-color);
-  backdrop-filter: none !important;
-  opacity: 1 !important;
-  /* Дополнительные свойства для полной непрозрачности */
-  -webkit-backdrop-filter: none !important;
-  background-blend-mode: normal !important;
-  mix-blend-mode: normal !important;
 }
 
 /* Темная тема для фиксированного столбца */
 html.dark .custom-table tbody tr.odd-row .fixed-column {
-  background-color: var(--el-bg-color) !important;
+  background-color: inherit !important;
   border-right: 1px solid var(--el-border-color-darker);
-  backdrop-filter: none !important;
-  opacity: 1 !important;
-  z-index: 10 !important; /* z-index для темной темы */
-  /* Дополнительные свойства для полной непрозрачности */
-  -webkit-backdrop-filter: none !important;
-  background-blend-mode: normal !important;
-  mix-blend-mode: normal !important;
 }
 
 html.dark .custom-table tbody tr.even-row .fixed-column {
-  background-color: #1e1e1e !important; /* Непрозрачный темно-серый цвет вместо rgba */
+  background-color: inherit !important;
   border-right: 1px solid var(--el-border-color-darker);
-  backdrop-filter: none !important;
-  opacity: 1 !important;
-  z-index: 10 !important; /* z-index для темной темы */
-  /* Дополнительные свойства для полной непрозрачности */
-  -webkit-backdrop-filter: none !important;
-  background-blend-mode: normal !important;
-  mix-blend-mode: normal !important;
 }
 
 /* Стили для фиксированного заголовка */
@@ -1719,23 +1736,11 @@ html.dark .row-number-cell {
 
 /* Стили для ховера с фиксированным столбцом */
 .custom-table tbody tr:hover .fixed-column {
-  background: #f0f0f0 !important; /* Непрозрачный серый цвет, синхронизирован с основным hover */
-  z-index: 10 !important; /* Поддерживаем высокий z-index при ховере */
-  /* Дополнительные свойства для полной непрозрачности */
-  backdrop-filter: none !important;
-  -webkit-backdrop-filter: none !important;
-  background-blend-mode: normal !important;
-  mix-blend-mode: normal !important;
+  background: inherit !important; /* hover совпадает с цветом строки */
 }
 
 html.dark .custom-table tbody tr:hover .fixed-column {
-  background: #2b2b2b !important; /* Непрозрачный темно-серый цвет, синхронизирован с основным hover */
-  z-index: 10 !important; /* Поддерживаем высокий z-index при ховере */
-  /* Дополнительные свойства для полной непрозрачности */
-  backdrop-filter: none !important;
-  -webkit-backdrop-filter: none !important;
-  background-blend-mode: normal !important;
-  mix-blend-mode: normal !important;
+  background: inherit !important;
 }
 
 .cell-content {

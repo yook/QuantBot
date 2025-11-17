@@ -47,6 +47,7 @@
         </template>
         <TypingConfig />
       </el-tab-pane>
+
       <el-tab-pane name="clustering">
         <template #label>
           <span class="tab-label-ai">

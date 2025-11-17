@@ -10,7 +10,17 @@
 
 const fs = require("fs");
 const path = require("path");
-const db = require("../socket/db-sqlite.cjs");
+const {
+  dbAll,
+  dbGet,
+  dbRun,
+  embeddingsCacheGet,
+  embeddingsCachePut,
+  categoriesInsertBatch,
+  getTypingModel,
+  upsertTypingModel,
+  updateTypingSampleEmbeddings,
+} = require("../electron/db/index.cjs");
 const cls = require("./embeddingsClassifier.cjs");
 
 const VECTOR_MODEL = process.env.EMBEDDING_MODEL || "text-embedding-3-small";
@@ -39,11 +49,13 @@ function parseArgs(argv) {
 async function fetchWithCache(texts, model) {
   const results = new Array(texts.length).fill(null);
   const missingIdx = [];
+  const sources = new Array(texts.length).fill("unknown");
   for (let i = 0; i < texts.length; i++) {
-    const key = `${model}|${texts[i]}`.toLowerCase();
-    const row = await db.embeddingsCacheGet(key);
+    const key = texts[i];
+    const row = await embeddingsCacheGet(key, model);
     if (row && row.embedding && Array.isArray(row.embedding)) {
       results[i] = row.embedding;
+      sources[i] = "cache";
     } else {
       missingIdx.push(i);
     }
@@ -55,10 +67,21 @@ async function fetchWithCache(texts, model) {
       const idx = missingIdx[j];
       const emb = embs[j] || [];
       results[idx] = emb;
-      const key = `${model}|${texts[idx]}`.toLowerCase();
-      await db.embeddingsCachePut(key, emb);
+      const key = texts[idx];
+      await embeddingsCachePut(key, emb, model);
+      sources[idx] = "openai";
     }
   }
+  // Attach sources metadata to the returned array for callers that want it
+  try {
+    Object.defineProperty(results, "_sources", {
+      value: sources,
+      enumerable: false,
+      writable: false,
+      configurable: false,
+    });
+  } catch (e) {}
+
   return results;
 }
 
@@ -72,24 +95,12 @@ async function main() {
     return;
   }
 
-  // 1) Load typing_samples
-  const rows = await db.dbAll(
-    `SELECT id, label, text, embedding FROM typing_samples WHERE project_id = ? ORDER BY id`,
+  // 1) Load typing_samples (we don't store embeddings in typing_samples anymore)
+  const rows = await dbAll(
+    `SELECT id, label, text FROM typing_samples WHERE project_id = ? ORDER BY id`,
     [projectId]
   );
-  const samples = (rows || [])
-    .map((r) => {
-      let embedding = null;
-      if (r && r.embedding) {
-        try {
-          embedding = JSON.parse(r.embedding);
-        } catch (e) {
-          embedding = null;
-        }
-      }
-      return { ...r, embedding };
-    })
-    .filter((r) => r && r.text && r.label);
+  const samples = (rows || []).filter((r) => r && r.text && r.label);
   if (samples.length < 2) {
     console.error("Not enough training samples");
     process.exit(3);
@@ -99,12 +110,12 @@ async function main() {
   // Ensure categories exist for labels
   const labels = Array.from(new Set(samples.map((s) => String(s.label))));
   try {
-    await db.categoriesInsertBatch(projectId, labels);
+    await categoriesInsertBatch(projectId, labels);
   } catch (e) {
     // continue even if insert batch has warnings
   }
   // Build label->id map
-  const cats = await db.dbAll(
+  const cats = await dbAll(
     `SELECT id, category_name FROM categories WHERE project_id = ?`,
     [projectId]
   );
@@ -113,7 +124,7 @@ async function main() {
 
   // 2) Check model and embeddings coverage
   const sampleIds = samples.map((s) => s.id);
-  let existingModelRow = await db.getTypingModel(projectId);
+  let existingModelRow = await getTypingModel(projectId);
   const existingModelValid =
     existingModelRow &&
     existingModelRow.vector_model === VECTOR_MODEL &&
@@ -122,27 +133,22 @@ async function main() {
 
   const existingEmbeddings = new Map();
   const missing = [];
+  // Check embeddings_cache for each sample
   for (const s of samples) {
-    const emb = s.embedding;
-    let vector = null;
-    let modelOk = true;
-
-    if (Array.isArray(emb)) {
-      vector = emb;
-    } else if (emb && typeof emb === "object") {
-      if (Array.isArray(emb.vector)) {
-        vector = emb.vector;
+    try {
+      const cacheRow = await embeddingsCacheGet(s.text, VECTOR_MODEL);
+      if (
+        cacheRow &&
+        Array.isArray(cacheRow.embedding) &&
+        cacheRow.embedding.length
+      ) {
+        existingEmbeddings.set(s.id, cacheRow.embedding);
+        continue;
       }
-      if (emb.model && emb.model !== VECTOR_MODEL) {
-        modelOk = false;
-      }
+    } catch (e) {
+      // ignore cache read errors and treat as missing
     }
-
-    if (vector && modelOk) {
-      existingEmbeddings.set(s.id, vector);
-    } else {
-      missing.push(s);
-    }
+    missing.push(s);
   }
   console.error(
     `[trainAndClassify] Samples: ${
@@ -258,7 +264,7 @@ async function main() {
   }
   if (!keywords || keywords.length === 0) {
     // Fallback: target keywords without category
-    keywords = await db.dbAll(
+    keywords = await dbAll(
       `SELECT id, keyword FROM keywords WHERE project_id = ? AND target_query = 1 AND (category_id IS NULL OR category_id = '') AND (category_name IS NULL OR category_name = '') ORDER BY id LIMIT 100000`,
       [projectId]
     );
@@ -285,6 +291,10 @@ async function main() {
       bestCategoryId: bestId || null,
       bestCategoryName: bestLabel || null,
       similarity: typeof pred.score === "number" ? pred.score : null,
+      embeddingSource:
+        kwEmbs && kwEmbs._sources && kwEmbs._sources[i]
+          ? kwEmbs._sources[i]
+          : "unknown",
     };
     console.error(
       `trainAndClassify result: ${kw.keyword} -> ${out.bestCategoryName} (sim: ${out.similarity})`

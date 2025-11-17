@@ -1,8 +1,9 @@
 import { defineStore } from "pinia";
-import socket from "./socket-client";
+import { ipcClient } from "./socket-client";
 import settingsJson from "./schema/table-name-prop.json";
 import reportsJson from "./schema/table-reports.json";
 import newProjectJson from "./schema/new-project.json";
+import activeColumnsJson from "./schema/table-active-colums.json";
 // import { useAppStore } from './app'
 // import { ipcRenderer } from 'electron'
 
@@ -22,9 +23,6 @@ import type {
   NewProjectFile,
   UrlData,
   SortOption,
-  QueueUpdate,
-  CrawlerStatus,
-  TableUpdate,
 } from "../types/schema";
 
 export const useProjectStore = defineStore("project", {
@@ -73,23 +71,67 @@ export const useProjectStore = defineStore("project", {
       return total > 0 ? Math.round((fetched / total) * 100) : 0;
     },
     tableColumns: (state) => {
-      const parserCols = state.data.parser ?? [];
-      const defaults = state.defaultColumns ?? [];
+      // Normalize defaults and parser columns, deduplicate by `prop`, and ensure `name`
+      const seen = new Set<string>();
+      const normalize = (cols: any[]): ColumnDef[] => {
+        if (!Array.isArray(cols)) return [] as ColumnDef[];
+        const out: ColumnDef[] = [];
+        for (const c of cols) {
+          if (!c || typeof c !== "object") continue;
+          const prop = (c as any).prop;
+          if (!prop || typeof prop !== "string") continue;
+          if (seen.has(prop)) continue;
+          const name = (c as any).name && String((c as any).name).trim() ? String((c as any).name) : prop;
+          out.push({ ...(c as any), name, prop } as ColumnDef);
+          seen.add(prop);
+        }
+        return out;
+      };
+
+      const defaults = normalize(state.defaultColumns ?? []);
+      const parserCols = normalize(state.data.parser ?? []);
       const all: ColumnDef[] = [...defaults, ...parserCols];
-      let enabledColumns: string[] = (state.data.columns && state.data.columns[state.currentDb]) || [];
+
+      // Determine enabled columns: prefer per-DB config; fallback to static defaults; else all props
+      let enabledColumns: string[] =
+        (state.data.columns && state.data.columns[state.currentDb]) || [];
       if (!enabledColumns || enabledColumns.length === 0) {
-        enabledColumns = all.map((c) => c.prop);
+        const key = state.currentDb;
+        const fromStatic = (activeColumnsJson as any)?.[key];
+        if (Array.isArray(fromStatic) && fromStatic.length > 0) {
+          enabledColumns = fromStatic as string[];
+        } else {
+          enabledColumns = all.map((c) => c.prop);
+        }
       }
-      const filtered = all.filter((c) => enabledColumns.includes(c.prop));
-      const rowNumberColumn: ColumnDef = { name: "#", prop: "_rowNumber", width: 60, minWidth: 60 };
+
+      // Filter by enabled list and keep order: url first, then others; dedup just in case
+      const enabledSet = new Set(enabledColumns);
+      const filtered = all.filter((c) => enabledSet.has(c.prop));
+      const rowNumberColumn: ColumnDef = { name: "#", prop: "_rowNumber", width: 60, minWidth: 60 } as any;
       const urlCol = filtered.find((c) => c.prop === "url");
       const others = filtered.filter((c) => c.prop !== "url");
       return urlCol ? [rowNumberColumn, urlCol, ...others] : [rowNumberColumn, ...others];
     },
     allColumns: (state) => {
-      const parserCols = state.data.parser ?? [];
-      const columns: ColumnDef[] = [...(state.defaultColumns ?? []), ...parserCols];
-      return columns.map((c) => ({ ...c, disabled: c.prop === "url" }));
+      // Normalize and deduplicate by prop; ensure name labels exist
+      const seen = new Set<string>();
+      const out: ColumnDef[] = [];
+      const pushCols = (cols: any[]) => {
+        if (!Array.isArray(cols)) return;
+        for (const c of cols) {
+          if (!c || typeof c !== "object") continue;
+          const prop = (c as any).prop;
+          if (!prop || typeof prop !== "string") continue;
+          if (seen.has(prop)) continue;
+          const name = (c as any).name && String((c as any).name).trim() ? String((c as any).name) : prop;
+          out.push({ ...(c as any), name, prop, disabled: prop === "url" } as ColumnDef);
+          seen.add(prop);
+        }
+      };
+      pushCols(state.defaultColumns ?? []);
+      pushCols(state.data.parser ?? []);
+      return out;
     },
     success: (state) => {
       if (!state.data.stats) return 0;
@@ -108,29 +150,41 @@ export const useProjectStore = defineStore("project", {
   },
 
   actions: {
-    getProjects() {
-      socket.emit("get-all-projects");
-      socket.once("all-projects-data", (data: ProjectSummary[] = []) => {
-        if (Array.isArray(data)) this.projects = data;
-        this.projectsLoaded = true;
-        const storageId = localStorage.getItem("currentProjectId");
-        if (this.projects.length > 0) {
-          const idx = this.projects.findIndex((p) => String(p.id) === String(storageId));
-          this.currentProjectId = idx >= 0 ? String(storageId) : String(this.projects[0].id);
-          localStorage.setItem("currentProjectId", String(this.currentProjectId));
-          socket.emit("get-project", this.currentProjectId);
-        } else {
-          this.newProjectForm = true;
+    async getProjects() {
+      console.log('[Project Store] getProjects called');
+      const data = await ipcClient.getProjectsAll();
+      console.log('[Project Store] Projects loaded:', data);
+      if (Array.isArray(data)) this.projects = data;
+      this.projectsLoaded = true;
+      const storageId = localStorage.getItem("currentProjectId");
+      if (this.projects.length > 0) {
+        const idx = this.projects.findIndex((p) => String(p.id) === String(storageId));
+        this.currentProjectId = idx >= 0 ? String(storageId) : String(this.projects[0].id);
+        localStorage.setItem("currentProjectId", String(this.currentProjectId));
+        const projectData = await ipcClient.getProject(Number(this.currentProjectId));
+        if (projectData) {
+          Object.assign(this.data, projectData);
+          if (!this.data.stats) this.data.stats = (newProjectJson as NewProjectFile).stats;
+          if (!this.data.columns) this.data.columns = {};
+          // Ensure parser is an array to avoid Element Plus table errors (data.reduce)
+          if (!Array.isArray((this.data as any).parser)) {
+            (this.data as any).parser = (newProjectJson as NewProjectFile).parser || [];
+          }
+          // Ensure crawler config exists
+          if (!this.data.crawler || typeof this.data.crawler !== 'object') {
+            this.data.crawler = (newProjectJson as NewProjectFile).crawler;
+          }
+          this.getsortedDb({ id: this.data.id as number | string, sort: this.sort, skip: 0, limit: 50, db: this.currentDb });
         }
-      });
+      } else {
+        this.newProjectForm = true;
+      }
     },
 
-    refreshProjectsList() {
-      socket.emit("get-all-projects");
-      socket.once("all-projects-data", (data: ProjectSummary[] = []) => {
-        if (Array.isArray(data)) this.projects = data;
-        this.projectsLoaded = true;
-      });
+    async refreshProjectsList() {
+      const data = await ipcClient.getProjectsAll();
+      if (Array.isArray(data)) this.projects = data;
+      this.projectsLoaded = true;
     },
 
     socketOn() {
@@ -139,240 +193,278 @@ export const useProjectStore = defineStore("project", {
       this.socketReady = true;
       this.getProjects();
 
-      socket.on("project-data", (data) => {
-        if (!data) return;
-        Object.assign(this.data, data);
-        if (!this.data.stats) this.data.stats = (newProjectJson as NewProjectFile).stats;
-        if (!this.data.columns) this.data.columns = {};
-        this.getsortedDb({ id: this.data.id as number | string, sort: this.sort, skip: 0, limit: 50, db: this.currentDb });
-      });
-
-      // Обработчик очистки данных краулера
-      socket.on("crawler-data-cleared", (data: { projectId: string | number }) => {
-        // Обновляем данные только для текущего проекта
-        if (String(data.projectId) === String(this.currentProjectId)) {
-          // Очищаем только данные краулера, сохраняя проект
-          this.tableData = [];
-          this.tableLoading = false;
-          
-          // Сбрасываем статистику краулера
-          if (this.data.stats) {
-            this.data.stats.html = 0;
-            this.data.stats.redirect = 0;
-            this.data.stats.image = 0;
-            this.data.stats.jscss = 0;
-            this.data.stats.error = 0;
-            this.data.stats.other = 0;
-            this.data.stats.queue = 0;
-            this.data.stats.depth3 = 0;
-            this.data.stats.depth5 = 0;
-            this.data.stats.depth6 = 0;
-          }
-          
-          // Останавливаем краулер если он был запущен
-          if (this.running) {
-            this.running = false;
-          }
-        }
-      });
-
-            // Обработчик обновлений очереди краулера
-      socket.on("queue", (data: QueueUpdate) => {
-        // Обновляем статистику очереди только для текущего проекта
-        if (String(data.projectId) === String(this.currentProjectId)) {
-          if (!this.data.stats) {
-            this.data.stats = (newProjectJson as NewProjectFile).stats;
-          }
-          if (data.queue !== undefined) {
-            this.data.stats.queue = data.queue;
-          }
-          
-          // Останавливаем краулер если очередь пуста и он был запущен
-          if (data.queue === 0 && this.running) {
-            console.log("Queue is empty, stopping crawler");
-            this.running = false;
-          }
-        }
-      });
-
-      // Обработчик обновлений fetched
-      socket.on("fetched", (data: QueueUpdate) => {
-        if (String(data.projectId) === String(this.currentProjectId)) {
-          if (!this.data.stats) {
-            this.data.stats = (newProjectJson as NewProjectFile).stats;
-          }
-          if (data.fetched !== undefined) {
-            this.data.stats.fetched = data.fetched;
-          }
-        }
-      });
-
-      // Обработчик общих событий остановки краулера
-      socket.on("stopped", (data: CrawlerStatus) => {
-        console.log("Crawler stopped:", data);
-        // Останавливаем для текущего проекта независимо от ID
-        // поскольку событие stopped приходит для активного краулера
-        this.running = false;
-      });
-
-      // Обработчик обновлений данных в таблице
-      socket.on("data-updated", (data: TableUpdate) => {
-        // Обновляем таблицу только для текущего проекта
-        if (String(data.projectId) === String(this.currentProjectId) && this.currentProjectId) {
-          // Перезагружаем данные таблицы для отображения новых записей
-          this.getsortedDb({ 
-            id: this.currentProjectId, 
-            sort: this.sort, 
-            skip: 0, 
-            limit: 50, 
-            db: this.currentDb 
-          });
-        }
-      });
-
-      // Обработчики статистики по типам контента
-      socket.on("stat-html", (data: { count: number; projectId: string | number }) => {
-        if (String(data.projectId) === String(this.currentProjectId)) {
-          if (!this.data.stats) this.data.stats = (newProjectJson as NewProjectFile).stats;
-          this.data.stats.html = data.count;
-        }
-      });
-
-      socket.on("stat-jscss", (data: { count: number; projectId: string | number }) => {
-        if (String(data.projectId) === String(this.currentProjectId)) {
-          if (!this.data.stats) this.data.stats = (newProjectJson as NewProjectFile).stats;
-          this.data.stats.jscss = data.count;
-        }
-      });
-
-      socket.on("stat-image", (data: { count: number; projectId: string | number }) => {
-        if (String(data.projectId) === String(this.currentProjectId)) {
-          if (!this.data.stats) this.data.stats = (newProjectJson as NewProjectFile).stats;
-          this.data.stats.image = data.count;
-        }
-      });
-
-      socket.on("stat-redirect", (data: { count: number; projectId: string | number }) => {
-        if (String(data.projectId) === String(this.currentProjectId)) {
-          if (!this.data.stats) this.data.stats = (newProjectJson as NewProjectFile).stats;
-          this.data.stats.redirect = data.count;
-        }
-      });
-
-      socket.on("stat-error", (data: { count: number; projectId: string | number }) => {
-        if (String(data.projectId) === String(this.currentProjectId)) {
-          if (!this.data.stats) this.data.stats = (newProjectJson as NewProjectFile).stats;
-          this.data.stats.error = data.count;
-        }
-      });
-
-      // Обработчики статистики по глубине
-      socket.on("stat-depth3", (data: { count: number; projectId: string | number }) => {
-        if (String(data.projectId) === String(this.currentProjectId)) {
-          if (!this.data.stats) this.data.stats = (newProjectJson as NewProjectFile).stats;
-          this.data.stats.depth3 = data.count;
-        }
-      });
-
-      socket.on("stat-depth5", (data: { count: number; projectId: string | number }) => {
-        if (String(data.projectId) === String(this.currentProjectId)) {
-          if (!this.data.stats) this.data.stats = (newProjectJson as NewProjectFile).stats;
-          this.data.stats.depth5 = data.count;
-        }
-      });
-
-      socket.on("stat-depth6", (data: { count: number; projectId: string | number }) => {
-        if (String(data.projectId) === String(this.currentProjectId)) {
-          if (!this.data.stats) this.data.stats = (newProjectJson as NewProjectFile).stats;
-          this.data.stats.depth6 = data.count;
-        }
-      });
-
-      socket.on("stat-other", (data: { count: number; projectId: string | number }) => {
-        if (String(data.projectId) === String(this.currentProjectId)) {
-          if (!this.data.stats) this.data.stats = (newProjectJson as NewProjectFile).stats;
-          this.data.stats.other = data.count;
-        }
-      });
-
-      // Обработчик обновлений запрещенных URL
-      socket.on("disallow", (count: number) => {
-        if (!this.data.stats) this.data.stats = (newProjectJson as NewProjectFile).stats;
-        this.data.stats.disallow = count;
-      });
-
-      // Обработчик успешного удаления проекта
-      socket.on("projectDeleted", (deletedProjectId: number) => {
-        console.log(`Project ${deletedProjectId} deleted successfully`);
-        
-        // Удаляем проект из списка
-        const deletedIndex = this.projects.findIndex((p) => String(p.id) === String(deletedProjectId));
-        if (deletedIndex !== -1) {
-          this.projects.splice(deletedIndex, 1);
-        }
-
-        // Если удалили текущий проект
-        if (String(this.currentProjectId) === String(deletedProjectId)) {
-          // Переключаемся на первый проект в списке или показываем форму создания
-          if (this.projects.length > 0) {
-            this.currentProjectId = String(this.projects[0].id);
-            localStorage.setItem("currentProjectId", String(this.currentProjectId));
-            socket.emit("get-project", this.currentProjectId);
-          } else {
-            this.currentProjectId = null;
-            localStorage.removeItem("currentProjectId");
-            this.newProjectForm = true;
-          }
-        }
-      });
-
-      // Обработчик ошибки удаления проекта
-      socket.on("projectDeleteError", (errorMessage: string) => {
-        console.error("Error deleting project:", errorMessage);
-      });
+      // Note: Event listeners for crawler updates will need to be implemented
+      // via IPC events when crawler functionality is added
+      // TODO: Implement crawler events via IPC
+      // - crawler-data-cleared
+      // - queue, fetched, stopped
+      // - data-updated
+      // - stat-html, stat-jscss, stat-image, stat-redirect, stat-error
+      // - stat-depth3, stat-depth5, stat-depth6, stat-other
+      // - disallow
+      // - projectDeleted, projectDeleteError
     },
 
-    updateProject() {
-      socket.emit("update-project", this.data);
+    async updateProject() {
+      try {
+        const ipc: any = (ipcClient as any).ipc;
+        if (!ipc) {
+          console.warn('[Project Store] ipcRenderer not available');
+          return;
+        }
+        const id = Number(this.data.id);
+        if (!id || Number.isNaN(id)) {
+          console.warn('[Project Store] updateProject: invalid project id', this.data && (this.data as any).id);
+          return;
+        }
+        // Persist basic project fields (name/url) as well
+        try {
+          await ipcClient.updateProject(this.data.name || '', this.data.url || '', id);
+        } catch (e: any) {
+          console.warn('[Project Store] update name/url failed:', e?.message || e);
+        }
+        // Convert reactive objects to plain JSON to avoid "An object could not be cloned"
+        const crawler = JSON.parse(JSON.stringify(this.data.crawler || {}));
+        const parser = JSON.parse(
+          JSON.stringify(Array.isArray((this.data as any).parser) ? (this.data as any).parser : [])
+        );
+        const columns = JSON.parse(JSON.stringify(this.data.columns || {}));
+        const stats = JSON.parse(JSON.stringify(this.data.stats || {}));
+        const res = await ipc.invoke('db:projects:updateConfigs', id, crawler, parser, columns, stats);
+        if (!res || !res.success) {
+          console.warn('[Project Store] updateConfigs failed', res?.error);
+        }
+      } catch (e: any) {
+        console.error('[Project Store] updateProject error:', e?.message || e);
+      }
     },
 
-    saveNewProject(form: { name: string; url: string }) {
+    async saveNewProject(form: { name: string; url: string }) {
+      console.log('[Project Store] saveNewProject called:', form);
       const data: ProjectData = { ...(newProjectJson as NewProjectFile) } as ProjectData;
       data.name = form.name;
       data.url = form.url;
-      socket.emit("save-new-project", data);
-      socket.once("new-project-data", (newDoc: { id: string | number }) => {
-        this.currentProjectId = String(newDoc.id);
-        localStorage.setItem("currentProjectId", String(newDoc.id));
+      console.log('[Project Store] Insert payload:', { name: data.name, url: data.url });
+      
+      console.log('[Project Store] Inserting project:', data.name, data.url);
+      const result = await ipcClient.insertProject(data.name, data.url || '');
+      console.log('[Project Store] Insert result:', result);
+      
+      if (result && result.lastInsertRowid) {
+        this.currentProjectId = String(result.lastInsertRowid);
+        localStorage.setItem("currentProjectId", String(result.lastInsertRowid));
         this.newProjectForm = false;
-        this.refreshProjectsList();
-        socket.emit("get-project", newDoc.id);
-      });
+        await this.refreshProjectsList();
+        const projectData = await ipcClient.getProject(Number(result.lastInsertRowid));
+        if (projectData) {
+          Object.assign(this.data, projectData);
+          if (!this.data.stats) this.data.stats = (newProjectJson as NewProjectFile).stats;
+          if (!this.data.columns) this.data.columns = {};
+          this.getsortedDb({ id: this.data.id as number | string, sort: this.sort, skip: 0, limit: 50, db: this.currentDb });
+        }
+      } else {
+        console.error('[Project Store] Failed to insert project, result:', result);
+      }
     },
 
-    changeProject(id: string) {
+    async changeProject(id: string) {
       this.tableData = [];
       this.tableLoading = true;
       localStorage.setItem("currentProjectId", id);
       this.currentProjectId = id;
-      socket.emit("change-project", id);
+      
+      const projectData = await ipcClient.getProject(Number(id));
+      if (projectData) {
+        Object.assign(this.data, projectData);
+        
+        // Ensure stats exists
+        if (!this.data.stats) {
+          this.data.stats = (newProjectJson as NewProjectFile).stats;
+        }
+        
+        // Ensure columns exists
+        if (!this.data.columns) {
+          this.data.columns = {};
+        }
+        
+        // Deep merge crawler config with defaults (preserve loaded values, add missing defaults)
+        if (!this.data.crawler || typeof this.data.crawler !== 'object') {
+          this.data.crawler = (newProjectJson as NewProjectFile).crawler;
+        } else {
+          this.data.crawler = { 
+            ...(newProjectJson as NewProjectFile).crawler, 
+            ...this.data.crawler 
+          };
+        }
+        
+        // Ensure parser is an array with defaults if empty
+        if (!Array.isArray((this.data as any).parser) || (this.data as any).parser.length === 0) {
+          (this.data as any).parser = (newProjectJson as NewProjectFile).parser || [];
+        }
+        
+        this.getsortedDb({ id: this.data.id as number | string, sort: this.sort, skip: 0, limit: 50, db: this.currentDb });
+      }
+      this.tableLoading = false;
     },
 
-    start(url: string) {
-      this.data.url = url;
-      socket.emit("startCrauler", this.data);
-      this.running = true;
-      socket.emit("update-project", this.data);
+    initCrawlerIpcEvents() {
+      const ipc: any = (ipcClient as any).ipc;
+      if (!ipc || (window as any).__crawlerListenersRegistered) return;
+      (window as any).__crawlerListenersRegistered = true;
+      
+      // Debounced save of stats to DB (avoid saving on every single update)
+      let statsSaveTimeout: NodeJS.Timeout | null = null;
+      const scheduleStatsSave = () => {
+        if (statsSaveTimeout) clearTimeout(statsSaveTimeout);
+        statsSaveTimeout = setTimeout(() => {
+          this.updateProject().catch((e: any) => {
+            console.warn('[Project Store] Auto-save stats failed:', e?.message || e);
+          });
+        }, 2000); // Save stats 2s after last update
+      };
+      
+      const updateStat = (field: keyof Stats, value: number) => {
+        if (!this.data.stats) this.data.stats = (newProjectJson as NewProjectFile).stats;
+        (this.data.stats as any)[field] = value;
+        scheduleStatsSave();
+      };
+      ipc.on('crawler:progress', (_e: any, payload: any) => {
+        if (!payload || String(payload.projectId) !== String(this.currentProjectId)) return;
+        updateStat('fetched', payload.fetched || 0);
+        const nextQueue = typeof payload.queue === 'number' ? payload.queue : 0;
+        // Preserve non-zero queue when worker sends transient 0 on start/stop
+        const currentQueue = this.data.stats?.queue ?? 0;
+        if (nextQueue > 0 || currentQueue === 0) {
+          updateStat('queue', nextQueue);
+        }
+        // else: ignore drop to 0 if we had a queue before (resume scenario)
+      });
+      ipc.on('crawler:queue', (_e: any, payload: any) => {
+        if (!payload || String(payload.projectId) !== String(this.currentProjectId)) return;
+        const nextQueue = typeof payload.queue === 'number' ? payload.queue : 0;
+        const currentQueue = this.data.stats?.queue ?? 0;
+        if (nextQueue > 0 || currentQueue === 0) {
+          updateStat('queue', nextQueue);
+        }
+      });
+      ipc.on('crawler:finished', (_e: any, payload: any) => {
+        if (!payload || String(payload.projectId) !== String(this.currentProjectId)) return;
+        this.running = false;
+        // Save final stats on finish
+        scheduleStatsSave();
+      });
+      ipc.on('crawler:error', (_e: any, payload: any) => {
+        if (!payload || String(payload.projectId) !== String(this.currentProjectId)) return;
+        const msg = String(payload.message || '').toLowerCase();
+        // Нефатальные ошибки сети/HTTP для отдельных URL — не останавливаем краулер
+        const nonFatal = msg.includes('fetcherror')
+          || msg.includes('fetchtimeout')
+          || msg.includes('fetchclienterror')
+          || msg === '404' || msg.includes('404');
+        if (nonFatal) {
+          console.warn('[Crawler IPC] non-fatal:', payload.message, payload.url || '');
+          // Опционально: увеличим локальную метрику ошибок, если есть
+          try {
+            const current = this.data.stats?.error ?? 0;
+            (this.data.stats as any).error = current + 1;
+          } catch (_) {}
+          return;
+        }
+        console.error('[Crawler IPC] fatal error:', payload.message);
+        this.running = false;
+      });
+      
+      // Handle stat updates (disallow, html, image, etc.)
+      ipc.on('crawler:stat', (_e: any, payload: any) => {
+        if (!payload || String(payload.projectId) !== String(this.currentProjectId)) return;
+        const stat = payload.stat;
+        const value = typeof payload.value === 'number' ? payload.value : 0;
+        if (stat && this.data.stats && stat in this.data.stats) {
+          updateStat(stat as keyof Stats, value);
+        }
+      });
+      
+      ipc.on('crawler:url', (_e: any, payload: any) => {
+        // lightweight strategy: refresh page window every N urls
+        if (payload && String(payload.projectId) === String(this.currentProjectId)) {
+          if (this.tableDataLength < 50) {
+            this.getsortedDb({ id: this.data.id as number | string, sort: this.sort, skip: 0, limit: 50, db: this.currentDb });
+          }
+        }
+      });
+
+      // Immediate row injection for real-time UX
+      ipc.on('crawler:row', (_e: any, payload: any) => {
+        if (!payload || String(payload.projectId) !== String(this.currentProjectId)) return;
+        const row = payload.row;
+        if (!row || typeof row !== 'object') return;
+        // Insert according to current sort; default to id ASC
+        const sortObj = this.sort || { id: 1 } as any;
+        const sortKey = Object.keys(sortObj)[0] || 'id';
+        const orderDesc = sortObj[sortKey] === -1;
+        if (sortKey === 'id') {
+          if (orderDesc) this.tableData.unshift(row);
+          else this.tableData.push(row);
+        } else {
+          this.tableData.unshift(row);
+        }
+        // Trim to a reasonable window to avoid unbounded growth (match windowed loads ~300)
+        const maxWindow = 300;
+        if (this.tableData.length > maxWindow) {
+          if (orderDesc) this.tableData.pop(); else this.tableData.shift();
+        }
+        this.tableDataLength = this.tableData.length;
+      });
     },
 
-    freeze() {
-      socket.emit("freezeQueue");
+    async startCrawlerIPC(url?: string) {
+      if (url) this.data.url = url;
+      if (!this.currentProjectId) {
+        console.warn('[Project Store] startCrawlerIPC: no currentProjectId');
+        return;
+      }
+      this.initCrawlerIpcEvents();
+      if (!this.data.crawler || typeof this.data.crawler !== 'object') {
+        this.data.crawler = (newProjectJson as NewProjectFile).crawler;
+      }
+      if (!Array.isArray(this.data.parser)) {
+        this.data.parser = (newProjectJson as NewProjectFile).parser || [];
+      }
+      const ipc: any = (ipcClient as any).ipc;
+      if (!ipc) {
+        console.warn('[Project Store] ipcRenderer unavailable');
+        return;
+      }
+      try {
+        // Persist latest settings before starting the worker
+        await this.updateProject();
+        const payload = {
+          id: Number(this.data.id),
+          url: this.data.url,
+          crawler: JSON.parse(JSON.stringify(this.data.crawler || {})),
+          parser: JSON.parse(JSON.stringify(this.data.parser || [])),
+        };
+        await ipc.invoke('crawler:start', payload);
+        this.running = true;
+      } catch (e: any) {
+        console.error('[Project Store] crawler:start invoke error', e?.message || e);
+      }
+    },
+
+    stopCrawlerIPC() {
+      const ipc: any = (ipcClient as any).ipc;
+      if (!ipc) return;
+      try {
+        ipc.invoke('crawler:stop');
+      } catch (e: any) {
+        console.error('[Project Store] crawler:stop invoke error', e?.message || e);
+      }
       this.running = false;
     },
 
     // downloadData removed — use exportCrawlerData from `src/stores/export` directly
 
-    getsortedDb(options: Partial<SortedRequestOptions>) {
+    async getsortedDb(options: Partial<SortedRequestOptions>) {
       const projectId = options && options.id ? options.id : (this.data.id as number | string | undefined);
       if (!projectId) {
         this.tableLoading = false;
@@ -383,40 +475,126 @@ export const useProjectStore = defineStore("project", {
       const requestOptions: SortedRequestOptions = {
         id: projectId,
         sort: (options.sort as SortOption) || this.sort,
-        limit: options.limit || 0,
+        limit: options.limit || 50,
         skip: options.skip || 0,
         db: (options.db as string) || this.currentDb,
       } as SortedRequestOptions;
 
-      const requestId = `store-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
-      requestOptions.requestId = requestId;
-      const responseEvent = `sorted-urls-data-${requestId}` as const;
-      socket.once(responseEvent, (response: any[] | { data?: any[]; total?: number }) => {
+      console.log('📊 [Project Store] getsortedDb called with:', {
+        requestedDb: options.db,
+        currentDb: this.currentDb,
+        finalDb: requestOptions.db,
+        projectId: requestOptions.id,
+        limit: requestOptions.limit,
+        skip: requestOptions.skip,
+      });
+
+      try {
+        const response = await ipcClient.getUrlsSorted(requestOptions);
+        console.log('📊 [Project Store] Response received:', {
+          db: requestOptions.db,
+          rowCount: Array.isArray(response) ? response.length : 0,
+          isArray: Array.isArray(response),
+        });
+        
         if (Array.isArray(response)) {
           this.tableData = response;
           this.tableDataLength = response.length;
-        } else if (response && Array.isArray(response.data)) {
-          this.tableData = response.data;
-          this.tableDataLength = response.total ?? response.data.length;
         } else {
           this.tableData = [];
           this.tableDataLength = 0;
         }
-        this.tableLoading = false;
-      });
-      socket.emit("get-sorted-urls", requestOptions);
+      } catch (error) {
+        console.error('[Project Store] Error loading sorted URLs:', error);
+        this.tableData = [];
+        this.tableDataLength = 0;
+      }
+      this.tableLoading = false;
     },
 
-    deleteData() {
-      socket.emit("delete-all", this.currentProjectId);
+    async deleteData() {
+      if (!this.currentProjectId) return;
+      try {
+        const ipc: any = (ipcClient as any).ipc;
+        if (!ipc) {
+          console.warn('[Project Store] ipcRenderer not available');
+          return;
+        }
+        const res = await ipc.invoke('db:crawler:clear', Number(this.currentProjectId));
+        if (res && res.success) {
+          // reset local state
+          this.tableData = [];
+          this.tableDataLength = 0;
+          // reset stats
+          const zeroStats: Stats = {
+            fetched: 0, queue: 0, disallow: 0, html: 0, jscss: 0, image: 0,
+            redirect: 0, error: 0, depth3: 0, depth5: 0, depth6: 0, other: 0,
+          } as Stats;
+          this.data.stats = Object.assign({}, zeroStats);
+          // Also remove persisted queue file so next run starts clean
+          try {
+            await ipc.invoke('crawler:queue:clear', Number(this.currentProjectId));
+          } catch (e) {
+            console.warn('[Project Store] crawler:queue:clear invoke failed', e);
+          }
+        } else {
+          console.warn('[Project Store] db:crawler:clear failed', res?.error);
+        }
+      } catch (e: any) {
+        console.error('[Project Store] deleteData error:', e?.message || e);
+      }
     },
 
-    deleteProject() {
-      socket.emit("delete-project", this.currentProjectId);
+    async deleteProject() {
+      if (!this.currentProjectId) return;
+      
+      try {
+        await ipcClient.deleteProject(Number(this.currentProjectId));
+        
+        // Удаляем проект из списка
+        const deletedIndex = this.projects.findIndex((p) => String(p.id) === String(this.currentProjectId));
+        if (deletedIndex !== -1) {
+          this.projects.splice(deletedIndex, 1);
+        }
+
+        // Переключаемся на первый проект или показываем форму создания
+        if (this.projects.length > 0) {
+          await this.changeProject(String(this.projects[0].id));
+        } else {
+          this.currentProjectId = null;
+          localStorage.removeItem("currentProjectId");
+          this.newProjectForm = true;
+        }
+      } catch (error) {
+        console.error('[Project Store] Error deleting project:', error);
+      }
     },
 
-    clearEmbeddingsCache() {
-      socket.emit("clear-embeddings-cache");
+    async clearEmbeddingsCache() {
+      try {
+        const ipc: any = (ipcClient as any).ipc;
+        if (!ipc) {
+          console.warn('[Project Store] ipcRenderer not available');
+          return;
+        }
+        const res = await ipc.invoke('embeddings:clearCache');
+        if (res && res.success) {
+          // Синтетически отправим события для совместимости с существующими слушателями
+          // Use ipcRenderer.emit so local listeners (registered via ipcRenderer.on) fire
+          try {
+            ipc.emit('embeddings-cache-cleared', null, {});
+          } catch (e) {}
+          const sizeRes = await ipc.invoke('embeddings:getCacheSize');
+          const payload = sizeRes && sizeRes.success ? (sizeRes.data || { size: 0 }) : { size: 0 };
+          try {
+            ipc.emit('embeddings-cache-size', null, payload);
+          } catch (e) {}
+        } else {
+          console.warn('[Project Store] embeddings:clearCache returned error', res?.error);
+        }
+      } catch (e: any) {
+        console.error('[Project Store] clearEmbeddingsCache error:', e?.message || e);
+      }
     },
   },
 });

@@ -59,7 +59,7 @@
         v-model="stopWordsText"
         type="textarea"
         placeholder="Введите стоп-слова, каждое с новой строки"
-        :rows="5"
+        :rows="4"
         :disabled="isAddingWithProgress"
       />
       <div class="text-sm">
@@ -124,22 +124,24 @@
         dbKey="stopwords"
         @delete-row="removeRow"
         @delete-all="deleteAll"
-        :fixedHeight="315"
+        :fixedHeight="215"
       />
     </div>
   </div>
 </template>
 
 <script setup>
-import { ref, onMounted, onUnmounted, computed, watch } from "vue";
+import { ref, computed, watch } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { markRaw } from "vue";
 import { Delete, InfoFilled } from "@element-plus/icons-vue";
 import DataTableFixed from "../../DataTableFixed.vue";
-import socket from "../../../stores/socket-client";
+import ipcClient from "../../../stores/socket-client";
 import { useProjectStore } from "../../../stores/project";
+import { useKeywordsStore } from "../../../stores/keywords";
 
 const project = useProjectStore();
+const keywordsStore = useKeywordsStore();
 
 const stopWordsText = ref("");
 const stopWords = ref([]);
@@ -185,21 +187,27 @@ const tableColumns = ref([
 ]);
 
 // Data loading helpers
-function loadWindow(start) {
-  // Request window from server
-  socket.emit("stopwords:get", {
-    projectId: currentProjectId.value,
-    skip: start,
-    limit: 300,
-  });
+async function loadWindow(start) {
+  // For stopwords we load all data
+  await loadData();
 }
 function sortData(newSort) {
   sort.value = newSort;
   // server-side sorting can be added if needed
 }
-function loadData() {
-  if (currentProjectId.value)
-    socket.emit("stopwords:get", { projectId: currentProjectId.value });
+async function loadData() {
+  if (!currentProjectId.value) return;
+
+  loading.value = true;
+  try {
+    const data = await ipcClient.getStopwordsAll(currentProjectId.value);
+    stopWords.value = data || [];
+  } catch (error) {
+    console.error("Error loading stopwords:", error);
+    ElMessage.error("Ошибка загрузки стоп-слов");
+  } finally {
+    loading.value = false;
+  }
 }
 
 const currentProjectId = ref(null);
@@ -211,8 +219,11 @@ function parseInputText(text) {
     .filter((s) => s.length > 0);
 }
 
-function addStopWords() {
+async function addStopWords() {
   const items = parseInputText(stopWordsText.value);
+  console.log("[StopWords] addStopWords called with items:", items);
+  console.log("[StopWords] currentProjectId:", currentProjectId.value);
+
   if (items.length === 0) {
     ElMessage.warning("Ничего не введено");
     return;
@@ -224,128 +235,137 @@ function addStopWords() {
     );
     return;
   }
-  // Send to server for insertion
+
   isAddingWithProgress.value = true;
   addProgress.value = 0;
   addProgressText.value = `Добавление ${items.length} слов...`;
-  socket.emit("stopwords:add", {
-    projectId: currentProjectId.value,
-    words: items,
-  });
-}
 
-function removeRow(row) {
-  ElMessageBox.confirm(
-    `Удалить стоп-слово "${row.word}"?`,
-    "Подтверждение удаления",
-    {
-      confirmButtonText: "Удалить",
-      cancelButtonText: "Отмена",
-      type: "error",
-      icon: markRaw(Delete),
-      customClass: "delete-msgbox-class",
+  try {
+    let added = 0;
+    for (const word of items) {
+      console.log(
+        "[StopWords] Inserting word:",
+        word,
+        "for project:",
+        currentProjectId.value
+      );
+      const result = await ipcClient.insertStopword(
+        currentProjectId.value,
+        word
+      );
+      console.log("[StopWords] Insert result:", result);
+      added++;
+      addProgress.value = Math.round((added / items.length) * 100);
     }
-  )
-    .then(() => {
-      socket.emit("stopwords:remove", {
-        projectId: currentProjectId.value,
-        word: row.word,
+
+    ElMessage.success(`Добавлено ${added} стоп-слов`);
+    stopWordsText.value = "";
+    console.log("[StopWords] Loading stopwords list...");
+    await loadData();
+    console.log("[StopWords] Stopwords list loaded");
+
+    // Перезагружаем данные keywords, чтобы обновились колонки "Целевой запрос" и "Правило исключения"
+    if (keywordsStore.currentProjectId) {
+      console.log("[StopWords] Reloading keywords after stopwords added");
+      await keywordsStore.loadKeywords(keywordsStore.currentProjectId, {
+        skip: 0,
+        limit: keywordsStore.windowSize,
+        sort: keywordsStore.sort,
       });
-    })
-    .catch(() => {
-      // Пользователь отменил удаление
-    });
-}
-
-function deleteAll() {
-  ElMessageBox.confirm(
-    `Удалить все стоп-слова для проекта?`,
-    "Подтверждение удаления",
-    {
-      confirmButtonText: "Удалить все",
-      cancelButtonText: "Отмена",
-      type: "error",
-      icon: markRaw(Delete),
-      customClass: "delete-msgbox-class",
     }
-  )
-    .then(() => {
-      socket.emit("stopwords:clear", { projectId: currentProjectId.value });
-    })
-    .catch(() => {
-      // Пользователь отменил удаление
-    });
-}
-
-// Socket event handlers
-function onList(data) {
-  if (!data || data.projectId !== currentProjectId.value) return;
-  stopWords.value = data.stopWords || [];
-  loading.value = false;
-}
-
-function onAdded(data) {
-  if (!data || data.projectId !== currentProjectId.value) return;
-  // Refresh list from server
-  socket.emit("stopwords:get", { projectId: currentProjectId.value });
-  isAddingWithProgress.value = false;
-  addProgress.value = 100;
-  addProgressText.value = "";
-  stopWordsText.value = "";
-  ElMessage.success(
-    `Добавлено ${data.added ? data.added.length : 0} стоп-слов`
-  );
-}
-
-function onRemoved(data) {
-  if (!data || data.projectId !== currentProjectId.value) return;
-  socket.emit("stopwords:get", { projectId: currentProjectId.value });
-  ElMessage.success("Удалено");
-}
-
-function onCleared(data) {
-  if (!data || data.projectId !== currentProjectId.value) return;
-  stopWords.value = [];
-  ElMessage.success("Все стоп-слова удалены");
-}
-
-function onError(data) {
-  isAddingWithProgress.value = false;
-  addProgressText.value = "";
-  ElMessage.error(data.message || "Ошибка стоп-слов");
-}
-
-onMounted(() => {
-  socket.on("stopwords:list", onList);
-  socket.on("stopwords:added", onAdded);
-  socket.on("stopwords:removed", onRemoved);
-  socket.on("stopwords:cleared", onCleared);
-  socket.on("stopwords:error", onError);
-
-  // If project selected elsewhere in the app, listen to a global event or read from store
-  // For now, try to load for currentProjectId if set
-  if (project.currentProjectId) {
-    currentProjectId.value = project.currentProjectId;
-    socket.emit("stopwords:get", { projectId: currentProjectId.value });
+  } catch (error) {
+    console.error("Error adding stopwords:", error);
+    ElMessage.error("Ошибка добавления стоп-слов");
+  } finally {
+    isAddingWithProgress.value = false;
+    addProgress.value = 0;
+    addProgressText.value = "";
   }
-  // Watch project changes
-  watch(
-    () => project.currentProjectId,
-    (newId) => {
-      currentProjectId.value = newId;
-      if (newId) socket.emit("stopwords:get", { projectId: newId });
-      else stopWords.value = [];
-    }
-  );
-});
+}
 
-onUnmounted(() => {
-  socket.off("stopwords:list", onList);
-  socket.off("stopwords:added", onAdded);
-  socket.off("stopwords:removed", onRemoved);
-  socket.off("stopwords:cleared", onCleared);
-  socket.off("stopwords:error", onError);
-});
+async function removeRow(row) {
+  try {
+    await ElMessageBox.confirm(
+      `Удалить стоп-слово "${row.word}"?`,
+      "Подтверждение удаления",
+      {
+        confirmButtonText: "Удалить",
+        cancelButtonText: "Отмена",
+        type: "error",
+        icon: markRaw(Delete),
+        customClass: "delete-msgbox-class",
+      }
+    );
+
+    await ipcClient.deleteStopword(row.id);
+    ElMessage.success("Стоп-слово удалено");
+    await loadData();
+
+    // Перезагружаем данные keywords, чтобы обновились колонки "Целевой запрос" и "Правило исключения"
+    if (keywordsStore.currentProjectId) {
+      console.log("[StopWords] Reloading keywords after stopword deleted");
+      await keywordsStore.loadKeywords(keywordsStore.currentProjectId, {
+        skip: 0,
+        limit: keywordsStore.windowSize,
+        sort: keywordsStore.sort,
+      });
+    }
+  } catch (error) {
+    if (error !== "cancel") {
+      console.error("Error deleting stopword:", error);
+      ElMessage.error("Ошибка удаления");
+    }
+  }
+}
+
+async function deleteAll() {
+  try {
+    await ElMessageBox.confirm(
+      `Удалить все стоп-слова для проекта?`,
+      "Подтверждение удаления",
+      {
+        confirmButtonText: "Удалить все",
+        cancelButtonText: "Отмена",
+        type: "error",
+        icon: markRaw(Delete),
+        customClass: "delete-msgbox-class",
+      }
+    );
+
+    await ipcClient.deleteStopwordsByProject(currentProjectId.value);
+    ElMessage.success("Все стоп-слова удалены");
+    await loadData();
+
+    // Перезагружаем данные keywords, чтобы обновились колонки "Целевой запрос" и "Правило исключения"
+    if (keywordsStore.currentProjectId) {
+      console.log("[StopWords] Reloading keywords after all stopwords deleted");
+      await keywordsStore.loadKeywords(keywordsStore.currentProjectId, {
+        skip: 0,
+        limit: keywordsStore.windowSize,
+        sort: keywordsStore.sort,
+      });
+    }
+  } catch (error) {
+    if (error !== "cancel") {
+      console.error("Error deleting all stopwords:", error);
+      ElMessage.error("Ошибка удаления");
+    }
+  }
+}
+
+// Watch project changes
+watch(
+  () => project.data?.id,
+  async (newId) => {
+    currentProjectId.value = newId;
+    if (newId) {
+      await loadData();
+    } else {
+      stopWords.value = [];
+    }
+  },
+  { immediate: true }
+);
 </script>
 
 <style scoped>

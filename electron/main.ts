@@ -1,13 +1,23 @@
-import { app, BrowserWindow, shell } from "electron";
+import { app, BrowserWindow, shell, dialog } from "electron";
 import path from "path";
 import { fileURLToPath } from "url";
-import { spawn, type ChildProcess } from "node:child_process";
-import { createRequire } from "module";
+import Database from "better-sqlite3";
+ 
+// newProjectDefaults moved to IPC modules; no longer needed here
+import { createDatabase } from "./db/init.ts";
+import { registerAllIpc } from "./ipc/index.ts";
+import { stopCrawlerWorker } from "./workers/crawler.ts";
 
 // Автообновление
 import { autoUpdater } from "electron-updater";
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
+// Define __filename and __dirname for ES modules (needed for better-sqlite3 and bindings)
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+// Make them globally available for CommonJS dependencies
+(globalThis as any).__filename = __filename;
+(globalThis as any).__dirname = __dirname;
 
 // The built directory structure
 //
@@ -32,75 +42,80 @@ process.env.VITE_PUBLIC = VITE_DEV_SERVER_URL
 // Main window will be created at runtime inside createWindow()
 
 let win: BrowserWindow | null;
-let socketServerProcess: ChildProcess | null = null;
+let db: Database.Database | null = null;
+// Persist resolved database path for worker access
+let resolvedDbPath: string | null = null;
+// Column name for category text (some older DBs use 'category_name')
+let categoriesNameColumn = 'name';
+// Typing samples schema compatibility (old: label,text | new: url,sample)
+let typingLabelColumn = 'label';
+let typingTextColumn = 'text';
+let typingDateColumn: string | null = 'date';
 
-// Prevent running multiple full Electron instances (avoid multiple windows)
-const gotSingleInstanceLock = app.requestSingleInstanceLock();
-if (!gotSingleInstanceLock) {
-  // If we couldn't get the lock, another instance is already running — quit this one.
-  app.quit();
-}
+// Provide current BrowserWindow to IPC/worker modules
+const getWindow = () => win;
 
-// Start socket server
-function startSocketServer(): boolean {
-  // Prefer spawning a separate process to avoid loading native bindings into
-  // the Electron main process (architecture mismatches). Always spawn.
+// ===== Database Initialization =====
+function initializeDatabase() {
   try {
-    startSocketServerProcess();
-    return true;
-  } catch (e: any) {
-    console.warn('Failed to spawn socket server process:', e?.message || String(e));
-    return false;
+    const isDev = !!VITE_DEV_SERVER_URL;
+    const res = createDatabase({ isDev });
+    db = res.db;
+    resolvedDbPath = res.dbPath;
+    categoriesNameColumn = res.categoriesNameColumn || categoriesNameColumn;
+    typingLabelColumn = res.typingLabelColumn || typingLabelColumn;
+    typingTextColumn = res.typingTextColumn || typingTextColumn;
+    typingDateColumn = res.typingDateColumn || typingDateColumn;
+    console.log('[Main] Database initialized via electron/db/init.ts:', resolvedDbPath);
+  } catch (err: any) {
+    console.error('[Main] Failed to initialize database via createDatabase():', err && err.message ? err.message : err);
+    throw err;
   }
 }
 
-// Spawn-based server start (safer for native modules). Use this when direct
-// require fails due to native binding/arch mismatches.
-function startSocketServerProcess() {
-  if (socketServerProcess) {
-    console.log('Socket server process already started');
-    return;
-  }
+// --- Bridge main-process logs to renderer console ---
+type LogLevel = 'log' | 'info' | 'warn' | 'error';
+const originalConsole = {
+  log: console.log.bind(console),
+  info: console.info.bind(console),
+  warn: console.warn.bind(console),
+  error: console.error.bind(console),
+};
 
-  // Prefer system `node` from PATH so native modules are loaded with the
-  // matching system Node.js runtime rather than Electron's embedded node.
-  const socketPath = path.resolve(__dirname, "../socket/server.cjs");
-  console.log('Spawning socket server process with system node:', socketPath);
+const logBuffer: Array<{ level: LogLevel; args: any[] }> = [];
 
-  const proc = spawn('node', [socketPath], { stdio: 'inherit', shell: false });
-  socketServerProcess = proc;
-
-  proc.on('error', (err) => {
-    console.error('Socket server process error:', err);
-  });
-
-  proc.on('exit', (code, sig) => {
-    console.log('Socket server process exited', code, sig);
-    socketServerProcess = null;
-  });
-}
-
-// Stop socket server
-function stopSocketServer() {
-  try {
-    // If we spawned the server process, terminate it
-    if (socketServerProcess) {
-      console.log('Stopping spawned socket server process...');
-      socketServerProcess.kill('SIGTERM');
-      socketServerProcess = null;
-      return;
-    }
-
-    const socketPath = path.resolve(__dirname, "../socket/server.cjs");
-    const requireFrom = createRequire(import.meta.url);
-    const socketModule = requireFrom(socketPath);
-    if (socketModule && typeof socketModule.stopSocketServer === 'function') {
-      socketModule.stopSocketServer();
-    }
-  } catch (e: any) {
-    console.warn("Failed to stop socket server:", e?.message || String(e));
+function sendLogToRenderer(level: LogLevel, args: any[]) {
+  if (win && !win.isDestroyed()) {
+    try {
+      win.webContents.send('main-process-log', {
+        level,
+        message: args.map((a) => {
+          try { return typeof a === 'string' ? a : JSON.stringify(a); } catch { return String(a); }
+        }),
+      });
+    } catch (_) {}
+  } else {
+    logBuffer.push({ level, args });
+    if (logBuffer.length > 1000) logBuffer.shift();
   }
 }
+
+console.log = (...args: any[]) => {
+  originalConsole.log(...args);
+  sendLogToRenderer('log', args);
+};
+console.info = (...args: any[]) => {
+  originalConsole.info(...args);
+  sendLogToRenderer('info', args);
+};
+console.warn = (...args: any[]) => {
+  originalConsole.warn(...args);
+  sendLogToRenderer('warn', args);
+};
+console.error = (...args: any[]) => {
+  originalConsole.error(...args);
+  sendLogToRenderer('error', args);
+};
 
 function createWindow() {
   // Prevent creating multiple windows
@@ -142,6 +157,14 @@ function createWindow() {
   win.webContents.on("did-finish-load", () => {
   win?.webContents.send("main-process-message", (new Date()).toLocaleString());
   if (!win?.isVisible()) win?.show();
+  // Flush buffered main-process logs to renderer console
+  try {
+    if (logBuffer.length) {
+      for (const entry of logBuffer.splice(0, logBuffer.length)) {
+        sendLogToRenderer(entry.level, entry.args);
+      }
+    }
+  } catch (_e) {}
   });
 
   if (VITE_DEV_SERVER_URL) {
@@ -176,19 +199,74 @@ app.on("activate", () => {
 });
 
 app.on("before-quit", () => {
-  stopSocketServer(); // Ensure socket server is stopped before quit
+  // Close database connection
+  if (db) {
+    console.log('[Main] Closing database...');
+    db.close();
+    db = null;
+  }
+  // Politely stop crawler worker if running (module handles internal state)
+  try { stopCrawlerWorker(); } catch {}
 });
 
 app.whenReady().then(() => {
-  const ok = startSocketServer();
-  if (!ok) {
-    // fallback to spawn-based server start (works better with native bindings)
-    startSocketServerProcess();
+  console.log('[Main] App ready, initializing database...');
+  try {
+    initializeDatabase();
+    console.log('[Main] Database initialized successfully');
+  } catch (error: any) {
+    console.error('[Main] Fatal: Failed to initialize database:', error);
+    console.error('[Main] Stack:', error.stack);
+    dialog.showErrorBox('Database Error', `Failed to initialize database: ${error.message}`);
+    app.quit();
+    return;
   }
 
-  createWindow(); // Then create window
+  console.log('[Main] Registering IPC handlers...');
+  try {
+    if (!db) throw new Error('DB not initialized');
+    registerAllIpc({
+      db,
+      getWindow,
+      resolvedDbPath,
+      categoriesNameColumn,
+      typingLabelColumn,
+      typingTextColumn,
+      typingDateColumn,
+    });
+    console.log('[Main] IPC handlers registered');
+  } catch (error: any) {
+    console.error('[Main] Fatal: Failed to register IPC handlers:', error);
+    console.error('[Main] Stack:', error.stack);
+    app.quit();
+    return;
+  }
+  
+  console.log('[Main] Creating window...');
+  try {
+    createWindow();
+    console.log('[Main] Window created');
+  } catch (error: any) {
+    console.error('[Main] Fatal: Failed to create window:', error);
+    console.error('[Main] Stack:', error.stack);
+    app.quit();
+    return;
+  }
 
-  // Проверка обновлений и уведомление пользователя
-  autoUpdater.checkForUpdatesAndNotify();
+  // Проверка обновлений и уведомление пользователя (только для production releases)
+  if (process.env.NODE_ENV === 'production' && !process.env.VITE_DEV_SERVER_URL) {
+    console.log('[Main] Checking for updates...');
+    autoUpdater.checkForUpdatesAndNotify().catch(err => {
+      console.error('[Main] Auto-update check failed:', err.message);
+    });
+  } else {
+    console.log('[Main] Skipping auto-update check in development mode');
+  }
+}).catch((error) => {
+  console.error('[Main] Fatal error in app.whenReady:', error);
+  console.error('[Main] Stack:', error.stack);
+  app.quit();
 });
+
+// Crawler handlers are registered via ipc/index.ts
 

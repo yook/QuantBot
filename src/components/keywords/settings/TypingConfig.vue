@@ -175,7 +175,6 @@ import {
   ElTag,
   ElIcon,
 } from "element-plus";
-import socket from "../../../stores/socket-client";
 import { useProjectStore } from "../../../stores/project";
 import { useTypingStore } from "../../../stores/typing";
 import { useI18n } from "vue-i18n";
@@ -591,7 +590,7 @@ export default defineComponent({
       });
     }
 
-    function addSamples() {
+    async function addSamples() {
       if (!project.currentProjectId) {
         ElMessage.error(t("select_project") || "Выберите проект");
         return;
@@ -638,12 +637,14 @@ export default defineComponent({
         return;
       }
       const parsed = [{ label, text }];
-      typingStore.addSamples(project.currentProjectId, parsed);
-      setTimeout(() => {
-        sampleLabel.value = "";
-        sampleText.value = "";
-        input.value = [];
-      }, 300);
+      const ok = await typingStore.addSamples(project.currentProjectId, parsed);
+      if (ok) {
+        setTimeout(() => {
+          sampleLabel.value = "";
+          sampleText.value = "";
+          input.value = [];
+        }, 300);
+      }
     }
 
     function clearAll() {
@@ -666,17 +667,13 @@ export default defineComponent({
     onMounted(() => {
       if (project.currentProjectId)
         typingStore.loadSamples(project.currentProjectId);
-      // attach socket listener for per-row update acknowledgements
-      if (socket && socket.on) {
-        // при стратегии syncLabelPhrases перехват обновления per-id не обязателен
-      }
+      // IPC-based architecture: no socket listeners needed
+      // Data is managed through Pinia stores
     });
 
-    // cleanup socket listeners on unmount
+    // cleanup on unmount
     onUnmounted(() => {
-      try {
-        if (socket && socket.off) socket.off("typing:samples:updated");
-      } catch (e) {}
+      // No socket cleanup needed in IPC architecture
     });
 
     watch(

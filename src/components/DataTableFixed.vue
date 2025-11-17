@@ -638,10 +638,9 @@ const totalTableHeight = computed(() => {
       return pageSize.value * rowHeight; // Минимальная высота для видимой области
     }
 
-    // Если totalCount известен, рассчитываем реальную высоту
+    // Базовая логика: суммарная высота контента = количество строк * высота строки
     if (props.totalCount > 0) {
-      // Добавляем дополнительную строку (rowHeight) чтобы последняя строка гарантированно была видна при прокрутке до низа
-      return props.totalCount * rowHeight + rowHeight;
+      return props.totalCount * rowHeight;
     }
 
     // Если данных нет, возвращаем 0
@@ -1050,14 +1049,16 @@ function handleResize(event) {
 
 function stopResize() {
   if (resizing.value && currentColumn.value) {
-    // Save the final width to the project store
+    // First set resizing to false
+    resizing.value = false;
+
+    // Then save the final width to the project store
     saveColumnWidth(
       currentColumn.value,
       columnWidths.value[currentColumn.value]
     );
   }
 
-  resizing.value = false;
   currentColumn.value = null;
   document.removeEventListener("mousemove", handleResize);
   document.removeEventListener("mouseup", stopResize);
@@ -1066,6 +1067,12 @@ function stopResize() {
 function saveColumnWidth(columnProp, width) {
   // Применяем минимальную ширину для _rowNumber
   const finalWidth = columnProp === "_rowNumber" ? Math.max(30, width) : width;
+
+  // Update columnWidths.value to include this new width
+  columnWidths.value = {
+    ...columnWidths.value,
+    [columnProp]: finalWidth,
+  };
 
   // Make sure columnWidths structure exists in project data
   if (!project.data.columnWidths) {
@@ -1077,8 +1084,11 @@ function saveColumnWidth(columnProp, width) {
     project.data.columnWidths[getDbKey()] = {};
   }
 
-  // Save width to the project data
-  project.data.columnWidths[getDbKey()][columnProp] = finalWidth;
+  // Save ALL current column widths to project data (not just one)
+  project.data.columnWidths[getDbKey()] = {
+    ...project.data.columnWidths[getDbKey()],
+    ...columnWidths.value,
+  };
 
   // Find the column in the default settings or parser columns and update there too
   const defaultColumnIndex = project.defaultColumns.findIndex(
@@ -1087,17 +1097,19 @@ function saveColumnWidth(columnProp, width) {
   if (defaultColumnIndex !== -1) {
     project.defaultColumns[defaultColumnIndex].width = finalWidth;
   } else {
-    // Try to find in the parser columns
-    const parserColumnIndex = project.data.parser?.findIndex(
-      (col) => col.prop === columnProp
-    );
-    if (parserColumnIndex !== -1) {
-      project.data.parser[parserColumnIndex].width = finalWidth;
+    // Try to find in the parser columns (only if parser exists and is an array)
+    if (Array.isArray(project.data.parser)) {
+      const parserColumnIndex = project.data.parser.findIndex(
+        (col) => col.prop === columnProp
+      );
+      if (parserColumnIndex !== -1) {
+        project.data.parser[parserColumnIndex].width = finalWidth;
+      }
     }
   }
 
-  // Save to localStorage
-  saveColumnWidthsToLocalStorage(columnProp, finalWidth);
+  // Save ALL widths to localStorage (not just one)
+  saveAllColumnWidthsToLocalStorage();
 
   // Only save to database when resizing is complete to avoid too many updates
   if (!resizing.value) {
@@ -1126,6 +1138,18 @@ function saveColumnWidthsToLocalStorage(columnProp, width) {
   // Сохраняем обратно в localStorage
   try {
     localStorage.setItem(storageKey, JSON.stringify(storedWidths));
+  } catch (e) {
+    // Ignore errors
+  }
+}
+
+// Функция сохранения ВСЕХ ширин столбцов в localStorage
+function saveAllColumnWidthsToLocalStorage() {
+  const storageKey = `table-column-widths-${project.data.id}-${getDbKey()}`;
+
+  // Сохраняем все текущие ширины
+  try {
+    localStorage.setItem(storageKey, JSON.stringify(columnWidths.value));
   } catch (e) {
     // Ignore errors
   }
@@ -1222,6 +1246,11 @@ onMounted(async () => {
 
     // Sync column widths from storage or project data for current DB
     const updateColumnWidthsFromStore = () => {
+      // Если идет ресайз, не обновляем из стора (чтобы не потерять текущие изменения)
+      if (resizing.value) {
+        return;
+      }
+
       // Сначала пробуем загрузить из localStorage
       const localWidths = loadColumnWidthsFromLocalStorage();
       if (Object.keys(localWidths).length > 0) {
@@ -1274,7 +1303,9 @@ onMounted(async () => {
         }
 
         // Фоллбек на разумное значение, если измерение не удалось
-        if (!headerHeight || headerHeight < 30) headerHeight = 50;
+        // Используем высоту строки как разумную оценку высоты заголовка,
+        // чтобы корректно умещать целое число строк без обрезания.
+        if (!headerHeight || headerHeight < 24) headerHeight = rowHeight;
 
         const availableHeight = props.fixedHeight - headerHeight;
 
@@ -1287,9 +1318,8 @@ onMounted(async () => {
         // Более точный расчет высоты строки: padding + line-height + border
         const oldPageSize = pageSize.value;
         pageSize.value = Math.floor(availableHeight / rowHeight);
-        // Увеличиваем минимальный размер страницы для лучшей видимости
-        if (pageSize.value < 5) pageSize.value = 5;
-        // Устанавливаем максимальный размер для предотвращения слишком большого количества строк
+        // Для фиксированной высоты не форсируем минимум 5, чтобы не обрезать последнюю строку
+        if (pageSize.value < 1) pageSize.value = 1;
         if (pageSize.value > 50) pageSize.value = 50;
 
         // Проверяем доступность dataComp перед использованием
@@ -1303,12 +1333,27 @@ onMounted(async () => {
           start.value = maxStart;
         }
       } else {
-        // Если fixedHeight не передан, рассчитываем pageSize по формуле, согласованной с tableHeight
+        // Если fixedHeight не передан, рассчитываем pageSize, вычитая реальную высоту заголовка
         try {
-          // Формула: available = max(0, windowHeight - heightOffset)
+          // Измеряем высоту thead, чтобы не переоценивать видимые строки
+          let headerHeight = 0;
+          try {
+            const cardElement = tableCardRef.value?.$el || tableCardRef.value;
+            const headerEl =
+              cardElement?.querySelector && cardElement.querySelector("thead");
+            if (headerEl) {
+              const hdrRect = headerEl.getBoundingClientRect();
+              headerHeight = hdrRect.height || 0;
+            }
+          } catch (e) {
+            headerHeight = 0;
+          }
+          if (!headerHeight || headerHeight < 24) headerHeight = rowHeight; // фоллбек
+
+          // Доступная высота под строки = высота окна минус отступы и высота заголовка
           const available = Math.max(
             0,
-            windowHeight.value - props.heightOffset
+            windowHeight.value - props.heightOffset - headerHeight
           );
           const rows = Math.floor(available / rowHeight);
           const effectiveRows = Math.max(1, rows);
@@ -2176,12 +2221,12 @@ html.dark .custom-table tbody tr.even-row {
 /* Стили для наведения с увеличенной специфичностью */
 .custom-table tbody tr.odd-row:hover,
 .custom-table tbody tr.even-row:hover {
-  background: #f0f0f0 !important; /* light hover */
+  background: #f0f0f0 !important; /* light theme hover restored */
 }
 
 html.dark .custom-table tbody tr.odd-row:hover,
 html.dark .custom-table tbody tr.even-row:hover {
-  background: var(--el-fill-color-darker) !important;
+  background: #2d3748 !important; /* dark theme hover */
 }
 
 /* Ховер для фиксированной колонки */
@@ -2247,50 +2292,26 @@ html.dark .custom-table tbody tr.even-row:hover {
 
 /* Дополнительные стили для четных и нечетных строк с фиксированным столбцом */
 .custom-table tbody tr.odd-row .fixed-column {
-  background-color: var(--el-bg-color) !important;
+  /* Фиксированная колонка использует тот же фон, что и строка */
+  background-color: inherit !important;
   border-right: 1px solid var(--el-border-color);
-  backdrop-filter: none !important;
-  opacity: 1 !important;
-  /* Дополнительные свойства для полной непрозрачности */
-  -webkit-backdrop-filter: none !important;
-  background-blend-mode: normal !important;
-  mix-blend-mode: normal !important;
 }
 
 .custom-table tbody tr.even-row .fixed-column {
-  background-color: #f7f7f7 !important; /* Непрозрачный серый цвет вместо rgba */
+  /* Тот же фон, что и строка */
+  background-color: inherit !important;
   border-right: 1px solid var(--el-border-color);
-  backdrop-filter: none !important;
-  opacity: 1 !important;
-  /* Дополнительные свойства для полной непрозрачности */
-  -webkit-backdrop-filter: none !important;
-  background-blend-mode: normal !important;
-  mix-blend-mode: normal !important;
 }
 
 /* Темная тема для фиксированного столбца */
 html.dark .custom-table tbody tr.odd-row .fixed-column {
-  background-color: var(--el-bg-color) !important;
+  background-color: inherit !important;
   border-right: 1px solid var(--el-border-color-darker);
-  backdrop-filter: none !important;
-  opacity: 1 !important;
-  z-index: 10 !important; /* z-index для темной темы */
-  /* Дополнительные свойства для полной непрозрачности */
-  -webkit-backdrop-filter: none !important;
-  background-blend-mode: normal !important;
-  mix-blend-mode: normal !important;
 }
 
 html.dark .custom-table tbody tr.even-row .fixed-column {
-  background-color: #1e1e1e !important; /* Непрозрачный темно-серый цвет вместо rgba */
+  background-color: inherit !important;
   border-right: 1px solid var(--el-border-color-darker);
-  backdrop-filter: none !important;
-  opacity: 1 !important;
-  z-index: 10 !important; /* z-index для темной темы */
-  /* Дополнительные свойства для полной непрозрачности */
-  -webkit-backdrop-filter: none !important;
-  background-blend-mode: normal !important;
-  mix-blend-mode: normal !important;
 }
 
 /* Стили для фиксированного заголовка */
@@ -2430,23 +2451,12 @@ html.dark .row-number-cell {
 
 /* Стили для ховера с фиксированным столбцом */
 .custom-table tbody tr:hover .fixed-column {
-  background: #f0f0f0 !important; /* Непрозрачный серый цвет, синхронизирован с основным hover */
-  z-index: 10 !important; /* Поддерживаем высокий z-index при ховере */
-  /* Дополнительные свойства для полной непрозрачности */
-  backdrop-filter: none !important;
-  -webkit-backdrop-filter: none !important;
-  background-blend-mode: normal !important;
-  mix-blend-mode: normal !important;
+  /* Hover наследует фон строки */
+  background: inherit !important;
 }
 
 html.dark .custom-table tbody tr:hover .fixed-column {
-  background: #2b2b2b !important; /* Непрозрачный темно-серый цвет, синхронизирован с основным hover */
-  z-index: 10 !important; /* Поддерживаем высокий z-index при ховере */
-  /* Дополнительные свойства для полной непрозрачности */
-  backdrop-filter: none !important;
-  -webkit-backdrop-filter: none !important;
-  background-blend-mode: normal !important;
-  mix-blend-mode: normal !important;
+  background: inherit !important;
 }
 
 .cell-content {

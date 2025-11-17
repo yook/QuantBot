@@ -1,392 +1,376 @@
-import { io, Socket } from "socket.io-client";
-import type { ServerToClientEvents, ClientToServerEvents } from "../types/socket-events";
-import type { 
-  ProjectData, 
-  SortedRequestOptions,
-  GetAllDataRequest,
-  SortedUrlsResponse,
-  UrlData,
-  ProjectStatsSync,
-  CrawlerStatus,
-  QueueUpdate,
-  TableUpdate,
-  Stats,
-  ProjectSummary
-} from "../types/schema";
+// Pure IPC client for QuantBot
+// Direct communication with Electron main process via ipcRenderer
+import type { ProjectData, SortedRequestOptions, GetAllDataRequest, SortedUrlsResponse } from "../types/schema";
 
-const port = 8090;
-const host = import.meta.env.VITE_SOCKET_HOST || "localhost";
+// Type-safe IPC client wrapper class
+class IPCClient {
+  private ipc: any;
 
-// Stable per-window instance id for debugging
-const clientInstanceId = (() => {
-  const w = window as any;
-  if (!w.__socketClientInstanceId) {
-    w.__socketClientInstanceId = `renderer-${Math.random().toString(36).slice(2, 8)}-${Date.now()}`;
+  constructor() {
+    this.ipc = (window as any).ipcRenderer;
+    if (!this.ipc) {
+      console.error('[IPC Client] ipcRenderer not available in window');
+    }
   }
-  return w.__socketClientInstanceId as string;
-})();
 
-// Singleton pattern to prevent multiple socket instances during HMR
-let socket: Socket<ServerToClientEvents, ClientToServerEvents>;
+  // Direct DB calls via IPC
+  async getProjectsAll() {
+    const result = await this.ipc.invoke('db:projects:getAll');
+    return result.success ? result.data : null;
+  }
 
-// Check if socket already exists in window (for HMR)
-if (import.meta.hot) {
-  // In dev mode, reuse existing socket if available
-  if ((window as any).__appSocket) {
-    console.log('Reusing existing socket connection from previous HMR');
-    socket = (window as any).__appSocket;
-  } else {
-    console.log('Creating new socket connection');
-    socket = io(`ws://${host}:${port}`, {
-      autoConnect: true,
-      reconnection: true,
-      reconnectionAttempts: 5,
-      reconnectionDelay: 1000,
-      timeout: 20000,
-      transports: ["websocket"],
-      path: "/socket",
-      query: { clientInstanceId },
+  async getProject(id: number) {
+    const result = await this.ipc.invoke('db:projects:get', id);
+    return result.success ? result.data : null;
+  }
+
+  async insertProject(name: string, url: string) {
+    const result = await this.ipc.invoke('db:projects:insert', name, url);
+    return result.success ? result.data : null;
+  }
+
+  async updateProject(name: string, url: string, id: number) {
+    const result = await this.ipc.invoke('db:projects:update', name, url, id);
+    return result.success ? result.data : null;
+  }
+
+  async deleteProject(id: number) {
+    const result = await this.ipc.invoke('db:projects:delete', id);
+    return result.success ? result.data : null;
+  }
+
+  async getKeywordsAll(projectId: number) {
+    const result = await this.ipc.invoke('db:keywords:getAll', projectId);
+    return result.success ? result.data : [];
+  }
+
+  async getKeywordsWindow(projectId: number, skip: number, limit: number, sort: Record<string, number> = {}, searchQuery: string = '') {
+    // Serialize sort to plain object to avoid IPC cloning errors
+    const plainSort = JSON.parse(JSON.stringify(sort));
+    const result = await this.ipc.invoke('db:keywords:getWindow', projectId, skip, limit, plainSort, searchQuery);
+    return result.success ? result.data : null;
+  }
+
+  async insertKeyword(keyword: string, projectId: number, categoryId: number | null, color: string | null, disabled: number) {
+    const result = await this.ipc.invoke('db:keywords:insert', keyword, projectId, categoryId, color, disabled);
+    return result.success ? result.data : null;
+  }
+
+  async updateKeyword(keyword: string, categoryId: number | null, color: string | null, disabled: number, id: number) {
+    const result = await this.ipc.invoke('db:keywords:update', keyword, categoryId, color, disabled, id);
+    return result.success ? result.data : null;
+  }
+
+  async deleteKeyword(id: number) {
+    const result = await this.ipc.invoke('db:keywords:delete', id);
+    return result.success ? result.data : null;
+  }
+
+  async deleteKeywordsByProject(projectId: number) {
+    const result = await this.ipc.invoke('db:keywords:deleteByProject', projectId);
+    return result.success ? result.data : null;
+  }
+
+  async insertKeywordsBulk(keywords: string[], projectId: number) {
+    console.log('[IPC Client] insertKeywordsBulk called:', { 
+      keywordsCount: keywords.length, 
+      projectId,
+      firstKeyword: keywords[0],
+      lastKeyword: keywords[keywords.length - 1]
     });
-    // Store socket in window for HMR reuse
-    (window as any).__appSocket = socket;
-  }
-} else {
-  // Production: create socket normally
-  socket = io(`ws://${host}:${port}/`, {
-    autoConnect: true,
-    reconnection: true,
-    reconnectionAttempts: 5,
-    reconnectionDelay: 1000,
-    timeout: 20000,
-    transports: ["websocket"],
-    path: "/socket",
-    query: { clientInstanceId },
-  });
-}
-// Avoid duplicate base listeners across HMR reloads
-const wAny = window as any;
-if (!wAny.__socketBaseListenersRegistered) {
-  wAny.__socketBaseListenersRegistered = true;
-  socket.on("connect", () => {
-    console.log("Socket connected:", { id: socket.id, port, clientInstanceId });
-  });
-  socket.on("connect_error", (error: Error) => {
-    console.error("Socket connection error:", error.message);
-    console.log("Make sure the socket.io server is running on port", port);
-  });
-  socket.on("disconnect", (reason: string) => {
-    console.log("Socket disconnected:", reason);
-  });
-  // System events
-  socket.on("reconnect", (attemptNumber: number) => {
-    console.log("Socket reconnected after", attemptNumber, "attempts");
-  });
-  socket.on("reconnect_error", (error: Error) => {
-    console.error("Socket reconnection failed:", error.message);
-  });
-} else {
-  // In case of HMR re-evaluation, skip re-binding base listeners
-  console.log("socket-client: base listeners already registered, skipping re-bind");
-}
-
-// Type-safe socket client wrapper class
-class TypedSocketClient {
-  private socket: Socket<ServerToClientEvents, ClientToServerEvents>;
-
-  constructor(socketInstance: Socket<ServerToClientEvents, ClientToServerEvents>) {
-    this.socket = socketInstance;
+    
+    try {
+      const result = await this.ipc.invoke('db:keywords:insertBulk', keywords, projectId);
+      console.log('[IPC Client] insertKeywordsBulk result:', result);
+      return result.success ? result.data : null;
+    } catch (err) {
+      console.error('[IPC Client] insertKeywordsBulk error:', err);
+      throw err;
+    }
   }
 
-  // Project management emits
-  getAllProjects() {
-    this.socket.emit("get-all-projects");
+  async getCategoriesAll(projectId: number) {
+    const result = await this.ipc.invoke('db:categories:getAll', projectId);
+    return result.success ? result.data : [];
   }
 
-  getProject(projectId: string | number) {
-    this.socket.emit("get-project", projectId);
+  async insertCategory(name: string, projectId: number) {
+    const result = await this.ipc.invoke('db:categories:insert', name, projectId);
+    return result.success ? result.data : null;
   }
 
-  changeProject(projectId: string | number) {
-    this.socket.emit("change-project", projectId);
+  async updateCategory(name: string, id: number) {
+    const result = await this.ipc.invoke('db:categories:update', name, id);
+    return result.success ? result.data : null;
   }
 
-  saveNewProject(data: ProjectData) {
-    this.socket.emit("save-new-project", data);
+  async deleteCategory(id: number) {
+    const result = await this.ipc.invoke('db:categories:delete', id);
+    return result.success ? result.data : null;
   }
 
-  updateProject(data: ProjectData) {
-    this.socket.emit("update-project", data);
+  async getTypingAll(projectId: number) {
+    const result = await this.ipc.invoke('db:typing:getAll', projectId);
+    return result.success ? result.data : [];
   }
 
-  deleteProject(projectId: string | number | null) {
-    this.socket.emit("delete-project", projectId);
+  async insertTyping(projectId: number, url: string, sample: string, date: string) {
+    const result = await this.ipc.invoke('db:typing:insert', projectId, url, sample, date);
+    return result.success ? result.data : null;
   }
 
-  deleteAll(projectId: string | number | null) {
-    this.socket.emit("delete-all", projectId);
+  async updateTyping(url: string, sample: string, date: string, id: number) {
+    const result = await this.ipc.invoke('db:typing:update', url, sample, date, id);
+    return result.success ? result.data : null;
   }
 
-  clearEmbeddingsCache() {
-    this.socket.emit("clear-embeddings-cache");
+  async deleteTyping(id: number) {
+    const result = await this.ipc.invoke('db:typing:delete', id);
+    return result.success ? result.data : null;
   }
 
-  // Crawler emits
-  startCrawler(data: ProjectData) {
-    this.socket.emit("startCrauler", data);
+  async deleteTypingByProject(projectId: number) {
+    const result = await this.ipc.invoke('db:typing:deleteByProject', projectId);
+    return result.success ? result.data : null;
   }
 
-  freezeQueue() {
-    this.socket.emit("freezeQueue");
+  async getStopwordsAll(projectId: number) {
+    const result = await this.ipc.invoke('db:stopwords:getAll', projectId);
+    return result.success ? result.data : [];
   }
 
-  // Table emits
-  getSortedUrls(options: SortedRequestOptions) {
-    this.socket.emit("get-sorted-urls", options);
+  async insertStopword(projectId: number, word: string) {
+    console.log('[IPC Client] insertStopword called with projectId:', projectId, 'word:', word);
+    const result = await this.ipc.invoke('db:stopwords:insert', projectId, word);
+    console.log('[IPC Client] insertStopword result:', result);
+    if (!result.success) {
+      console.error('[IPC Client] insertStopword failed:', result.error);
+      throw new Error(result.error || 'Failed to insert stopword');
+    }
+    return result.data;
   }
 
-  getAllData(req: GetAllDataRequest) {
-    this.socket.emit("get-all-data", req);
+  async deleteStopword(id: number) {
+    const result = await this.ipc.invoke('db:stopwords:delete', id);
+    return result.success ? result.data : null;
   }
 
-  // Stats emits
-  syncProjectStats(projectId: number) {
-    this.socket.emit("sync-project-stats", projectId);
+  async deleteStopwordsByProject(projectId: number) {
+    const result = await this.ipc.invoke('db:stopwords:deleteByProject', projectId);
+    return result.success ? result.data : null;
   }
 
-  // Event listeners with proper typing
-  onAllProjectsData(callback: (data: ProjectSummary[]) => void) {
-    this.socket.on("all-projects-data", callback);
-    return () => this.socket.off("all-projects-data", callback);
+  // Process runners: categorization, typing, clustering
+  async startCategorization(projectId: number) {
+    const result = await this.ipc.invoke('keywords:start-categorization', projectId);
+    return result.success ? result.data : null;
   }
 
-  onProjectData(callback: (data: ProjectData | null) => void) {
-    this.socket.on("project-data", callback);
-    return () => this.socket.off("project-data", callback);
+  async startTyping(projectId: number) {
+    const result = await this.ipc.invoke('keywords:start-typing', projectId);
+    return result.success ? result.data : null;
   }
 
-  onNewProjectData(callback: (newDoc: { id: string | number }) => void) {
-    this.socket.on("new-project-data", callback);
-    return () => this.socket.off("new-project-data", callback);
+  async startClustering(projectId: number, algorithm: string, eps: number, minPts?: number) {
+    const result = await this.ipc.invoke('keywords:start-clustering', projectId, algorithm, eps, minPts);
+    return result.success ? result.data : null;
   }
 
-  onStopping(callback: (data: CrawlerStatus) => void) {
-    this.socket.on("stopping", callback);
-    return () => this.socket.off("stopping", callback);
+  // IPC event listeners (for worker progress updates)
+  on(channel: string, callback: (data: any) => void) {
+    if (this.ipc) {
+      this.ipc.on(channel, (_event: any, data: any) => callback(data));
+    }
   }
 
-  onStopped(callback: (data: CrawlerStatus) => void) {
-    this.socket.on("stopped", callback);
-    return () => this.socket.off("stopped", callback);
+  off(channel: string, callback?: (data: any) => void) {
+    if (this.ipc && callback) {
+      this.ipc.removeListener(channel, callback);
+    }
   }
 
-  onComplete(callback: () => void) {
-    this.socket.on("complete", callback);
-    return () => this.socket.off("complete", callback);
+  async getUrlsAll(projectId: number) {
+    const result = await this.ipc.invoke('db:urls:getAll', projectId);
+    return result.success ? result.data : [];
   }
 
-  onFetched(callback: (data: QueueUpdate) => void) {
-    this.socket.on("fetched", callback);
-    return () => this.socket.off("fetched", callback);
+  async getUrlsSorted(options: SortedRequestOptions) {
+    // Serialize options to plain object to avoid IPC cloning errors
+    const plainOptions = JSON.parse(JSON.stringify(options));
+    console.log('🔌 [IPC Client] getUrlsSorted sending to Electron:', plainOptions);
+    const result = await this.ipc.invoke('db:urls:getSorted', plainOptions);
+    console.log('🔌 [IPC Client] getUrlsSorted response:', {
+      success: result.success,
+      dataLength: result.data?.length || 0,
+      db: plainOptions.db,
+    });
+    return result.success ? result.data : [];
   }
 
-  onQueue(callback: (data: QueueUpdate) => void) {
-    this.socket.on("queue", callback);
-    return () => this.socket.off("queue", callback);
+  async getAllUrlsForExport(options: SortedRequestOptions) {
+    // Export-specific method that doesn't interfere with UI state
+    const plainOptions = JSON.parse(JSON.stringify(options));
+    console.log('📤 [IPC Client] getAllUrlsForExport sending to Electron:', plainOptions);
+    const result = await this.ipc.invoke('db:urls:getAllForExport', plainOptions);
+    console.log('📤 [IPC Client] getAllUrlsForExport response:', {
+      success: result.success,
+      dataLength: result.data?.length || 0,
+      db: plainOptions.db,
+    });
+    return result.success ? result.data : [];
   }
 
-  onStatsUpdate(callback: (stats: Partial<Stats>) => void) {
-    this.socket.on("statsUpdate", callback);
-    return () => this.socket.off("statsUpdate", callback);
+  async getUrlsCount(projectId: number) {
+    const result = await this.ipc.invoke('db:urls:count', projectId);
+    return result.success ? result.data?.count || 0 : 0;
   }
 
-  onDataUpdated(callback: (data: TableUpdate) => void) {
-    this.socket.on("data-updated", callback);
-    return () => this.socket.off("data-updated", callback);
-  }
-
-  onUrlsAllData(callback: (data: UrlData[]) => void) {
-    this.socket.on("urls-all-data", callback);
-    return () => this.socket.off("urls-all-data", callback);
-  }
-
-  onProjectStatssynced(callback: (payload: ProjectStatsSync) => void) {
-    this.socket.on("project-stats-synced", callback);
-    return () => this.socket.off("project-stats-synced", callback);
-  }
-
-  onDeleted(callback: (count: number) => void) {
-    this.socket.on("deleted", callback);
-    return () => this.socket.off("deleted", callback);
-  }
-
-  onCrawlerDataCleared(callback: (data: { projectId: string | number }) => void) {
-    this.socket.on("crawler-data-cleared", callback);
-    return () => this.socket.off("crawler-data-cleared", callback);
-  }
-
-  onDeleteError(callback: (errorMessage: string) => void) {
-    this.socket.on("delete-error", callback);
-    return () => this.socket.off("delete-error", callback);
-  }
-
-  onProjectDeleted(callback: () => void) {
-    this.socket.on("projectDeleted", callback);
-    return () => this.socket.off("projectDeleted", callback);
-  }
-
-  onProjectDeleteError(callback: (errorMessage: string) => void) {
-    this.socket.on("projectDeleteError", callback);
-    return () => this.socket.off("projectDeleteError", callback);
-  }
-
-  onProjectSaveError(callback: (errorMessage: string) => void) {
-    this.socket.on("project-save-error", callback);
-    return () => this.socket.off("project-save-error", callback);
-  }
-
-  // Stat-specific listeners
-  onDisallow(callback: (count: number) => void) {
-    this.socket.on("disallow", callback);
-    return () => this.socket.off("disallow", callback);
-  }
-
-  onStatHtml(callback: (data: { count: number; projectId: string | number }) => void) {
-    this.socket.on("stat-html", callback);
-    return () => this.socket.off("stat-html", callback);
-  }
-
-  onStatJscss(callback: (data: { count: number; projectId: string | number }) => void) {
-    this.socket.on("stat-jscss", callback);
-    return () => this.socket.off("stat-jscss", callback);
-  }
-
-  onStatImage(callback: (data: { count: number; projectId: string | number }) => void) {
-    this.socket.on("stat-image", callback);
-    return () => this.socket.off("stat-image", callback);
-  }
-
-  onStatRedirect(callback: (data: { count: number; projectId: string | number }) => void) {
-    this.socket.on("stat-redirect", callback);
-    return () => this.socket.off("stat-redirect", callback);
-  }
-
-  onStatError(callback: (data: { count: number; projectId: string | number }) => void) {
-    this.socket.on("stat-error", callback);
-    return () => this.socket.off("stat-error", callback);
-  }
-
-  onStatDepth3(callback: (data: { count: number; projectId: string | number }) => void) {
-    this.socket.on("stat-depth3", callback);
-    return () => this.socket.off("stat-depth3", callback);
-  }
-
-  onStatDepth5(callback: (data: { count: number; projectId: string | number }) => void) {
-    this.socket.on("stat-depth5", callback);
-    return () => this.socket.off("stat-depth5", callback);
-  }
-
-  onStatDepth6(callback: (data: { count: number; projectId: string | number }) => void) {
-    this.socket.on("stat-depth6", callback);
-    return () => this.socket.off("stat-depth6", callback);
-  }
-
-  onStatOther(callback: (data: { count: number; projectId: string | number }) => void) {
-    this.socket.on("stat-other", callback);
-    return () => this.socket.off("stat-other", callback);
-  }
-
-  // Dynamic event helper for sorted urls data
-  onSortedUrlsData(requestId: string, callback: (response: SortedUrlsResponse) => void) {
-    const eventName = `sorted-urls-data-${requestId}` as `sorted-urls-data-${string}`;
-    this.socket.once(eventName, callback);
-    return () => this.socket.off(eventName, callback);
-  }
-
-  // Raw socket access for advanced usage
-  get raw() {
-    return this.socket;
-  }
-
-  // Connection status helpers
-  get connected() {
-    return this.socket.connected;
-  }
-
-  get disconnected() {
-    return this.socket.disconnected;
-  }
-
-  connect() {
-    this.socket.connect();
-  }
-
-  disconnect() {
-    this.socket.disconnect();
-  }
-
-  // Connection event listeners
-  onConnect(callback: () => void) {
-    this.socket.on("connect", callback);
-    return () => this.socket.off("connect", callback);
-  }
-
-  onDisconnect(callback: (reason: string) => void) {
-    this.socket.on("disconnect", callback);
-    return () => this.socket.off("disconnect", callback);
-  }
-
-  onConnectError(callback: (error: Error) => void) {
-    this.socket.on("connect_error", callback);
-    return () => this.socket.off("connect_error", callback);
+  once(channel: string, cb: (...args: any[]) => void) {
+    const wrapper = (_e: any, ...args: any[]) => {
+      cb(...args);
+      this.ipc.off(channel, wrapper);
+    };
+    this.ipc.on(channel, wrapper);
+    return () => this.ipc.off(channel, wrapper);
   }
 }
 
-// Create typed client instance
-export const typedSocketClient = new TypedSocketClient(socket);
+// Create IPC client instance
+export const ipcClient = new IPCClient();
 
-// Legacy exports for backward compatibility
-export const emitGetAllProjects = () => typedSocketClient.getAllProjects();
-export const emitGetProject = (projectId: string | number) => typedSocketClient.getProject(projectId);
-export const emitChangeProject = (projectId: string | number) => typedSocketClient.changeProject(projectId);
-export const emitSaveNewProject = (data: ProjectData) => typedSocketClient.saveNewProject(data);
-export const emitUpdateProject = (data: ProjectData) => typedSocketClient.updateProject(data);
-export const emitDeleteProject = (projectId: string | number | null) => typedSocketClient.deleteProject(projectId);
-export const emitDeleteAll = (projectId: string | number | null) => typedSocketClient.deleteAll(projectId);
-export const emitStartCrawler = (data: ProjectData) => typedSocketClient.startCrawler(data);
-export const emitFreezeQueue = () => typedSocketClient.freezeQueue();
-export const emitGetSortedUrls = (options: SortedRequestOptions) => typedSocketClient.getSortedUrls(options);
-export const emitGetAllData = (req: GetAllDataRequest) => typedSocketClient.getAllData(req);
-export const emitSyncProjectStats = (projectId: number) => typedSocketClient.syncProjectStats(projectId);
-export const emitClearEmbeddingsCache = () => typedSocketClient.clearEmbeddingsCache();
+// Legacy exports for backward compatibility (will be migrated gradually)
+export const emitGetAllProjects = () => ipcClient.getProjectsAll();
+export const emitGetProject = (projectId: string | number) => ipcClient.getProject(Number(projectId));
+export const emitChangeProject = (projectId: string | number) => {
+  console.warn('[IPC] emitChangeProject is deprecated - use store directly');
+  return ipcClient.getProject(Number(projectId));
+};
+export const emitSaveNewProject = (data: ProjectData) => {
+  return ipcClient.insertProject(data.name, data.url || '');
+};
+export const emitUpdateProject = (data: ProjectData) => {
+  return ipcClient.updateProject(data.name, data.url || '', Number(data.id));
+};
+export const emitDeleteProject = (projectId: string | number | null) => {
+  if (projectId) return ipcClient.deleteProject(Number(projectId));
+};
+export const emitDeleteAll = (_projectId: string | number | null) => {
+  console.warn('[IPC] emitDeleteAll not implemented yet');
+};
+export const emitStartCrawler = (_data: ProjectData) => {
+  console.warn('[IPC] emitStartCrawler not implemented yet');
+};
+export const emitFreezeQueue = () => {
+  console.warn('[IPC] emitFreezeQueue not implemented yet');
+};
+export const emitGetSortedUrls = (options: SortedRequestOptions) => {
+  return ipcClient.getUrlsSorted(options);
+};
+export const emitGetAllData = (_req: GetAllDataRequest) => {
+  console.warn('[IPC] emitGetAllData not implemented yet');
+};
+export const emitSyncProjectStats = (_projectId: number) => {
+  console.warn('[IPC] emitSyncProjectStats not implemented yet');
+};
+export const emitClearEmbeddingsCache = () => {
+  console.warn('[IPC] emitClearEmbeddingsCache not implemented yet');
+};
 
 // Dynamic event helper for backward compatibility
 export const onSortedUrlsData = (
   requestId: string,
   handler: (response: SortedUrlsResponse) => void
-) => typedSocketClient.onSortedUrlsData(requestId, handler);
-
-// Disconnect socket (useful for cleanup during HMR)
-export const disconnectSocket = () => {
-  console.log('Disconnecting socket...');
-  socket.disconnect();
+) => {
+  const eventName = `sorted-urls-data-${requestId}`;
+  ipcClient.on(eventName, handler);
+  return () => {}; // cleanup handled by IPC
 };
 
-// Reconnect socket
-export const reconnectSocket = () => {
-  console.log('Reconnecting socket...');
-  socket.connect();
+// No-op for IPC
+export const disconnectSocket = () => {};
+export const reconnectSocket = () => {};
+
+// Lightweight compatibility socket object (will be removed gradually)
+type IpcSocket = {
+  on(channel: string, cb: (payload: any) => void): void;
+  off(channel: string, cb?: (payload: any) => void): void;
+  once(channel: string, cb: (payload: any) => void): void;
+  emit(eventName: string, ...args: any[]): void;
+  connect(): void;
+  disconnect(): void;
+  connected: boolean;
+  disconnected: boolean;
 };
 
-// HMR cleanup
-if (import.meta.hot) {
-  import.meta.hot.accept(() => {
-    console.log('Socket client module reloaded via HMR');
-  });
-  
-  import.meta.hot.dispose(() => {
-    console.log('Socket client module disposing - keeping socket alive for reuse');
-    // Don't disconnect - we want to reuse the socket
-  });
-}
+export const socket: IpcSocket = {
+  on(channel: string, cb: (...args: any[]) => void) {
+    ipcClient.on(channel, cb);
+  },
+  off(_channel: string, _cb?: (...args: any[]) => void) {
+    // IPC handles cleanup
+  },
+  once(channel: string, cb: (...args: any[]) => void) {
+    ipcClient.once(channel, cb);
+  },
+  emit(_eventName: string, ..._args: any[]) {
+    const eventName = _eventName;
+    const arg0 = _args[0] || {};
+    try {
+      switch (eventName) {
+        case 'integrations:get':
+          ipcClient['ipc']?.invoke('integrations:get', arg0.projectId ?? null, arg0.service);
+          break;
+        case 'integrations:setKey':
+          ipcClient['ipc']?.invoke('integrations:setKey', arg0.projectId ?? null, arg0.service, arg0.key);
+          break;
+        case 'integrations:delete':
+          ipcClient['ipc']?.invoke('integrations:delete', arg0.projectId ?? null, arg0.service);
+          break;
+        case 'get-embeddings-cache-size':
+          try {
+            ipcClient['ipc']?.invoke('embeddings:getCacheSize').then((res: any) => {
+              const payload = res && res.success ? (res.data || { size: 0 }) : { size: 0 };
+              // Trigger local renderer listeners via ipcRenderer.emit
+              ipcClient['ipc']?.emit('embeddings-cache-size', null, payload);
+            }).catch((e: any) => {
+              console.error('[IPC Socket] embeddings:getCacheSize invoke error:', e?.message || e);
+              ipcClient['ipc']?.emit('embeddings-cache-size', null, { size: 0 });
+            });
+          } catch (e: any) {
+            console.error('[IPC Socket] embeddings:getCacheSize error:', e?.message || e);
+            ipcClient['ipc']?.emit('embeddings-cache-size', null, { size: 0 });
+          }
+          break;
+        case 'clear-embeddings-cache':
+          try {
+            ipcClient['ipc']?.invoke('embeddings:clearCache').then(() => {
+              ipcClient['ipc']?.emit('embeddings-cache-cleared', null, {});
+              ipcClient['ipc']?.invoke('embeddings:getCacheSize').then((res2: any) => {
+                const payload = res2 && res2.success ? (res2.data || { size: 0 }) : { size: 0 };
+                ipcClient['ipc']?.emit('embeddings-cache-size', null, payload);
+              });
+            }).catch((e: any) => {
+              console.error('[IPC Socket] embeddings:clearCache invoke error:', e?.message || e);
+            });
+          } catch (e: any) {
+            console.error('[IPC Socket] embeddings:clearCache error:', e?.message || e);
+          }
+          break;
+        default:
+          console.warn('[IPC Socket] emit deprecated / unsupported event:', eventName);
+      }
+    } catch (e: any) {
+      console.error('[IPC Socket] emit mapping error', eventName, e?.message || e);
+    }
+  },
+  connect() {
+    // no-op
+  },
+  disconnect() {
+    // no-op
+  },
+  connected: true,
+  disconnected: false,
+} as any;
 
-export default socket;
+export default ipcClient;

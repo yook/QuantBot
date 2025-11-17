@@ -1,36 +1,48 @@
 import { defineStore } from "pinia";
 import { ref } from "vue";
-import socket from "../stores/socket-client";
+import ipcClient from "../stores/socket-client";
 import type { Sample, LoadSamplesOptions } from "../types/schema";
 
 export const useTypingStore = defineStore("typing", () => {
   const samples = ref<Sample[]>([]);
   const totalCount = ref(0);
   const loading = ref(false);
+  const loadingMore = ref(false);
+  const currentProjectId = ref<string | number | null>(null);
+
+  // windowing/pagination params for DataTableFixed
+  const windowSize = ref(300);
+  const bufferSize = ref(50);
+  const windowStart = ref(0);
 
   function setCurrentProject(projectId: string | number) {
-    // no-op for now, kept for parity
     currentProjectId.value = projectId;
   }
 
-  function loadSamples(projectId: string | number, options: LoadSamplesOptions = {}) {
+  async function loadSamples(projectId: string | number, _options: LoadSamplesOptions = {}) {
     if (!projectId) return;
-    // remember current project for windowed loads / subsequent actions
     currentProjectId.value = projectId;
     loading.value = true;
-    const payload: any = { projectId };
-    if (options && typeof options === "object") {
-      if (typeof options.skip !== "undefined") payload.skip = options.skip;
-      if (typeof options.limit !== "undefined") payload.limit = options.limit;
+    
+    try {
+      const data = await ipcClient.getTypingAll(Number(projectId));
+      samples.value = data || [];
+      totalCount.value = data?.length || 0;
+    } catch (error) {
+      console.error("Error loading typing samples:", error);
+    } finally {
+      loading.value = false;
+      loadingMore.value = false;
     }
-  socket.emit("typing:samples:get", payload);
   }
 
-  function addSamples(projectId: string | number, parsedSamples: any[]) {
-    if (!projectId || !Array.isArray(parsedSamples)) return;
+  async function addSamples(projectId: string | number, parsedSamples: any[]) {
+    if (!projectId || !Array.isArray(parsedSamples)) return false;
     currentProjectId.value = projectId;
-    // Normalize each sample: lowercase phrases, deduplicate
-    const norm = [];
+    
+    // Normalize each sample: split by comma/newline, lowercase, dedupe
+    // Then insert each distinct part as its own typing sample (one sample per row).
+    const entriesToInsert: Array<{ label: string; text: string }> = [];
     for (const s of parsedSamples) {
       if (!s || !s.label || !s.text) continue;
       const label = String(s.label).trim();
@@ -41,80 +53,80 @@ export const useTypingStore = defineStore("typing", () => {
         .filter(Boolean);
       const unique = Array.from(new Set(parts));
       if (unique.length === 0) continue;
-      norm.push({ label, text: unique.join(", ") });
+      for (const part of unique) {
+        entriesToInsert.push({ label, text: part });
+      }
     }
-    if (norm.length === 0) return;
-  socket.emit("typing:samples:add", { projectId, samples: norm });
+    if (entriesToInsert.length === 0) return false;
+
+    try {
+      for (const sample of entriesToInsert) {
+        await ipcClient.insertTyping(
+          Number(projectId),
+          sample.label,
+          sample.text,
+          new Date().toISOString()
+        );
+      }
+      await loadSamples(projectId);
+      return true;
+    } catch (error) {
+      console.error("Error adding typing samples:", error);
+      return false;
+    }
   }
 
-  function clearSamples(projectId: string | number) {
+  async function clearSamples(projectId: string | number) {
     if (!projectId) return;
     currentProjectId.value = projectId;
-  socket.emit("typing:samples:clear", { projectId });
+    
+    try {
+      await ipcClient.deleteTypingByProject(Number(projectId));
+      await loadSamples(projectId);
+    } catch (error) {
+      console.error("Error clearing typing samples:", error);
+    }
   }
 
-  function deleteSample(projectId: string | number | undefined, id: string | number) {
+  async function deleteSample(projectId: string | number | undefined, id: string | number) {
     // Allow calling deleteSample(id) when currentProjectId is set in the store
     const pid = projectId || currentProjectId.value;
     if (!pid || !id) return;
-  socket.emit("typing:samples:delete", { projectId: pid, id });
+    
+    try {
+      await ipcClient.deleteTyping(Number(id));
+      await loadSamples(pid);
+    } catch (error) {
+      console.error("Error deleting typing sample:", error);
+    }
   }
 
-  function updateSample(projectId: string | number | undefined, id: string | number, fields: any) {
+  async function updateSample(projectId: string | number | undefined, id: string | number, fields: any) {
     const pid = projectId || currentProjectId.value;
     if (!pid || !id || !fields || typeof fields !== "object") return;
-  socket.emit("typing:samples:update", { projectId: pid, id, fields });
+    
+    try {
+      await ipcClient.updateTyping(
+        fields.url || '',
+        fields.sample || '',
+        fields.date || new Date().toISOString(),
+        Number(id)
+      );
+      await loadSamples(pid);
+    } catch (error) {
+      console.error("Error updating typing sample:", error);
+    }
   }
-  const loadingMore = ref(false);
-  const currentProjectId = ref<string | number | null>(null);
 
-  // windowing/pagination params for DataTableFixed
-  const windowSize = ref(300);
-  const bufferSize = ref(50);
-  const windowStart = ref(0);
-
-  // Socket listeners
-  socket.on("typing:samples:list", (data) => {
-    samples.value = data.samples || [];
-    totalCount.value = data.total || (data.samples && data.samples.length) || 0;
-    loading.value = false;
-    loadingMore.value = false;
-  });
-
-  socket.on("typing:samples:added", (data) => {
-    // reload samples for simplicity
-    if (data && data.projectId) loadSamples(data.projectId);
-  });
-
-  socket.on("typing:samples:updated", (data) => {
-    // reload samples for simplicity
-    if (data && data.projectId) loadSamples(data.projectId);
-  });
-
-  function loadWindow(startIndex: number) {
+  async function loadWindow(startIndex: number) {
     if (!currentProjectId.value) return;
     loadingMore.value = true;
     const newWindowStart = Math.max(0, startIndex - bufferSize.value);
     windowStart.value = newWindowStart;
-  socket.emit("typing:samples:get", {
-      projectId: currentProjectId.value,
-      skip: newWindowStart,
-      limit: windowSize.value,
-    });
+    
+    // For now, load all data (can be optimized later with windowing in db-worker)
+    await loadSamples(currentProjectId.value);
   }
-
-  socket.on("typing:samples:deleted", (data) => {
-    if (data && data.projectId) loadSamples(data.projectId);
-  });
-
-  socket.on("typing:samples:cleared", (data) => {
-    if (data && data.projectId) loadSamples(data.projectId);
-  });
-
-  socket.on("typing:error", (data) => {
-    console.error("Typing socket error:", data);
-    loading.value = false;
-  });
 
   return {
     samples,

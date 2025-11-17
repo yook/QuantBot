@@ -20,16 +20,29 @@
           :striped-flow="keywordsStore.running"
           :duration="7"
         />
-        <el-button
+        <el-dropdown
           v-if="!keywordsStore.running"
-          class="add-start ml-3"
-          type="primary"
           size="large"
-          :loading="keywordsStore.running"
-          @click="keywordsStore.startCategorization"
+          split-button
+          type="primary"
+          class="ml-3"
+          @click="startAll"
         >
           <el-icon class="text-2xl"><VideoPlay /></el-icon>
-        </el-button>
+          <template #dropdown>
+            <el-dropdown-menu>
+              <el-dropdown-item @click="startTypingOnly">
+                Классификация
+              </el-dropdown-item>
+              <el-dropdown-item @click="startClusteringOnly">
+                Кластеризация
+              </el-dropdown-item>
+              <el-dropdown-item @click="startCategorizationOnly">
+                Категоризация
+              </el-dropdown-item>
+            </el-dropdown-menu>
+          </template>
+        </el-dropdown>
 
         <el-button
           v-if="keywordsStore.running"
@@ -64,7 +77,7 @@
           <!-- Прогресс-бар в левой части -->
           <div
             v-if="keywordsStore.isAddingWithProgress"
-            class="flex items-center gap-3 flex-shrink-0"
+            class="flex items-center gap-3 shrink-0"
           >
             <el-progress
               :text-inside="true"
@@ -110,25 +123,21 @@
 </template>
 
 <script setup>
-import { ref, reactive, inject, onMounted, onUnmounted } from "vue";
+import { ref } from "vue";
 import validator from "validator";
 import { ElMessage } from "element-plus";
 import { useI18n } from "vue-i18n";
 import { CirclePlus, VideoPlay, VideoPause } from "@element-plus/icons-vue";
 import { useProjectStore } from "../../stores/project";
 import { useKeywordsStore } from "../../stores/keywords";
-import socket from "../../stores/socket-client";
 
 const project = useProjectStore();
 const keywordsStore = useKeywordsStore();
 const { t } = useI18n();
 
-const dirname = ref("");
 const dialogVisible = ref(false);
 const keywords = ref("");
 const addingKeywords = ref(false);
-let messageShown = false; // Флаг для предотвращения дублирования сообщений
-let callCount = 0; // Счетчик вызовов для отладки
 
 function submitSite() {
   // let url = urlm.value.trim();
@@ -139,28 +148,46 @@ function submitSite() {
   if (!validator.isURL(url)) {
     ElMessage.error(t("isNotURL"));
   } else {
-    project.start(url);
+    project.startCrawlerIPC(url);
   }
 }
 
 function freezeQueue() {
-  project.freeze();
+  project.stopCrawlerIPC();
 }
 
-function addKeywords() {
+async function addKeywords() {
   console.log("=== addKeywords called ===");
   console.log("Call timestamp:", new Date().toISOString());
   console.log("Current keywords:", keywords.value);
-  console.log("Previous messageShown flag:", messageShown);
-  console.log("Previous callCount:", callCount);
 
   if (keywords.value.trim()) {
-    console.log("✅ Keywords provided, resetting flags");
-    messageShown = false; // Сбрасываем флаг при начале добавления
-    callCount = 0; // Сбрасываем счетчик вызовов
+    console.log("✅ Keywords provided, starting addition");
     addingKeywords.value = true;
-    keywordsStore.addKeywords(keywords.value);
-    // Не закрываем диалог сразу - ждем завершения добавления
+
+    try {
+      // addKeywords теперь async, ждем завершения
+      await keywordsStore.addKeywords(keywords.value);
+
+      console.log("✅ Keywords added successfully");
+      // Сообщение уже показано в store (с количеством добавленных/пропущенных)
+
+      // Очищаем поле и закрываем диалог
+      keywords.value = "";
+
+      setTimeout(() => {
+        console.log("=== Closing dialog ===");
+        dialogVisible.value = false;
+        addingKeywords.value = false;
+
+        // Обновляем таблицу после закрытия диалога
+        refreshTable();
+      }, 200);
+    } catch (error) {
+      console.error("❌ Error adding keywords:", error);
+      addingKeywords.value = false;
+      // ElMessage об ошибке уже показано в store
+    }
   } else {
     console.log("❌ No keywords provided");
     ElMessage.warning("Введите ключевые запросы");
@@ -174,6 +201,22 @@ function refreshTable() {
   }
 }
 
+// Запуск процессов из выпадающего меню
+function startAll() {
+  keywordsStore.startAllProcesses();
+}
+function startCategorizationOnly() {
+  keywordsStore.startCategorizationOnly();
+}
+function startTypingOnly() {
+  keywordsStore.startTypingOnly();
+}
+function startClusteringOnly() {
+  keywordsStore.startClusteringOnly();
+}
+
+// TODO: IPC migration - socket listeners removed, using async/await now
+/*
 // Обработчик успешного добавления ключевых слов
 function handleKeywordsAdded(data) {
   callCount++;
@@ -234,7 +277,10 @@ function handleKeywordsError(data) {
 
   // Не закрываем диалог при ошибке, чтобы пользователь мог попробовать снова
 }
+*/
 
+// TODO: IPC migration - socket listeners removed
+/*
 // Настройка socket listeners
 onMounted(() => {
   console.log("=== KeywordsAdd onMounted - registering socket listeners ===");
@@ -247,6 +293,7 @@ onUnmounted(() => {
   socket.off("keywords:added", handleKeywordsAdded);
   socket.off("keywords:error", handleKeywordsError);
 });
+*/
 </script>
 
 <style>
