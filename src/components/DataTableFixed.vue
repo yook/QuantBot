@@ -638,10 +638,9 @@ const totalTableHeight = computed(() => {
       return pageSize.value * rowHeight; // Минимальная высота для видимой области
     }
 
-    // Если totalCount известен, рассчитываем реальную высоту
+    // Базовая логика: суммарная высота контента = количество строк * высота строки
     if (props.totalCount > 0) {
-      // Добавляем дополнительную строку (rowHeight) чтобы последняя строка гарантированно была видна при прокрутке до низа
-      return props.totalCount * rowHeight + rowHeight;
+      return props.totalCount * rowHeight;
     }
 
     // Если данных нет, возвращаем 0
@@ -1304,7 +1303,9 @@ onMounted(async () => {
         }
 
         // Фоллбек на разумное значение, если измерение не удалось
-        if (!headerHeight || headerHeight < 30) headerHeight = 50;
+        // Используем высоту строки как разумную оценку высоты заголовка,
+        // чтобы корректно умещать целое число строк без обрезания.
+        if (!headerHeight || headerHeight < 24) headerHeight = rowHeight;
 
         const availableHeight = props.fixedHeight - headerHeight;
 
@@ -1317,9 +1318,8 @@ onMounted(async () => {
         // Более точный расчет высоты строки: padding + line-height + border
         const oldPageSize = pageSize.value;
         pageSize.value = Math.floor(availableHeight / rowHeight);
-        // Увеличиваем минимальный размер страницы для лучшей видимости
-        if (pageSize.value < 5) pageSize.value = 5;
-        // Устанавливаем максимальный размер для предотвращения слишком большого количества строк
+        // Для фиксированной высоты не форсируем минимум 5, чтобы не обрезать последнюю строку
+        if (pageSize.value < 1) pageSize.value = 1;
         if (pageSize.value > 50) pageSize.value = 50;
 
         // Проверяем доступность dataComp перед использованием
@@ -1333,12 +1333,27 @@ onMounted(async () => {
           start.value = maxStart;
         }
       } else {
-        // Если fixedHeight не передан, рассчитываем pageSize по формуле, согласованной с tableHeight
+        // Если fixedHeight не передан, рассчитываем pageSize, вычитая реальную высоту заголовка
         try {
-          // Формула: available = max(0, windowHeight - heightOffset)
+          // Измеряем высоту thead, чтобы не переоценивать видимые строки
+          let headerHeight = 0;
+          try {
+            const cardElement = tableCardRef.value?.$el || tableCardRef.value;
+            const headerEl =
+              cardElement?.querySelector && cardElement.querySelector("thead");
+            if (headerEl) {
+              const hdrRect = headerEl.getBoundingClientRect();
+              headerHeight = hdrRect.height || 0;
+            }
+          } catch (e) {
+            headerHeight = 0;
+          }
+          if (!headerHeight || headerHeight < 24) headerHeight = rowHeight; // фоллбек
+
+          // Доступная высота под строки = высота окна минус отступы и высота заголовка
           const available = Math.max(
             0,
-            windowHeight.value - props.heightOffset
+            windowHeight.value - props.heightOffset - headerHeight
           );
           const rows = Math.floor(available / rowHeight);
           const effectiveRows = Math.max(1, rows);

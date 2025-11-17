@@ -12,7 +12,8 @@
   files: [
     "dist",
     "dist-electron",
-    "socket/**/*",
+    // Include DB CommonJS helpers used at runtime
+    "electron/db/**/*",
     "worker/**/*",
     "node_modules/**/*",
   ],
@@ -21,8 +22,9 @@
   // unpacked. This reduces package size compared to unpacking the entire
   // node_modules tree.
   asarUnpack: [
+    // Workers must be unpacked to be spawnable by Node
     "worker/**/*",
-    "socket/**/*",
+    // Native modules
     "node_modules/better-sqlite3/**",
     "node_modules/bindings/**",
     "node_modules/keytar/**",

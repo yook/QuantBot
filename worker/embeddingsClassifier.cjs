@@ -19,7 +19,7 @@ const {
   embeddingsCachePut,
   updateTypingSampleEmbeddings,
   upsertTypingModel,
-} = require("../socket/db-sqlite.cjs");
+} = require("../electron/db/index.cjs");
 
 const OPENAI_EMBED_URL = "https://api.openai.com/v1/embeddings";
 const DEFAULT_MODEL = "text-embedding-3-small";

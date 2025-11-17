@@ -59,7 +59,7 @@
         v-model="stopWordsText"
         type="textarea"
         placeholder="Введите стоп-слова, каждое с новой строки"
-        :rows="5"
+        :rows="4"
         :disabled="isAddingWithProgress"
       />
       <div class="text-sm">
@@ -124,7 +124,7 @@
         dbKey="stopwords"
         @delete-row="removeRow"
         @delete-all="deleteAll"
-        :fixedHeight="315"
+        :fixedHeight="215"
       />
     </div>
   </div>

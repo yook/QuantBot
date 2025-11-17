@@ -20,7 +20,7 @@ const {
   getTypingModel,
   upsertTypingModel,
   updateTypingSampleEmbeddings,
-} = require("../socket/db-sqlite.cjs");
+} = require("../electron/db/index.cjs");
 const cls = require("./embeddingsClassifier.cjs");
 
 const VECTOR_MODEL = process.env.EMBEDDING_MODEL || "text-embedding-3-small";

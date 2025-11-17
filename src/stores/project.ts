@@ -355,7 +355,22 @@ export const useProjectStore = defineStore("project", {
       });
       ipc.on('crawler:error', (_e: any, payload: any) => {
         if (!payload || String(payload.projectId) !== String(this.currentProjectId)) return;
-        console.error('[Crawler IPC] error:', payload.message);
+        const msg = String(payload.message || '').toLowerCase();
+        // Нефатальные ошибки сети/HTTP для отдельных URL — не останавливаем краулер
+        const nonFatal = msg.includes('fetcherror')
+          || msg.includes('fetchtimeout')
+          || msg.includes('fetchclienterror')
+          || msg === '404' || msg.includes('404');
+        if (nonFatal) {
+          console.warn('[Crawler IPC] non-fatal:', payload.message, payload.url || '');
+          // Опционально: увеличим локальную метрику ошибок, если есть
+          try {
+            const current = this.data.stats?.error ?? 0;
+            (this.data.stats as any).error = current + 1;
+          } catch (_) {}
+          return;
+        }
+        console.error('[Crawler IPC] fatal error:', payload.message);
         this.running = false;
       });
       

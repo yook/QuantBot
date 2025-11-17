@@ -342,7 +342,16 @@ crawler.on("fetcherror", (queueItem, resp) => {
 });
 
 crawler.on("complete", () => {
-  logJson({ type: "finished", fetched });
+  // total fetched should include previously stored rows + this session
+  try {
+    const totalFetched = initialFetched + fetchedSession;
+    logJson({ type: "finished", fetched: totalFetched });
+  } catch (_) {
+    logJson({
+      type: "finished",
+      fetched: initialFetched || fetchedSession || 0,
+    });
+  }
   process.exit(0);
 });
 
