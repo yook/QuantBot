@@ -45,9 +45,11 @@
     </div>
 
     <template #footer>
-      <el-button type="primary" @click="submitForm(ruleFormRef)">
-        {{ t("common.save") }}
-      </el-button>
+      <div style="display: flex; justify-content: center; width: 100%">
+        <el-button type="primary" @click="submitForm(ruleFormRef)">
+          {{ t("common.save") }}
+        </el-button>
+      </div>
     </template>
   </el-dialog>
 </template>

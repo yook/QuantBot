@@ -53,6 +53,10 @@ export const useProjectStore = defineStore("project", {
     queue: 0,
     socketReady: false,
     tableUpdateTimeout: null as NodeJS.Timeout | null,
+    // Track running state per project so UI can reflect multiple concurrent crawlers
+    runningProjects: {} as Record<string, boolean>,
+    // Live stats for projects that may be running but are not currently selected
+    liveStats: {} as Record<string, { fetched?: number; queue?: number }>,
   }),
 
   getters: {
@@ -105,13 +109,37 @@ export const useProjectStore = defineStore("project", {
         }
       }
 
-      // Filter by enabled list and keep order: url first, then others; dedup just in case
-      const enabledSet = new Set(enabledColumns);
-      const filtered = all.filter((c) => enabledSet.has(c.prop));
+      // Build the resulting columns respecting the explicit enabledColumns order
+      const enabledList = Array.isArray(enabledColumns) ? enabledColumns : [];
+      const resultOrdered: ColumnDef[] = [];
+
+      for (const prop of enabledList) {
+        const found = all.find((c) => c.prop === prop);
+        if (found) {
+          resultOrdered.push(found);
+        } else {
+          // If we don't have metadata for this prop, create a simple ColumnDef
+          resultOrdered.push({ prop, name: prop } as ColumnDef);
+        }
+      }
+
+      // Ensure uniqueness while preserving order
+      const seenProps = new Set<string>();
+      const uniqueOrdered = resultOrdered.filter((c) => {
+        if (!c || !c.prop) return false;
+        if (seenProps.has(c.prop)) return false;
+        seenProps.add(c.prop);
+        return true;
+      });
+
       const rowNumberColumn: ColumnDef = { name: "#", prop: "_rowNumber", width: 60, minWidth: 60 } as any;
-      const urlCol = filtered.find((c) => c.prop === "url");
-      const others = filtered.filter((c) => c.prop !== "url");
-      return urlCol ? [rowNumberColumn, urlCol, ...others] : [rowNumberColumn, ...others];
+      // Prefer url first if present in the ordered list
+      const urlIndex = uniqueOrdered.findIndex((c) => c.prop === 'url');
+      if (urlIndex === -1) return [rowNumberColumn, ...uniqueOrdered];
+
+      const urlCol = uniqueOrdered[urlIndex];
+      const others = uniqueOrdered.filter((_, idx) => idx !== urlIndex);
+      return [rowNumberColumn, urlCol, ...others];
     },
     allColumns: (state) => {
       // Normalize and deduplicate by prop; ensure name labels exist
@@ -272,7 +300,7 @@ export const useProjectStore = defineStore("project", {
       this.tableLoading = true;
       localStorage.setItem("currentProjectId", id);
       this.currentProjectId = id;
-      
+
       const projectData = await ipcClient.getProject(Number(id));
       if (projectData) {
         Object.assign(this.data, projectData);
@@ -302,9 +330,24 @@ export const useProjectStore = defineStore("project", {
           (this.data as any).parser = (newProjectJson as NewProjectFile).parser || [];
         }
         
-        this.getsortedDb({ id: this.data.id as number | string, sort: this.sort, skip: 0, limit: 50, db: this.currentDb });
+        // Ensure we show the main `urls` table by default when switching projects
+        // (prevents empty views when user had another DB selected previously)
+        this.currentDb = 'urls';
+      // If we have live stats for this project (it's running elsewhere), merge them into loaded data
+      const live = this.liveStats[String(this.data.id)];
+      if (live) {
+        if (!this.data.stats) this.data.stats = (newProjectJson as NewProjectFile).stats;
+        try {
+          (this.data.stats as any).fetched = typeof live.fetched === 'number' ? live.fetched : (this.data.stats as any).fetched;
+          (this.data.stats as any).queue = typeof live.queue === 'number' ? live.queue : (this.data.stats as any).queue;
+        } catch (_) {}
+      }
+        // Load initial window and await completion so UI shows rows immediately
+        await this.getsortedDb({ id: this.data.id as number | string, sort: this.sort, skip: 0, limit: 50, db: this.currentDb });
       }
       this.tableLoading = false;
+    // Reflect running status for selected project
+    this.running = !!this.runningProjects[String(this.currentProjectId)];
     },
 
     initCrawlerIpcEvents() {
@@ -329,32 +372,53 @@ export const useProjectStore = defineStore("project", {
         scheduleStatsSave();
       };
       ipc.on('crawler:progress', (_e: any, payload: any) => {
-        if (!payload || String(payload.projectId) !== String(this.currentProjectId)) return;
-        updateStat('fetched', payload.fetched || 0);
-        const nextQueue = typeof payload.queue === 'number' ? payload.queue : 0;
-        // Preserve non-zero queue when worker sends transient 0 on start/stop
-        const currentQueue = this.data.stats?.queue ?? 0;
-        if (nextQueue > 0 || currentQueue === 0) {
-          updateStat('queue', nextQueue);
+        if (!payload) return;
+        const pid = String(payload.projectId);
+        if (pid === String(this.currentProjectId)) {
+          updateStat('fetched', payload.fetched || 0);
+          const nextQueue = typeof payload.queue === 'number' ? payload.queue : 0;
+          // Preserve non-zero queue when worker sends transient 0 on start/stop
+          const currentQueue = this.data.stats?.queue ?? 0;
+          if (nextQueue > 0 || currentQueue === 0) {
+            updateStat('queue', nextQueue);
+          }
+        } else {
+          // keep lightweight live stats for non-selected projects so UI shows correct progress after switching
+          try {
+            this.liveStats[pid] = { fetched: payload.fetched || 0, queue: typeof payload.queue === 'number' ? payload.queue : 0 };
+          } catch (_) {}
+          // (we keep live stats in `liveStats`; projects summary update avoided to prevent typing issues)
         }
-        // else: ignore drop to 0 if we had a queue before (resume scenario)
       });
       ipc.on('crawler:queue', (_e: any, payload: any) => {
-        if (!payload || String(payload.projectId) !== String(this.currentProjectId)) return;
+        if (!payload) return;
+        const pid = String(payload.projectId);
         const nextQueue = typeof payload.queue === 'number' ? payload.queue : 0;
-        const currentQueue = this.data.stats?.queue ?? 0;
-        if (nextQueue > 0 || currentQueue === 0) {
-          updateStat('queue', nextQueue);
+        if (pid === String(this.currentProjectId)) {
+          const currentQueue = this.data.stats?.queue ?? 0;
+          if (nextQueue > 0 || currentQueue === 0) {
+            updateStat('queue', nextQueue);
+          }
+        } else {
+          try {
+            this.liveStats[pid] = Object.assign(this.liveStats[pid] || {}, { queue: nextQueue });
+            // keep live stats only
+          } catch (_) {}
         }
       });
       ipc.on('crawler:finished', (_e: any, payload: any) => {
-        if (!payload || String(payload.projectId) !== String(this.currentProjectId)) return;
-        this.running = false;
-        // Save final stats on finish
-        scheduleStatsSave();
+        if (!payload) return;
+        const pid = String(payload.projectId);
+        try { this.runningProjects[pid] = false; } catch (_) {}
+        if (pid === String(this.currentProjectId)) {
+          this.running = false;
+          // Save final stats on finish
+          scheduleStatsSave();
+        }
       });
       ipc.on('crawler:error', (_e: any, payload: any) => {
-        if (!payload || String(payload.projectId) !== String(this.currentProjectId)) return;
+        if (!payload) return;
+        const pid = String(payload.projectId);
         const msg = String(payload.message || '').toLowerCase();
         // Нефатальные ошибки сети/HTTP для отдельных URL — не останавливаем краулер
         const nonFatal = msg.includes('fetcherror')
@@ -363,15 +427,22 @@ export const useProjectStore = defineStore("project", {
           || msg === '404' || msg.includes('404');
         if (nonFatal) {
           console.warn('[Crawler IPC] non-fatal:', payload.message, payload.url || '');
-          // Опционально: увеличим локальную метрику ошибок, если есть
-          try {
-            const current = this.data.stats?.error ?? 0;
-            (this.data.stats as any).error = current + 1;
-          } catch (_) {}
+          // If it's for current project, increment local stat; otherwise keep liveStats
+          if (pid === String(this.currentProjectId)) {
+            try {
+              const current = this.data.stats?.error ?? 0;
+              (this.data.stats as any).error = current + 1;
+            } catch (_) {}
+          } else {
+            try {
+              this.liveStats[pid] = Object.assign(this.liveStats[pid] || {}, { error: (this.liveStats[pid] as any)?.error ? (this.liveStats[pid] as any).error + 1 : 1 });
+            } catch (_) {}
+          }
           return;
         }
         console.error('[Crawler IPC] fatal error:', payload.message);
-        this.running = false;
+        try { this.runningProjects[pid] = false; } catch (_) {}
+        if (pid === String(this.currentProjectId)) this.running = false;
       });
       
       // Handle stat updates (disallow, html, image, etc.)
@@ -445,21 +516,26 @@ export const useProjectStore = defineStore("project", {
           parser: JSON.parse(JSON.stringify(this.data.parser || [])),
         };
         await ipc.invoke('crawler:start', payload);
+        // mark this project as running
+        try { this.runningProjects[String(this.data.id)] = true; } catch (_) {}
         this.running = true;
       } catch (e: any) {
         console.error('[Project Store] crawler:start invoke error', e?.message || e);
       }
     },
 
-    stopCrawlerIPC() {
+    stopCrawlerIPC(projectId?: string) {
       const ipc: any = (ipcClient as any).ipc;
       if (!ipc) return;
+      const idToStop = projectId || String(this.currentProjectId || '');
+      if (!idToStop) return;
       try {
-        ipc.invoke('crawler:stop');
+        ipc.invoke('crawler:stop', Number(idToStop));
       } catch (e: any) {
         console.error('[Project Store] crawler:stop invoke error', e?.message || e);
       }
-      this.running = false;
+      try { this.runningProjects[String(idToStop)] = false; } catch (_) {}
+      if (String(this.currentProjectId) === String(idToStop)) this.running = false;
     },
 
     // downloadData removed — use exportCrawlerData from `src/stores/export` directly

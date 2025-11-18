@@ -42,13 +42,36 @@
                 }"
                 :class="[
                   'sortable-header',
-                  columnIndex < props.fixedColumns ? 'fixed-column' : '',
+                  column.prop !== '_actions' && columnIndex < props.fixedColumns
+                    ? 'fixed-column'
+                    : '',
                   column.prop === '_rowNumber' &&
+                  column.prop !== '_actions' &&
                   columnIndex < props.fixedColumns
                     ? 'row-number-header'
                     : '',
+                  dragOverIndex === columnIndex ? 'drag-over' : '',
                 ]"
+                :draggable="
+                  columnIndex >= props.fixedColumns &&
+                  column.prop !== '_rowNumber' &&
+                  column.prop !== '_actions'
+                "
+                @dragstart="(event) => onDragStart(event, column, columnIndex)"
+                @dragover.prevent="(event) => onDragOver(event, columnIndex)"
+                @dragleave.prevent="(event) => onDragLeave(event, columnIndex)"
+                @drop.prevent="(event) => onDrop(event, columnIndex)"
+                @dragend="onDragEnd"
+                :data-prop="column.prop"
               >
+                <div
+                  v-if="insertBeforeIndex === columnIndex"
+                  class="insert-line insert-left"
+                ></div>
+                <div
+                  v-if="insertBeforeIndex === columnIndex + 1"
+                  class="insert-line insert-right"
+                ></div>
                 <div
                   :class="[
                     'header-content',
@@ -65,7 +88,7 @@
                   "
                 >
                   <span v-if="column.prop !== '_actions'">{{
-                    column.name
+                    safeColumnName(column)
                   }}</span>
                   <el-icon
                     v-else
@@ -114,8 +137,11 @@
                 :class="[
                   'table-cell',
                   column.prop === 'keyword' ? 'url-cell' : '',
-                  columnIndex < props.fixedColumns ? 'fixed-column' : '',
+                  column.prop !== '_actions' && columnIndex < props.fixedColumns
+                    ? 'fixed-column'
+                    : '',
                   column.prop === '_rowNumber' &&
+                  column.prop !== '_actions' &&
                   columnIndex < props.fixedColumns
                     ? 'row-number-cell'
                     : '',
@@ -149,75 +175,72 @@
                       <Delete />
                     </el-icon>
                   </span>
-                  <span v-else>
-                    <template
-                      v-if="
-                        column.prop === 'category_info' ||
-                        column.prop === 'class_info'
-                      "
-                    >
-                      <span class="category-info-inline">
-                        <span
-                          class="category-name"
-                          :title="
-                            column.prop === 'category_info'
-                              ? row.category_name
-                              : row.class_name
-                          "
-                          >{{
-                            column.prop === "category_info"
-                              ? row.category_name
-                              : row.class_name
-                          }}</span
-                        >
-                        <el-tooltip
-                          v-if="
-                            column.prop === 'category_info'
-                              ? row.category_similarity
-                              : row.class_similarity
-                          "
-                          content="достоверность"
-                          placement="top"
-                          trigger="click"
-                        >
-                          <el-tag
-                            type="primary"
-                            size="small"
-                            style="cursor: pointer"
-                            >{{
-                              formatSimilarity(
-                                column.prop === "category_info"
-                                  ? row.category_similarity
-                                  : row.class_similarity
-                              )
-                            }}</el-tag
-                          >
-                        </el-tooltip>
-                      </span>
-                    </template>
-                    <template v-else-if="column.prop === 'target_query'">
-                      <el-icon
+                  <template
+                    v-if="
+                      column.prop === 'category_info' ||
+                      column.prop === 'class_info'
+                    "
+                  >
+                    <span class="category-info-inline">
+                      <span
+                        class="category-name"
+                        :title="
+                          column.prop === 'category_info'
+                            ? row.category_name
+                            : row.class_name
+                        "
+                        >{{
+                          column.prop === "category_info"
+                            ? row.category_name
+                            : row.class_name
+                        }}</span
+                      >
+                      <el-tooltip
                         v-if="
-                          row.target_query === 1 || row.target_query === true
+                          column.prop === 'category_info'
+                            ? row.category_similarity
+                            : row.class_similarity
                         "
-                        style="color: var(--el-color-success); font-size: 18px"
+                        content="достоверность"
+                        placement="top"
+                        trigger="click"
                       >
-                        <Check />
-                      </el-icon>
-                      <el-icon
-                        v-else-if="
-                          row.target_query === 0 || row.target_query === false
-                        "
-                        style="color: var(--el-color-danger); font-size: 18px"
-                      >
-                        <Close />
-                      </el-icon>
-                      <span v-else>{{ row.target_query }}</span>
-                    </template>
-                    <template v-else>
-                      {{ formatCellValue(row[column.prop], column.prop) }}
-                    </template>
-                  </span>
+                        <el-tag
+                          type="primary"
+                          size="small"
+                          style="cursor: pointer"
+                        >
+                          {{
+                            formatSimilarity(
+                              column.prop === "category_info"
+                                ? row.category_similarity
+                                : row.class_similarity
+                            )
+                          }}
+                        </el-tag>
+                      </el-tooltip>
+                    </span>
+                  </template>
+                  <template v-else-if="column.prop === 'target_query'">
+                    <el-icon
+                      v-if="row.target_query === 1 || row.target_query === true"
+                      style="color: var(--el-color-success); font-size: 18px"
+                    >
+                      <Check />
+                    </el-icon>
+                    <el-icon
+                      v-else-if="
+                        row.target_query === 0 || row.target_query === false
+                      "
+                      style="color: var(--el-color-danger); font-size: 18px"
+                    >
+                      <Close />
+                    </el-icon>
+                    <span v-else>{{ row.target_query }}</span>
+                  </template>
+                  <template v-else>
+                    {{ formatCellValue(row[column.prop], column.prop) }}
+                  </template>
                 </div>
               </td>
             </tr>
@@ -277,7 +300,7 @@ import { ref, computed, onMounted, onUnmounted, watch, nextTick } from "vue";
 import { useProjectStore } from "../stores/project";
 import { Delete, DeleteFilled, Check, Close } from "@element-plus/icons-vue";
 
-const emit = defineEmits(["delete-row", "delete-all"]);
+const emit = defineEmits(["delete-row", "delete-all", "columns-reorder"]);
 
 const props = defineProps({
   tableColumns: {
@@ -362,6 +385,10 @@ const currentColumn = ref(null);
 const startX = ref(0);
 const startWidth = ref(0);
 const columnWidths = ref({});
+// Drag & drop state for column reordering
+const draggingProp = ref(null);
+const dragOverIndex = ref(-1);
+const insertBeforeIndex = ref(-1);
 const tableCardRef = ref(null);
 const windowHeight = ref(window.innerHeight);
 
@@ -748,6 +775,22 @@ function formatSimilarity(value) {
   return `${v.toFixed(2)}%`;
 }
 
+// Sanitize column header names: remove accidental injected attribute-like text
+function safeColumnName(column) {
+  try {
+    const name =
+      column && column.name ? String(column.name) : String(column || "");
+    // Remove anything starting with an equals sign followed by space and 'props' (defensive)
+    let cleaned = name.replace(/\s*=\s*props\.[^\s]*/g, "");
+    // Remove trailing attribute-like sequences starting with '@' or ':'
+    cleaned = cleaned.replace(/\s+[@:][\w-]+=?.*$/g, "");
+    // Trim leftover whitespace
+    return cleaned.trim();
+  } catch (e) {
+    return column && column.name ? column.name : "";
+  }
+}
+
 // Simple HTML escaper for values rendered via v-html
 function escapeHtml(unsafe) {
   if (!unsafe && unsafe !== 0) return "";
@@ -1062,6 +1105,130 @@ function stopResize() {
   currentColumn.value = null;
   document.removeEventListener("mousemove", handleResize);
   document.removeEventListener("mouseup", stopResize);
+}
+
+// Drag & drop handlers for column reordering
+function onDragStart(event, column, columnIndex) {
+  try {
+    // Only allow dragging non-fixed, non-action, non-rowNumber columns
+    if (
+      columnIndex < props.fixedColumns ||
+      column.prop === "_rowNumber" ||
+      column.prop === "_actions"
+    ) {
+      event.preventDefault();
+      return;
+    }
+
+    draggingProp.value = column.prop;
+    // store prop in dataTransfer for cross-window support
+    try {
+      event.dataTransfer &&
+        event.dataTransfer.setData("text/plain", column.prop);
+      event.dataTransfer.effectAllowed = "move";
+    } catch (e) {
+      // ignore
+    }
+  } catch (e) {
+    // ignore
+  }
+}
+
+function onDragOver(event, columnIndex) {
+  try {
+    // Do not allow insert into fixed columns
+    if (columnIndex < props.fixedColumns) {
+      dragOverIndex.value = -1;
+      insertBeforeIndex.value = -1;
+      return;
+    }
+
+    const el = event.currentTarget;
+    if (!el || !el.getBoundingClientRect) {
+      dragOverIndex.value = columnIndex;
+      insertBeforeIndex.value = columnIndex;
+      return;
+    }
+
+    const rect = el.getBoundingClientRect();
+    const x = event.clientX - rect.left;
+    const half = rect.width / 2;
+    const baseIdx = columnIndex - 1; // index inside props.tableColumns
+
+    let baseInsert = x < half ? baseIdx : baseIdx + 1;
+    const max = (props.tableColumns || []).length;
+    // Prevent inserting into fixed columns area
+    const minInsert = Math.max(0, props.fixedColumns - 1);
+    if (baseInsert < minInsert) baseInsert = minInsert;
+    if (baseInsert > max) baseInsert = max;
+
+    // store as index in tableColumnsWithRowNumber space (baseInsert + 1)
+    insertBeforeIndex.value = baseInsert + 1;
+    dragOverIndex.value = columnIndex;
+  } catch (e) {
+    dragOverIndex.value = columnIndex;
+    insertBeforeIndex.value = -1;
+  }
+}
+
+function onDragLeave(_event, _columnIndex) {
+  // Clear hover/insert indicators when leaving header cell
+  dragOverIndex.value = -1;
+  insertBeforeIndex.value = -1;
+}
+
+function onDrop(event, columnIndex) {
+  try {
+    if (!draggingProp.value) {
+      // try dataTransfer as fallback
+      try {
+        draggingProp.value = event.dataTransfer.getData("text/plain");
+      } catch (e) {
+        return;
+      }
+    }
+
+    // Compute target index in props.tableColumns (exclude the inserted _rowNumber)
+    const targetIdx = columnIndex - 1;
+    if (targetIdx < 0) return;
+
+    const current = props.tableColumns.map((c) => c.prop);
+    const fromProp = draggingProp.value;
+    if (!fromProp) return;
+
+    // Remove existing
+    const existingIdx = current.indexOf(fromProp);
+    if (existingIdx === -1) return;
+    current.splice(existingIdx, 1);
+
+    // Adjust insertion index if necessary (if removing an earlier index shifts the target)
+    let insertAt = targetIdx;
+    // After removal, if the removed index was before the target, the target shifts left by 1
+    if (existingIdx < targetIdx) insertAt = Math.max(0, targetIdx - 1);
+
+    // Ensure we don't insert into fixed columns area (props.tableColumns index >= fixedColumns-1)
+    const minAllowed = Math.max(0, props.fixedColumns - 1);
+    if (insertAt < minAllowed) insertAt = minAllowed;
+
+    if (insertAt > current.length) insertAt = current.length;
+
+    current.splice(insertAt, 0, fromProp);
+
+    // Emit new order (array of prop strings) for parent to persist
+    emit("columns-reorder", current);
+  } catch (e) {
+    // ignore
+  } finally {
+    draggingProp.value = null;
+    dragOverIndex.value = -1;
+    insertBeforeIndex.value = -1;
+  }
+}
+
+function onDragEnd() {
+  draggingProp.value = null;
+  dragOverIndex.value = -1;
+  insertBeforeIndex.value = -1;
 }
 
 function saveColumnWidth(columnProp, width) {
@@ -1406,6 +1573,8 @@ onMounted(async () => {
     // Add virtual scroll event listeners
     window.addEventListener("mousemove", handleMouseMove);
     window.addEventListener("mouseup", stopHandle);
+    // Ensure dragend clears any leftover state even if drag events are not fired on elements
+    document.addEventListener("dragend", onDragEnd);
 
     // Запускаем синхронизацию после загрузки данных
     watch(
@@ -1516,6 +1685,7 @@ onUnmounted(() => {
   // Remove virtual scroll event listeners
   window.removeEventListener("mousemove", handleMouseMove);
   window.removeEventListener("mouseup", stopHandle);
+  document.removeEventListener("dragend", onDragEnd);
   // Очищаем обработчик изменения высоты окна
   if (window.updateWindowHeight) {
     window.removeEventListener("resize", window.updateWindowHeight);
@@ -1895,6 +2065,42 @@ function maybeRequestWindowByScroll() {
 /* Стили для Firefox в темной теме */
 html.dark .table-container {
   scrollbar-color: var(--el-border-color-darker) var(--el-bg-color); /* Firefox темная тема */
+}
+
+/* Visual indicator when a header is a drop target during drag-and-drop */
+.drag-over {
+  background: linear-gradient(
+    90deg,
+    rgba(0, 123, 255, 0.06),
+    rgba(0, 123, 255, 0.02)
+  );
+  box-shadow: inset 0 0 0 2px rgba(0, 123, 255, 0.12);
+  transition: background-color 120ms ease, box-shadow 120ms ease;
+}
+
+.sortable-header[draggable="true"] {
+  cursor: move;
+}
+
+/* Thin vertical insert indicator shown between columns during drag */
+.insert-line {
+  position: absolute;
+  top: 12%;
+  height: 76%;
+  width: 3px;
+  background: var(--el-color-primary);
+  opacity: 0.95;
+  z-index: 60;
+  border-radius: 2px;
+  transition: opacity 120ms ease, transform 120ms ease;
+}
+.insert-left {
+  left: 0px;
+  transform: translateX(-1px);
+}
+.insert-right {
+  right: 0px;
+  transform: translateX(1px);
 }
 
 /* Стили для скроллбара WebKit (Chrome, Safari, Edge) */

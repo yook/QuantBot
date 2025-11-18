@@ -332,12 +332,68 @@ crawler.on("queueadd", () => {
 
 crawler.on("fetcherror", (queueItem, resp) => {
   fetchedSession++;
-  logJson({
-    type: "error",
-    message: "fetcherror",
-    url: queueItem.url,
-    status: resp && resp.statusCode,
-  });
+  try {
+    // Try to persist error as a URL row so UI can show failed pages
+    const info = insertStmt.run(
+      projectId,
+      "html", // treat as html/error row
+      queueItem.url,
+      queueItem.referrer || null,
+      queueItem.depth || null,
+      resp && resp.statusCode ? resp.statusCode : null,
+      resp && resp.headers ? resp.headers["content-type"] : null,
+      queueItem.protocol || null,
+      (queueItem.stateData && queueItem.stateData.location) || null,
+      (queueItem.stateData && queueItem.stateData.actualDataSize) || null,
+      (queueItem.stateData && queueItem.stateData.requestTime) || null,
+      (queueItem.stateData && queueItem.stateData.requestLatency) || null,
+      (queueItem.stateData && queueItem.stateData.downloadTime) || null,
+      resp && resp.statusMessage ? resp.statusMessage : "fetcherror",
+      new Date().toISOString(),
+      JSON.stringify({ error: (resp && resp.statusMessage) || "fetcherror" })
+    );
+    if (info && info.changes && info.changes > 0) {
+      const row = {
+        id: info.lastInsertRowid,
+        project_id: projectId,
+        type: "html",
+        url: queueItem.url,
+        referrer: queueItem.referrer || null,
+        depth: queueItem.depth || null,
+        code: resp && resp.statusCode ? resp.statusCode : null,
+        contentType: resp && resp.headers ? resp.headers["content-type"] : null,
+        protocol: queueItem.protocol || null,
+        location: (queueItem.stateData && queueItem.stateData.location) || null,
+        actualDataSize:
+          (queueItem.stateData && queueItem.stateData.actualDataSize) || null,
+        requestTime:
+          (queueItem.stateData && queueItem.stateData.requestTime) || null,
+        requestLatency:
+          (queueItem.stateData && queueItem.stateData.requestLatency) || null,
+        downloadTime:
+          (queueItem.stateData && queueItem.stateData.downloadTime) || null,
+        status: resp && resp.statusMessage ? resp.statusMessage : "fetcherror",
+        date: new Date().toISOString(),
+        content: JSON.stringify({
+          error: (resp && resp.statusMessage) || "fetcherror",
+        }),
+      };
+      try {
+        logJson({ type: "row", row });
+      } catch (_) {}
+    }
+    try {
+      if (queueItem && queueItem.url) visited.add(queueItem.url);
+    } catch (_) {}
+  } catch (e) {
+    // fallback to sending an error event if DB insert fails
+    logJson({
+      type: "error",
+      message: "fetcherror",
+      url: queueItem.url,
+      status: resp && resp.statusCode,
+    });
+  }
   reportProgress();
 });
 
@@ -357,23 +413,108 @@ crawler.on("complete", () => {
 
 crawler.on("fetchtimeout", (queueItem, timeout) => {
   fetchedSession++;
-  logJson({
-    type: "error",
-    message: "fetchtimeout",
-    url: queueItem.url,
-    timeout,
-  });
+  try {
+    const info = insertStmt.run(
+      projectId,
+      "html",
+      queueItem.url,
+      queueItem.referrer || null,
+      queueItem.depth || null,
+      null,
+      null,
+      queueItem.protocol || null,
+      (queueItem.stateData && queueItem.stateData.location) || null,
+      (queueItem.stateData && queueItem.stateData.actualDataSize) || null,
+      (queueItem.stateData && queueItem.stateData.requestTime) || null,
+      (queueItem.stateData && queueItem.stateData.requestLatency) || null,
+      (queueItem.stateData && queueItem.stateData.downloadTime) || null,
+      "fetchtimeout",
+      new Date().toISOString(),
+      JSON.stringify({ timeout })
+    );
+    if (info && info.changes && info.changes > 0) {
+      const row = {
+        id: info.lastInsertRowid,
+        project_id: projectId,
+        type: "html",
+        url: queueItem.url,
+        status: "fetchtimeout",
+        date: new Date().toISOString(),
+        content: JSON.stringify({ timeout }),
+      };
+      try {
+        logJson({ type: "row", row });
+      } catch (_) {}
+    }
+    try {
+      if (queueItem && queueItem.url) visited.add(queueItem.url);
+    } catch (_) {}
+  } catch (e) {
+    logJson({
+      type: "error",
+      message: "fetchtimeout",
+      url: queueItem.url,
+      timeout,
+    });
+  }
   reportProgress();
 });
 
 crawler.on("fetch404", (queueItem, resp) => {
   fetchedSession++;
-  logJson({
-    type: "error",
-    message: "404",
-    url: queueItem.url,
-    status: resp && resp.statusCode,
-  });
+  try {
+    const info = insertStmt.run(
+      projectId,
+      "html",
+      queueItem.url,
+      queueItem.referrer || null,
+      queueItem.depth || null,
+      resp && resp.statusCode ? resp.statusCode : 404,
+      resp && resp.headers ? resp.headers["content-type"] : null,
+      queueItem.protocol || null,
+      (queueItem.stateData && queueItem.stateData.location) || null,
+      (queueItem.stateData && queueItem.stateData.actualDataSize) || null,
+      (queueItem.stateData && queueItem.stateData.requestTime) || null,
+      (queueItem.stateData && queueItem.stateData.requestLatency) || null,
+      (queueItem.stateData && queueItem.stateData.downloadTime) || null,
+      resp && resp.statusMessage ? resp.statusMessage : "404",
+      new Date().toISOString(),
+      JSON.stringify({
+        status: resp && resp.statusCode ? resp.statusCode : 404,
+      })
+    );
+    if (info && info.changes && info.changes > 0) {
+      const row = {
+        id: info.lastInsertRowid,
+        project_id: projectId,
+        type: "html",
+        url: queueItem.url,
+        referrer: queueItem.referrer || null,
+        depth: queueItem.depth || null,
+        code: resp && resp.statusCode ? resp.statusCode : 404,
+        contentType: resp && resp.headers ? resp.headers["content-type"] : null,
+        protocol: queueItem.protocol || null,
+        status: resp && resp.statusMessage ? resp.statusMessage : "404",
+        date: new Date().toISOString(),
+        content: JSON.stringify({
+          status: resp && resp.statusCode ? resp.statusCode : 404,
+        }),
+      };
+      try {
+        logJson({ type: "row", row });
+      } catch (_) {}
+    }
+    try {
+      if (queueItem && queueItem.url) visited.add(queueItem.url);
+    } catch (_) {}
+  } catch (e) {
+    logJson({
+      type: "error",
+      message: "404",
+      url: queueItem.url,
+      status: resp && resp.statusCode,
+    });
+  }
   reportProgress();
 });
 

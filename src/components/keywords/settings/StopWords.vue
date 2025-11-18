@@ -125,6 +125,7 @@
         @delete-row="removeRow"
         @delete-all="deleteAll"
         :fixedHeight="215"
+        @columns-reorder="onColumnsReorder"
       />
     </div>
   </div>
@@ -136,6 +137,7 @@ import { ElMessage, ElMessageBox } from "element-plus";
 import { markRaw } from "vue";
 import { Delete, InfoFilled } from "@element-plus/icons-vue";
 import DataTableFixed from "../../DataTableFixed.vue";
+import saveColumnOrder from "../../../utils/columnOrder";
 import ipcClient from "../../../stores/socket-client";
 import { useProjectStore } from "../../../stores/project";
 import { useKeywordsStore } from "../../../stores/keywords";
@@ -211,6 +213,39 @@ async function loadData() {
 }
 
 const currentProjectId = ref(null);
+
+// Handle column reorder: update local tableColumns and persist via util
+function onColumnsReorder(newOrder) {
+  try {
+    if (!Array.isArray(newOrder)) return;
+    // Map props to existing ColumnDef objects when possible
+    const existing = tableColumns.value || [];
+    const remaining = [...existing];
+    const ordered = [];
+    for (const p of newOrder) {
+      const idx = remaining.findIndex((c) => c.prop === p);
+      if (idx !== -1) {
+        ordered.push(remaining.splice(idx, 1)[0]);
+      } else {
+        // create minimal def if missing
+        ordered.push({ prop: p, name: p });
+      }
+    }
+    // append any leftovers (safety)
+    for (const r of remaining) ordered.push(r);
+
+    tableColumns.value = ordered;
+
+    // Persist using shared util
+    try {
+      saveColumnOrder(project, "stopwords", newOrder);
+    } catch (e) {
+      console.error("saveColumnOrder stopwords failed", e);
+    }
+  } catch (e) {
+    console.error("onColumnsReorder stopwords error", e);
+  }
+}
 
 function parseInputText(text) {
   return text

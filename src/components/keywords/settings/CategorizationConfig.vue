@@ -98,6 +98,7 @@
         @delete-row="deleteCategory"
         @delete-all="deleteAllCategories"
         :fixedHeight="315"
+        @columns-reorder="onColumnsReorder"
       />
     </div>
   </div>
@@ -108,6 +109,7 @@ import { ref, computed, markRaw } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { Delete, InfoFilled } from "@element-plus/icons-vue";
 import DataTableFixed from "../../DataTableFixed.vue";
+import saveColumnOrder from "../../../utils/columnOrder";
 
 const categories = ref("");
 
@@ -149,7 +151,7 @@ const categoriesStore = useCategoriesStore();
 const keywordsStore = useKeywordsStore();
 
 // Столбцы для таблицы категорий
-const tableColumns = [
+const tableColumns = ref([
   {
     prop: "category_name",
     name: "Название категории",
@@ -160,7 +162,7 @@ const tableColumns = [
     name: "",
     width: 40,
   },
-];
+]);
 
 // Удаление одной категории (вызывается из DataTable)
 function deleteCategory(row) {
@@ -249,6 +251,33 @@ watch(
     }
   }
 );
+
+// Handle columns reorder: update local tableColumns and persist
+function onColumnsReorder(newOrder) {
+  try {
+    if (!Array.isArray(newOrder)) return;
+    const existing = tableColumns.value || [];
+    const remaining = [...existing];
+    const ordered = [];
+    for (const p of newOrder) {
+      const idx = remaining.findIndex((c) => c.prop === p);
+      if (idx !== -1) {
+        ordered.push(remaining.splice(idx, 1)[0]);
+      } else {
+        ordered.push({ prop: p, name: p });
+      }
+    }
+    for (const r of remaining) ordered.push(r);
+    tableColumns.value = ordered;
+    try {
+      saveColumnOrder(project, "categories", newOrder);
+    } catch (e) {
+      console.error("saveColumnOrder categories failed", e);
+    }
+  } catch (e) {
+    console.error("onColumnsReorder categories error", e);
+  }
+}
 
 // Слушаем событие успешного добавления для очистки поля
 import { watch } from "vue";

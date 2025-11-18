@@ -76,9 +76,9 @@ export function registerAllIpc(ctx: IpcContext) {
       return { success: false, error: error.message };
     }
   });
-  ipcMain.handle('crawler:stop', async () => {
+  ipcMain.handle('crawler:stop', async (_e, projectId?: number) => {
     try {
-      stopCrawlerWorker();
+      stopCrawlerWorker(projectId as number | undefined);
       return { success: true };
     } catch (error: any) {
       return { success: false, error: error.message };

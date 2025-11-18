@@ -68,6 +68,7 @@
       :loadData="loadData"
       :fixedColumns="2"
       :heightOffset="380"
+      @columns-reorder="onColumnsReorder"
     />
 
     <el-dialog
@@ -112,6 +113,7 @@ import { ElMessage } from "element-plus";
 import DataTableFixed from "../DataTableFixed.vue";
 import { Grid, Download } from "@element-plus/icons-vue";
 import activeColumnsJson from "../../stores/schema/table-active-colums.json";
+import saveColumnOrder from "../../utils/columnOrder";
 
 const { t } = useI18n();
 
@@ -185,6 +187,15 @@ const loadData = (projectId, options = {}) => {
     console.error("loadData failed:", e);
   }
 };
+// Handle column reorder emitted from DataTableFixed
+function onColumnsReorder(newOrder) {
+  try {
+    if (!Array.isArray(newOrder)) return;
+    saveColumnOrder(project, project.currentDb, newOrder);
+  } catch (e) {
+    console.error("onColumnsReorder error", e);
+  }
+}
 const tableSettingsDialog = ref(false);
 const resizing = ref(false);
 const currentColumn = ref(null);
@@ -253,21 +264,48 @@ const documentStyle = computed(() => {
   return resizing.value ? { cursor: "col-resize" } : {};
 });
 
-// Dedup and normalize columns for Transfer: unique by `prop`, fill empty names with prop
+// Transfer columns ordered to match `currentTableColumns` (so settings dialog shows same order)
 const transferColumns = computed(() => {
-  const source = project.allColumns || [];
-  const seen = new Set();
-  const result = [];
-  for (const c of source) {
-    if (!c || typeof c !== "object") continue;
-    const prop = c.prop;
-    if (!prop || typeof prop !== "string") continue;
-    if (seen.has(prop)) continue;
-    const name = c.name && String(c.name).trim() ? c.name : prop;
-    result.push({ ...c, name });
-    seen.add(prop);
+  try {
+    const source = project.allColumns || [];
+    const orderMap = new Map();
+    currentTableColumns.value.forEach((p, i) => orderMap.set(p, i));
+
+    // Map with fallback name and stable index
+    const mapped = source
+      .map((c, idx) => ({
+        prop: c.prop,
+        name: c.name && String(c.name).trim() ? c.name : c.prop,
+        originalIndex: idx,
+        ...c,
+      }))
+      .filter((c) => c && c.prop);
+
+    // Sort by user order first, then by original index
+    mapped.sort((a, b) => {
+      const aIdx = orderMap.has(a.prop)
+        ? orderMap.get(a.prop)
+        : 1000 + a.originalIndex;
+      const bIdx = orderMap.has(b.prop)
+        ? orderMap.get(b.prop)
+        : 1000 + b.originalIndex;
+      return aIdx - bIdx;
+    });
+
+    // Deduplicate by prop preserving order
+    const seen = new Set();
+    const result = [];
+    for (const c of mapped) {
+      if (!c || !c.prop) continue;
+      if (seen.has(c.prop)) continue;
+      seen.add(c.prop);
+      result.push(c);
+    }
+
+    return result;
+  } catch (e) {
+    return project.allColumns || [];
   }
-  return result;
 });
 
 // Ensure ElTransfer always receives an Array

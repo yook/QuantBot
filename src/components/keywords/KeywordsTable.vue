@@ -54,7 +54,7 @@
             t('keywords.tableSettingsOn'),
           ]"
           :props="{ key: 'prop', label: 'name', disabled: 'disabled' }"
-          :data="allColumns"
+          :data="transferColumns"
         />
       </div>
 
@@ -82,6 +82,7 @@
       @delete-row="handleDeleteRow"
       @delete-all="handleDeleteAll"
       :heightOffset="257"
+      @columns-reorder="onColumnsReorder"
     />
   </el-card>
 </template>
@@ -102,6 +103,7 @@ import { ElMessageBox } from "element-plus";
 import { markRaw } from "vue";
 import { useI18n } from "vue-i18n";
 import { downloadKeywords } from "../../stores/export";
+import saveColumnOrder from "../../utils/columnOrder";
 
 const keywordsStore = useKeywordsStore();
 const project = useProjectStore();
@@ -164,9 +166,32 @@ watch(
   { deep: false }
 );
 
+// Transfer data ordered to match currentTableColumns (so settings dialog shows same order)
+const transferColumns = computed(() => {
+  try {
+    const orderMap = new Map();
+    currentTableColumns.value.forEach((p, i) => orderMap.set(p, i));
+
+    return allColumns.slice().sort((a, b) => {
+      const aIdx = orderMap.has(a.prop)
+        ? orderMap.get(a.prop)
+        : 1000 + allColumns.findIndex((c) => c.prop === a.prop);
+      const bIdx = orderMap.has(b.prop)
+        ? orderMap.get(b.prop)
+        : 1000 + allColumns.findIndex((c) => c.prop === b.prop);
+      return aIdx - bIdx;
+    });
+  } catch (e) {
+    return allColumns;
+  }
+});
+
 // Вычисляемый список колонок для таблицы в соответствии с настройками
+// Preserve explicit user order from `currentTableColumns`
 const tableColumns = computed(() =>
-  allColumns.filter((c) => currentTableColumns.value.includes(c.prop))
+  currentTableColumns.value
+    .map((prop) => allColumns.find((c) => c.prop === prop))
+    .filter(Boolean)
 );
 
 // Данные для передачи в таблицу
@@ -222,6 +247,26 @@ onMounted(() => {
     keywordsStore.loadKeywords(project.currentProjectId, { resetSearch: true });
   }
 });
+
+// Handle column reorder from DataTableFixed: update local selection and persist to project
+function onColumnsReorder(newOrder) {
+  try {
+    if (!Array.isArray(newOrder)) return;
+    // Filter to valid columns and ensure 'keyword' exists
+    const valid = newOrder.filter((p) => allColumnKeys.includes(p));
+    if (!valid.includes("keyword")) valid.unshift("keyword");
+    currentTableColumns.value = Array.from(new Set(valid));
+
+    // Persist using shared util (saves to project and to localStorage)
+    try {
+      saveColumnOrder(project, "keywords", currentTableColumns.value);
+    } catch (e) {
+      console.error("saveColumnOrder failed", e);
+    }
+  } catch (e) {
+    console.error("onColumnsReorder (keywords) error", e);
+  }
+}
 
 // Слушаем изменения currentProjectId и загружаем ключевые запросы для нового проекта
 watch(

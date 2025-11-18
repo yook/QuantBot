@@ -4,10 +4,14 @@ import type {
   ServerToClientEvents, 
   ClientToServerEvents 
 } from './socket-events';
-import type { Socket } from 'socket.io-client';
-
-// Type-safe socket instance
-export type TypedSocket = Socket<ServerToClientEvents, ClientToServerEvents>;
+// Minimal local socket-like type for compatibility without pulling in socket.io-client
+export type TypedSocket = {
+  on: (...args: any[]) => any;
+  off: (...args: any[]) => any;
+  emit?: (...args: any[]) => any;
+  connect?: () => any;
+  disconnect?: () => any;
+};
 
 // Helper type to extract event names
 export type ServerEventNames = keyof ServerToClientEvents;

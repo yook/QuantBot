@@ -4,7 +4,7 @@ import os from 'os';
 import { spawn, type ChildProcess } from 'node:child_process';
 import type { CrawlerCtx } from './types.js';
 
-let crawlerChild: ChildProcess | null = null;
+const crawlerChildren: Map<number, ChildProcess> = new Map();
 
 export function startCrawlerWorker(ctx: CrawlerCtx, project: { id: number; url: string; crawler?: any; parser?: any }) {
   const { getWindow, resolvedDbPath } = ctx;
@@ -12,8 +12,8 @@ export function startCrawlerWorker(ctx: CrawlerCtx, project: { id: number; url: 
     console.warn('[CrawlerWorker] Invalid project payload', project);
     return;
   }
-  if (crawlerChild && !crawlerChild.killed) {
-    console.warn('[CrawlerWorker] Already running');
+  if (crawlerChildren.has(project.id)) {
+    console.warn('[CrawlerWorker] Worker already running for project', project.id);
     return;
   }
   if (!resolvedDbPath) {
@@ -33,16 +33,17 @@ export function startCrawlerWorker(ctx: CrawlerCtx, project: { id: number; url: 
     fs.writeFileSync(cfgPath, JSON.stringify(payload), 'utf8');
     const workerPath = path.join(path.dirname(new URL(import.meta.url).pathname), '..', 'worker', 'crawlerWorker.cjs');
     console.log('[CrawlerWorker] Spawning worker', { workerPath, projectId: project.id, url: project.url });
-    crawlerChild = spawn(process.execPath, [workerPath, `--config=${cfgPath}`], {
+    const child = spawn(process.execPath, [workerPath, `--config=${cfgPath}`], {
       env: Object.assign({}, process.env, {
         ELECTRON_RUN_AS_NODE: '1',
         QUANTBOT_DB_DIR: resolvedDbPath ? path.dirname(resolvedDbPath) : undefined,
       }),
       stdio: ['ignore', 'pipe', 'pipe'],
     });
-    crawlerChild.stdout?.setEncoding('utf8');
+    crawlerChildren.set(project.id, child);
+    child.stdout?.setEncoding('utf8');
     let buf = '';
-    crawlerChild.stdout?.on('data', (chunk) => {
+    child.stdout?.on('data', (chunk) => {
       buf += chunk;
       const lines = buf.split('\n');
       buf = lines.pop() || '';
@@ -83,8 +84,8 @@ export function startCrawlerWorker(ctx: CrawlerCtx, project: { id: number; url: 
         }
       }
     });
-    crawlerChild.stderr?.setEncoding('utf8');
-    crawlerChild.stderr?.on('data', (data) => {
+    child.stderr?.setEncoding('utf8');
+    child.stderr?.on('data', (data: any) => {
       const text = String(data).trim();
       console.error('[CrawlerWorker ERR]', text);
       const w = getWindow();
@@ -92,13 +93,13 @@ export function startCrawlerWorker(ctx: CrawlerCtx, project: { id: number; url: 
         w.webContents.send('crawler:error', { projectId: project.id, message: text });
       }
     });
-    crawlerChild.on('exit', (code, signal) => {
-      console.log('[CrawlerWorker] exit', { code, signal });
+    child.on('exit', (code, signal) => {
+      console.log('[CrawlerWorker] exit', { projectId: project.id, code, signal });
       const w = getWindow();
       if (w && !w.isDestroyed()) {
         w.webContents.send('crawler:finished', { projectId: project.id, code, signal });
       }
-      crawlerChild = null;
+      try { crawlerChildren.delete(project.id); } catch (_) {}
       try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (_) {}
     });
   } catch (e: any) {
@@ -110,9 +111,24 @@ export function startCrawlerWorker(ctx: CrawlerCtx, project: { id: number; url: 
   }
 }
 
-export function stopCrawlerWorker() {
-  if (crawlerChild && !crawlerChild.killed) {
-    console.log('[CrawlerWorker] Stopping worker');
-    crawlerChild.kill('SIGTERM');
+export function stopCrawlerWorker(projectId?: number) {
+  if (typeof projectId === 'number') {
+    const child = crawlerChildren.get(projectId);
+    if (child && !child.killed) {
+      console.log('[CrawlerWorker] Stopping worker for project', projectId);
+      child.kill('SIGTERM');
+      crawlerChildren.delete(projectId);
+    }
+    return;
+  }
+  // Stop all
+  for (const [id, child] of Array.from(crawlerChildren.entries())) {
+    try {
+      if (child && !child.killed) {
+        console.log('[CrawlerWorker] Stopping worker for project', id);
+        child.kill('SIGTERM');
+      }
+    } catch (e) {}
+    crawlerChildren.delete(id);
   }
 }
