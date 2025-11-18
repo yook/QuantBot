@@ -46,6 +46,7 @@
     "xlsx": "^0.18.5"
   },
   "devDependencies": {
+    "@rollup/plugin-node-resolve": "^16.0.3",
     "@tailwindcss/postcss": "^4.1.14",
     "@types/better-sqlite3": "^7.6.13",
     "@vitejs/plugin-vue": "^6.0.1",
