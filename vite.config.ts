@@ -12,9 +12,6 @@ export default defineConfig({
         // Shortcut of `build.lib.entry`.
         entry: 'electron/main.ts',
         vite: {
-          resolve: {
-            extensions: ['.js', '.ts', '.mjs', '.cjs', '.json'],
-          },
           build: {
             rollupOptions: {
               external: [

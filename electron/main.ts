@@ -4,9 +4,9 @@ import { fileURLToPath } from "url";
 import Database from "better-sqlite3";
  
 // newProjectDefaults moved to IPC modules; no longer needed here
-import { createDatabase } from "./db/init.js";
-import { registerAllIpc } from "./ipc/index.js";
-import { stopCrawlerWorker } from "./workers/crawler.js";
+import { createDatabase } from "./db/init";
+import { registerAllIpc } from "./ipc/index";
+import { stopCrawlerWorker } from "./workers/crawler";
 
 // Автообновление
 import { autoUpdater } from "electron-updater";
