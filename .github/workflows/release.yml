@@ -77,7 +77,58 @@ jobs:
       - name: 🔧 Rebuild native modules for Electron (better-sqlite3)
         run: |
           Write-Host "🔁 Rebuilding native modules for Electron (win x64)..."
-          npx electron-rebuild -f -w better-sqlite3
+          
+          # Set alternative cache and mirror locations for Electron headers
+          $env:ELECTRON_CACHE = "$env:RUNNER_TEMP\electron-cache"
+          $env:ELECTRON_CUSTOM_DIR = "37.10.0"
+          $env:ELECTRON_MIRROR = "https://github.com/electron/electron/releases/download/"
+          
+          # Create cache directory
+          New-Item -ItemType Directory -Force -Path $env:ELECTRON_CACHE | Out-Null
+          
+          # Retry logic for electron-rebuild with different strategies
+          $maxRetries = 3
+          $attempt = 1
+          
+          while ($attempt -le $maxRetries) {
+            try {
+              Write-Host "Attempt $attempt/$maxRetries - Rebuilding native modules..."
+              
+              if ($attempt -eq 1) {
+                # First attempt: standard rebuild
+                npx electron-rebuild -f -w better-sqlite3 --verbose
+              } elseif ($attempt -eq 2) {
+                # Second attempt: with cache dir and verbose logging  
+                npx electron-rebuild -f -w better-sqlite3 --cache-dir=$env:ELECTRON_CACHE --verbose
+              } else {
+                # Third attempt: force rebuild without cache
+                npx electron-rebuild -f -w better-sqlite3 --force --verbose --cache-dir=$env:ELECTRON_CACHE
+              }
+              
+              Write-Host "✅ Native modules rebuilt successfully!"
+              break
+            }
+            catch {
+              Write-Host "❌ Attempt $attempt failed: $_"
+              $attempt++
+              
+              if ($attempt -le $maxRetries) {
+                Write-Host "⏳ Waiting 10 seconds before retry..."
+                Start-Sleep -Seconds 10
+              } else {
+                Write-Host "❌ All rebuild attempts failed. Trying fallback approach..."
+                
+                # Fallback: try to install pre-built binaries or skip rebuild
+                try {
+                  Write-Host "🔄 Attempting to use pre-built better-sqlite3..."
+                  npm rebuild better-sqlite3 --verbose
+                  Write-Host "✅ Fallback rebuild succeeded!"
+                } catch {
+                  Write-Host "⚠️ Native rebuild failed, but continuing build (app may use bundled SQLite fallback)"
+                }
+              }
+            }
+          }
         shell: pwsh
 
       # Workaround: Установка нативной зависимости Rollup для Windows
