@@ -34,4 +34,5 @@ dist-electron/
 *.deb
 *.AppImage
 
-db/
+# Ignore only root-level db folder. Allow nested electron/db to be tracked.
+/db/
