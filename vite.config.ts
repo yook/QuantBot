@@ -1,6 +1,7 @@
 import { defineConfig } from 'vite'
 import path from 'node:path'
 import electron from 'vite-plugin-electron/simple'
+import { nodeResolve } from '@rollup/plugin-node-resolve'
 import vue from '@vitejs/plugin-vue'
 
 // https://vitejs.dev/config/
@@ -14,6 +15,9 @@ export default defineConfig({
         vite: {
           build: {
             rollupOptions: {
+              plugins: [
+                nodeResolve({ extensions: ['.js', '.ts', '.mjs', '.cjs', '.json'] }),
+              ],
               external: [
                 'better-sqlite3',
                 'bindings',
