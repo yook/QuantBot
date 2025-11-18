@@ -56,14 +56,17 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-node-
 
-      # 4️⃣ Кеш Electron и Electron Builder (внутренние бинарные зависимости)
-      - name: 💾 Cache Electron builder
+      # 4️⃣ Кеш Electron, Electron Builder и Vite
+      - name: 💾 Cache Electron builder and Vite
         uses: actions/cache@v4
         with:
           path: |
             ~/.cache/electron
             ~/.cache/electron-builder
-          key: ${{ runner.os }}-electron-cache
+            node_modules/.vite
+          key: ${{ runner.os }}-build-cache-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-build-cache-
 
       # 5️⃣ Устанавливаем зависимости (читая lockfile для воспроизводимости)
       - name: 📦 Install dependencies (ci)
@@ -81,13 +84,13 @@ jobs:
           # Set alternative cache and mirror locations for Electron headers
           $env:ELECTRON_CACHE = "$env:RUNNER_TEMP\electron-cache"
           $env:ELECTRON_CUSTOM_DIR = "37.10.0"
-          $env:ELECTRON_MIRROR = "https://github.com/electron/electron/releases/download/"
+          $env:ELECTRON_MIRROR = "https://registry.npmmirror.com/-/binary/electron/"
 
           # Create cache directory
           New-Item -ItemType Directory -Force -Path $env:ELECTRON_CACHE | Out-Null
 
           # Retry logic for electron-rebuild with different strategies
-          $maxRetries = 3
+          $maxRetries = 2
           $attempt = 1
 
           while ($attempt -le $maxRetries) {
@@ -95,14 +98,10 @@ jobs:
               Write-Host "Attempt $attempt/$maxRetries - Rebuilding native modules..."
               
               if ($attempt -eq 1) {
-                # First attempt: standard rebuild for both sqlite modules
-                npx electron-rebuild -f -w better-sqlite3 -w @vscode/sqlite3 --verbose
-              } elseif ($attempt -eq 2) {
-                # Second attempt: with cache dir and verbose logging
-                npx electron-rebuild -f -w better-sqlite3 -w @vscode/sqlite3 --cache-dir=$env:ELECTRON_CACHE --verbose
+                # First attempt: use npmmirror with cache
+                npx electron-rebuild -f -w better-sqlite3 -w @vscode/sqlite3 --cache-dir=$env:ELECTRON_CACHE
               } else {
-                # Third attempt: switch to npmmirror Electron headers and force
-                $env:ELECTRON_MIRROR = "https://registry.npmmirror.com/-/binary/electron/"
+                # Second attempt: force rebuild with verbose logging
                 npx electron-rebuild -f -w better-sqlite3 -w @vscode/sqlite3 --force --verbose --cache-dir=$env:ELECTRON_CACHE
               }
               
@@ -146,7 +145,8 @@ jobs:
       - name: 🏗️ Build portable Windows app
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
-        run: npm run build:win:portable:cross -- --publish never
+          VITE_CI_BUILD: "true"
+        run: npm run build:win:portable:ci -- --publish never
 
       # 7️⃣ Собираем артефакты (.exe, .yml, .blockmap) для загрузки
       - name: 🧩 Collect release artifacts

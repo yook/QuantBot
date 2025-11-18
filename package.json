@@ -17,6 +17,7 @@
     "build:win": "vue-tsc && vite build && electron-builder --win --x64",
     "build:win:cross": "vue-tsc && vite build && electron-builder --win --x64 --config.extraMetadata.main=dist-electron/main.js",
     "build:win:portable:cross": "vue-tsc && vite build && electron-builder --win portable --x64 --config.extraMetadata.main=dist-electron/main.js",
+    "build:win:portable:ci": "vite build && electron-builder --win portable --x64 --config.extraMetadata.main=dist-electron/main.js",
     "preview": "vite preview",
     "electron:dev": "vite --mode electron",
     "rebuild:sqlite": "bash ./scripts/rebuild-sqlite.sh"
