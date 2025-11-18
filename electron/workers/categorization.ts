@@ -2,6 +2,7 @@ import path from 'path';
 import fs from 'fs';
 import os from 'os';
 import { spawn } from 'node:child_process';
+import { fileURLToPath } from 'url';
 import type { CategorizationCtx } from './types.js';
 import { isRateLimitError } from './utils.js';
 import { createRequire } from 'module';
@@ -9,7 +10,8 @@ const require = createRequire(import.meta.url);
 
 export async function startCategorizationWorker(ctx: CategorizationCtx, projectId: number) {
   const { db, getWindow, resolvedDbPath, categoriesNameColumn } = ctx;
-  const workerPath = path.join(path.dirname(new URL(import.meta.url).pathname), '..', 'worker', 'assignCategorization.cjs');
+  const __dirname = path.dirname(fileURLToPath(import.meta.url));
+  const workerPath = path.join(__dirname, '..', 'worker', 'assignCategorization.cjs');
   const win = getWindow();
 
   console.log(`Starting categorization worker for project ${projectId}`);
@@ -31,7 +33,8 @@ export async function startCategorizationWorker(ctx: CategorizationCtx, projectI
 
   // Attach embeddings (from new DB facade module)
   console.log(`Attaching embeddings to ${keywords.length} keywords...`);
-  const embeddings = require(path.join(process.env.APP_ROOT || path.join(path.dirname(new URL(import.meta.url).pathname), '..'), 'electron', 'db', 'embeddings.cjs'));
+  const base = process.env.APP_ROOT || path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
+  const embeddings = require(path.join(base, 'electron', 'db', 'embeddings.cjs'));
   const attachEmbeddingsToKeywords = embeddings.attachEmbeddingsToKeywords;
 
     let embeddingStats: any;

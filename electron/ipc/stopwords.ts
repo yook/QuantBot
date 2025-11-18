@@ -1,4 +1,5 @@
 import path from 'path';
+import { fileURLToPath } from 'url';
 import { ipcMain } from 'electron';
 import type { IpcContext } from './types';
 import { createRequire } from 'module';
@@ -24,7 +25,8 @@ export function registerStopwordsIpc(ctx: IpcContext) {
       const result = db.prepare('INSERT OR IGNORE INTO stop_words (project_id, word) VALUES (?, ?)').run(projectId, word);
 
       try {
-        const facadePath = path.join(process.env.APP_ROOT || path.join(path.dirname(new URL(import.meta.url).pathname), '..'), 'electron', 'db', 'index.cjs');
+        const base = process.env.APP_ROOT || path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
+        const facadePath = path.join(base, 'electron', 'db', 'index.cjs');
         const dbFacade = require(facadePath);
         if (dbFacade && dbFacade.keywords && typeof dbFacade.keywords.applyStopWords === 'function') {
           await dbFacade.keywords.applyStopWords(projectId);

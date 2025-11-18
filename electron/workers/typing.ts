@@ -2,11 +2,13 @@ import path from 'path';
 import fs from 'fs';
 import os from 'os';
 import { spawn } from 'node:child_process';
+import { fileURLToPath } from 'url';
 import type { TypingCtx } from './types.js';
 
 export async function startTypingWorker(ctx: TypingCtx, projectId: number) {
   const { db, getWindow, resolvedDbPath, typingLabelColumn, typingTextColumn, typingDateColumn } = ctx;
-  const workerPath = path.join(path.dirname(new URL(import.meta.url).pathname), '..', 'worker', 'trainAndClassify.cjs');
+  const __dirname = path.dirname(fileURLToPath(import.meta.url));
+  const workerPath = path.join(__dirname, '..', 'worker', 'trainAndClassify.cjs');
   const win = getWindow();
 
   console.log(`Starting typing worker for project ${projectId}`);

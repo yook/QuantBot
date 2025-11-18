@@ -2,6 +2,7 @@ import path from 'path';
 import fs from 'fs';
 import os from 'os';
 import { spawn, type ChildProcess } from 'node:child_process';
+import { fileURLToPath } from 'url';
 import type { CrawlerCtx } from './types.js';
 
 const crawlerChildren: Map<number, ChildProcess> = new Map();
@@ -31,7 +32,8 @@ export function startCrawlerWorker(ctx: CrawlerCtx, project: { id: number; url: 
       dbPath: resolvedDbPath,
     };
     fs.writeFileSync(cfgPath, JSON.stringify(payload), 'utf8');
-    const workerPath = path.join(path.dirname(new URL(import.meta.url).pathname), '..', 'worker', 'crawlerWorker.cjs');
+    const __dirname = path.dirname(fileURLToPath(import.meta.url));
+    const workerPath = path.join(__dirname, '..', 'worker', 'crawlerWorker.cjs');
     console.log('[CrawlerWorker] Spawning worker', { workerPath, projectId: project.id, url: project.url });
     const child = spawn(process.execPath, [workerPath, `--config=${cfgPath}`], {
       env: Object.assign({}, process.env, {

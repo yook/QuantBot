@@ -2,13 +2,15 @@ import path from 'path';
 import fs from 'fs';
 import os from 'os';
 import { spawn } from 'node:child_process';
+import { fileURLToPath } from 'url';
 import type { ClusteringCtx } from './types.js';
 import { createRequire } from 'module';
 const require = createRequire(import.meta.url);
 
 export async function startClusteringWorker(ctx: ClusteringCtx, projectId: number, algorithm: string, eps: number, minPts?: number) {
   const { db, getWindow, resolvedDbPath } = ctx;
-  const workerPath = path.join(path.dirname(new URL(import.meta.url).pathname), '..', 'worker', 'clusterСomponents.cjs');
+  const __dirname = path.dirname(fileURLToPath(import.meta.url));
+  const workerPath = path.join(__dirname, '..', 'worker', 'clusterСomponents.cjs');
   const win = getWindow();
 
   console.log(`Starting clustering worker for project ${projectId}`, { algorithm, eps, minPts });
@@ -24,7 +26,8 @@ export async function startClusteringWorker(ctx: ClusteringCtx, projectId: numbe
     }
 
   console.log(`[clustering] Attaching embeddings to ${keywords.length} keywords...`);
-  const embeddings = require(path.join(process.env.APP_ROOT || path.join(path.dirname(new URL(import.meta.url).pathname), '..'), 'electron', 'db', 'embeddings.cjs'));
+  const base = process.env.APP_ROOT || path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
+  const embeddings = require(path.join(base, 'electron', 'db', 'embeddings.cjs'));
   const attachEmbeddingsToKeywords = embeddings.attachEmbeddingsToKeywords;
     try {
       const embeddingStats = await attachEmbeddingsToKeywords(keywords, { chunkSize: 10 });
