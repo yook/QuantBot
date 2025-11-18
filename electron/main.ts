@@ -2,11 +2,11 @@ import { app, BrowserWindow, shell, dialog } from "electron";
 import path from "path";
 import { fileURLToPath } from "url";
 import Database from "better-sqlite3";
- 
+
 // newProjectDefaults moved to IPC modules; no longer needed here
-import { createDatabase } from "./db/init";
-import { registerAllIpc } from "./ipc/index";
-import { stopCrawlerWorker } from "./workers/crawler";
+import { createDatabase } from "./db/init.ts";
+import { registerAllIpc } from "./ipc/index.ts";
+import { stopCrawlerWorker } from "./workers/crawler.ts";
 
 // Автообновление
 import { autoUpdater } from "electron-updater";
