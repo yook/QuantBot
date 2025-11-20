@@ -40,12 +40,16 @@ jobs:
           ls -la dist || true
 
       - name: Package & Publish (electron-builder)
-        if: ${{ secrets.GH_TOKEN != '' }}
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
         run: |
-          # Publish to GitHub Releases; requires GH_TOKEN with repo permissions
-          npx electron-builder --mac --publish=always
+          if [ -z "$GH_TOKEN" ]; then
+            echo "GH_TOKEN not set, building without publish"
+            npx electron-builder --mac --publish=never
+          else
+            echo "Publishing to GitHub Releases"
+            npx electron-builder --mac --publish=always
+          fi
 
       - name: Upload release artifacts to workflow (fallback)
         if: always()
