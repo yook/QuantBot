@@ -1,81 +1,43 @@
-name: Release (macOS)
+name: Release macOS
 
 on:
   push:
-    tags: ["v*"]
+    tags:
+      - "v*"
   workflow_dispatch:
 
+permissions:
+  contents: write # нужно для Release
+
 jobs:
-  build-mac:
-    name: Build macOS release
+  build-and-release:
     runs-on: macos-latest
-    env:
-      CI: true
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup Python 3.11
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Setup Python
         uses: actions/setup-python@v4
         with:
           python-version: "3.11"
-
-      - name: Use Node.js 22
-        uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-          cache: "npm"
-
-      - name: Cache electron & build caches
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cache/electron
-            ~/.cache/electron-builder
-            ~/.cache/node-gyp
-            node_modules/.vite
-          key: ${{ runner.os }}-build-cache-${{ hashFiles('package-lock.json') }}
-          restore-keys: |
-            ${{ runner.os }}-build-cache-
-
-      - name: Cache node_modules (optional)
-        uses: actions/cache@v4
-        with:
-          path: node_modules
-          key: ${{ runner.os }}-node-modules-${{ hashFiles('package-lock.json') }}
-          restore-keys: |
-            ${{ runner.os }}-node-modules-
 
       - name: Install libvips (sharp dependency)
         run: brew install vips
 
       - name: Install dependencies
-        run: npm ci --retry 5 --fetch-retry-mintimeout 20000 --fetch-retry-maxtimeout 120000
+        run: npm ci
 
-      - name: Build (renderer + main)
+      - name: Build project
         run: npm run build
 
-      - name: List build outputs (debug)
-        run: |
-          echo "Release dir contents:"
-          ls -la release || true
-          ls -la dist || true
-
-      - name: Package app (electron-builder)
+      - name: Build and publish with electron-builder
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # Сборка без автоматической публикации. Артефакты загрузим отдельным шагом.
-          npx electron-builder --mac --publish=never
-
-      - name: Upload release artifacts to workflow (fallback)
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: mac-release-artifacts
-          path: |
-            release/**
-            dist/**
-            dist-electron/**
+          npx electron-builder --mac --publish=always
