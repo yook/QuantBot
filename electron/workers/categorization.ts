@@ -17,6 +17,24 @@ export async function startCategorizationWorker(ctx: CategorizationCtx, projectI
   console.log(`Starting categorization worker for project ${projectId}`);
 
   try {
+    // Проверяем, есть ли заданные категории для проекта (нужно минимум 2 класса для категоризации)
+    try {
+      const cntRow = db.prepare('SELECT COUNT(*) as cnt FROM categories WHERE project_id = ?').get(projectId);
+      const categoryCount = Number((cntRow as any)?.cnt ?? 0);
+      if (categoryCount < 2) {
+        console.warn(`[Categorization] Not enough categories for project ${projectId}: ${categoryCount}`);
+        if (win && !win.isDestroyed()) {
+          win.webContents.send('keywords:categorization-error', {
+            projectId,
+            message: 'Задайте не менее двух категорий для категоризации.',
+          });
+        }
+        return;
+      }
+    } catch (e) {
+      console.warn('[Categorization] Failed to check categories count', e);
+    }
+
     const categories = db.prepare(`SELECT id, project_id, ${categoriesNameColumn} AS category_name, created_at FROM categories WHERE project_id = ?`).all(projectId);
     const keywords = db.prepare('SELECT * FROM keywords WHERE project_id = ? AND target_query = 1').all(projectId) as any[];
 
@@ -48,7 +66,7 @@ export async function startCategorizationWorker(ctx: CategorizationCtx, projectI
         win.webContents.send('keywords:categorization-error', {
           projectId,
           status: rateLimited ? 429 : undefined,
-          message: rateLimited ? 'Request failed with status code 429' : 'Не удалось получить эмбеддинги для категоризации. Проверьте OpenAI ключ.',
+          message: rateLimited ? 'Request failed with status code 429' : 'Не удалось получить эмбеддинги для классификации. Проверьте OpenAI ключ.',
         });
       }
       return;
@@ -58,7 +76,7 @@ export async function startCategorizationWorker(ctx: CategorizationCtx, projectI
       if (win && !win.isDestroyed()) {
         win.webContents.send('keywords:categorization-error', {
           projectId,
-          message: 'Не удалось подготовить эмбеддинги для категоризации.',
+          message: 'Не удалось получить эмбеддинги для классификации. Проверьте OpenAI ключ.',
         });
       }
       return;
@@ -135,7 +153,10 @@ export async function startCategorizationWorker(ctx: CategorizationCtx, projectI
         if (code === 0) {
           w.webContents.send('keywords:categorization-finished', { projectId });
         } else {
-          w.webContents.send('keywords:categorization-error', { projectId, message: `Worker exited with code ${code}` });
+          w.webContents.send('keywords:categorization-error', {
+            projectId,
+            message: 'Не удалось получить эмбеддинги для классификации. Проверьте OpenAI ключ.',
+          });
         }
       }
     });

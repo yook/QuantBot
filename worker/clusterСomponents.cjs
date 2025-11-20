@@ -383,7 +383,26 @@ if (require.main === module) {
 
   try {
     const input = JSON.parse(fs.readFileSync(inputFile, "utf8"));
-    const keywords = input.keywords || [];
+    let keywords = input.keywords || [];
+    // If input provides explicit target flags, keep only target items
+    try {
+      if (Array.isArray(keywords) && keywords.length > 0) {
+        const allHaveFlag = keywords.every(
+          (k) => typeof k.target_query !== "undefined"
+        );
+        if (allHaveFlag) {
+          const before = keywords.length;
+          keywords = keywords.filter(
+            (k) => k.target_query === 1 || k.target_query === true
+          );
+          console.error(
+            `[clustering worker] Filtered keywords by target_query: ${before} -> ${keywords.length}`
+          );
+        }
+      }
+    } catch (e) {
+      // ignore
+    }
     const enriched = keywords.map((k, idx) => ({
       id: k.id,
       text: k.keyword || "",

@@ -45,7 +45,7 @@
         v-model="categories"
         type="textarea"
         placeholder="Введите категории, каждая с новой строки"
-        :rows="5"
+        :rows="4"
         :disabled="categoriesStore.isAddingWithProgress"
       />
       <div class="flex items-center mt-4">
@@ -97,7 +97,7 @@
         dbKey="categories"
         @delete-row="deleteCategory"
         @delete-all="deleteAllCategories"
-        :fixedHeight="315"
+        :fixedHeight="215"
         @columns-reorder="onColumnsReorder"
       />
     </div>

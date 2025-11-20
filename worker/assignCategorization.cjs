@@ -187,10 +187,29 @@ async function main() {
     process.exit(1);
   }
   const categories = input.categories;
-  const keywords = input.keywords;
+  let keywords = input.keywords;
   console.error(
     `assignCategorization: loaded ${categories.length} categories, ${keywords.length} keywords`
   );
+  // If input provides explicit target flags, keep only target items
+  try {
+    if (Array.isArray(keywords) && keywords.length > 0) {
+      const allHaveFlag = keywords.every(
+        (k) => typeof k.target_query !== "undefined"
+      );
+      if (allHaveFlag) {
+        const before = keywords.length;
+        keywords = keywords.filter(
+          (k) => k.target_query === 1 || k.target_query === true
+        );
+        console.error(
+          `[assignCategorization] Filtered keywords by target_query: ${before} -> ${keywords.length}`
+        );
+      }
+    }
+  } catch (e) {
+    // ignore
+  }
   const categoryTexts = categories.map((c) => c.category_name || "");
   console.error(
     `Computing embeddings for ${categoryTexts.length} categories...`

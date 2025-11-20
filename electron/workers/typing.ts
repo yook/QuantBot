@@ -18,6 +18,24 @@ export async function startTypingWorker(ctx: TypingCtx, projectId: number) {
     const typingSamples = db.prepare(`SELECT id, project_id, ${typingLabelColumn} AS label, ${typingTextColumn} AS text, ${dateAlias} created_at FROM typing_samples WHERE project_id = ?`).all(projectId);
     const keywords = db.prepare('SELECT * FROM keywords WHERE project_id = ? AND target_query = 1').all(projectId) as any[];
 
+    // Проверяем, задано ли достаточное количество классов (категорий) для обучения/классификации
+    try {
+      const row = db.prepare('SELECT COUNT(*) as cnt FROM categories WHERE project_id = ?').get(projectId);
+      const catCount = Number((row as any)?.cnt ?? (row as any)?.count ?? (row as any)?.COUNT ?? (row as any)?.CNT ?? 0);
+      if (catCount < 2) {
+        console.warn(`[Typing] Not enough categories for project ${projectId}: ${catCount}`);
+        if (win && !win.isDestroyed()) {
+          win.webContents.send('keywords:typing-error', {
+            projectId,
+            message: 'Задайте не менее двух классов для классификации.',
+          });
+        }
+        return;
+      }
+    } catch (e) {
+      console.warn('[Typing] Failed to check categories count', e);
+    }
+
     if (!keywords || keywords.length === 0) {
       console.warn(`No target keywords (target_query=1) found for project ${projectId}`);
       if (win && !win.isDestroyed()) {
@@ -30,6 +48,21 @@ export async function startTypingWorker(ctx: TypingCtx, projectId: number) {
     const inputPath = path.join(tmpDir, `input-${Date.now()}.json`);
     const input = JSON.stringify({ typingSamples: typingSamples || [], keywords: keywords || [] });
     await fs.promises.writeFile(inputPath, input, 'utf8');
+
+    console.log(`[Typing] workerPath: ${workerPath}, resolvedDbPath: ${resolvedDbPath}`);
+    try {
+      const exists = fs.existsSync(workerPath);
+      console.log(`[Typing] workerPath exists: ${exists}`);
+      if (!exists) {
+        const w = getWindow();
+        if (w && !w.isDestroyed()) {
+          w.webContents.send('keywords:typing-error', { projectId, message: `Worker файл не найден: ${workerPath}` });
+        }
+        return;
+      }
+    } catch (e) {
+      console.warn('[Typing] Failed to stat workerPath', e);
+    }
 
     const child = spawn(process.execPath, [workerPath, `--projectId=${projectId}`, `--inputFile=${inputPath}`], {
       env: Object.assign({}, process.env, {
@@ -88,26 +121,41 @@ export async function startTypingWorker(ctx: TypingCtx, projectId: number) {
     });
 
     child.stderr?.setEncoding('utf8');
+    let stderrRateLimited = false;
+    let lastStderr = '';
     child.stderr?.on('data', (data) => {
       const text = data.toString().trim();
+      lastStderr = text;
       console.error(`[Typing Worker ${projectId} ERROR]`, text);
-      const w = getWindow();
       if (/429/.test(text) || /rate limit/i.test(text)) {
-        if (w && !w.isDestroyed()) {
-          w.webContents.send('keywords:typing-error', { projectId, status: 429, message: 'Request failed with status code 429' });
-        }
+        stderrRateLimited = true;
       }
+      // do not immediately send UI error here — wait for process exit to decide final status
     });
 
-    child.on('exit', async (code) => {
-      console.log(`Typing worker exited with code ${code}`);
+    child.on('exit', async (code, signal) => {
+      console.log(`Typing worker exited with code ${code}, signal ${signal}`);
       try { await fs.promises.rm(tmpDir, { recursive: true, force: true }); } catch {}
       const w = getWindow();
       if (w && !w.isDestroyed()) {
         if (code === 0) {
           w.webContents.send('keywords:typing-finished', { projectId });
         } else {
-          w.webContents.send('keywords:typing-error', { projectId, message: `Worker exited with code ${code}` });
+          // If process was killed by signal, code will be null — log signal
+          if (signal) {
+            console.error(`[Typing] Worker killed by signal: ${signal}`);
+          }
+          // Decide message based on stderr detection (rate limit) or generic failure
+          const payload: any = { projectId };
+          if (stderrRateLimited) {
+            payload.status = 429;
+            payload.message = 'Request failed with status code 429';
+          } else {
+            payload.message = 'Не удалось получить эмбеддинги для классификации. Проверьте OpenAI ключ.';
+            // attach last stderr for debugging
+            if (lastStderr) payload.debug = lastStderr.substring(0, 1024);
+          }
+          w.webContents.send('keywords:typing-error', payload);
         }
       }
     });

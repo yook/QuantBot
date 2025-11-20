@@ -110,6 +110,9 @@
             <el-input-tag
               v-model="rowTags[String(row.label)]"
               draggable
+              collapse-tags
+              collapse-tags-tooltip
+              :max-collapse-tags="10"
               :placeholder="t('classification.edit_placeholder')"
               :delimiter="delimiter"
               v-multi-paste="{ mode: 'row', row }"

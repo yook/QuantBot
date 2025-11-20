@@ -58,7 +58,14 @@ export async function startClusteringWorker(ctx: ClusteringCtx, projectId: numbe
     const input = JSON.stringify({ keywords, algorithm, eps, minPts });
     await fs.promises.writeFile(inputPath, input, 'utf8');
 
-    const args = [workerPath, `--projectId=${projectId}`, `--inputFile=${inputPath}`, `--algorithm=${algorithm}`, `--eps=${eps}`];
+    // For 'components' algorithm the worker expects a similarity `threshold` (not `eps`),
+    // for 'dbscan' the worker expects `eps` (cosine distance). Map accordingly.
+    const args = [workerPath, `--projectId=${projectId}`, `--inputFile=${inputPath}`, `--algorithm=${algorithm}`];
+    if (algorithm === 'components') {
+      args.push(`--threshold=${eps}`);
+    } else {
+      args.push(`--eps=${eps}`);
+    }
     if (minPts !== undefined) args.push(`--minPts=${minPts}`);
 
     const child = spawn(process.execPath, args, {

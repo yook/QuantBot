@@ -2082,6 +2082,11 @@ html.dark .table-container {
   cursor: move;
 }
 
+/* Make cursor on hover for draggable headers match fixed-column hover (pointer) */
+.sortable-header[draggable="true"]:hover {
+  cursor: pointer;
+}
+
 /* Thin vertical insert indicator shown between columns during drag */
 .insert-line {
   position: absolute;

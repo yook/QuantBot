@@ -115,8 +115,20 @@ async function main() {
     // continue even if insert batch has warnings
   }
   // Build label->id map
+  // Detect categories text column name (legacy 'name' vs 'category_name')
+  async function resolveCategoryNameColumn() {
+    try {
+      const rows = await dbAll("PRAGMA table_info('categories')");
+      const names = (rows || []).map((r) => r && r.name);
+      if (names.includes("name")) return "name";
+      if (names.includes("category_name")) return "category_name";
+    } catch (e) {}
+    return "category_name";
+  }
+
+  const catCol = await resolveCategoryNameColumn();
   const cats = await dbAll(
-    `SELECT id, category_name FROM categories WHERE project_id = ?`,
+    `SELECT id, ${catCol} AS category_name FROM categories WHERE project_id = ?`,
     [projectId]
   );
   const labelToId = new Map();
@@ -260,6 +272,25 @@ async function main() {
       keywords = (obj && obj.keywords) || [];
     } catch (e) {
       // fallback: query DB for unclassified target keywords
+    }
+    // If input contains explicit `target_query` flags, process only those marked as target
+    try {
+      if (Array.isArray(keywords) && keywords.length > 0) {
+        const allHaveFlag = keywords.every(
+          (k) => typeof k.target_query !== "undefined"
+        );
+        if (allHaveFlag) {
+          const before = keywords.length;
+          keywords = keywords.filter(
+            (k) => k.target_query === 1 || k.target_query === true
+          );
+          console.error(
+            `[trainAndClassify] Filtered keywords by target_query: ${before} -> ${keywords.length}`
+          );
+        }
+      }
+    } catch (e) {
+      // ignore filtering errors
     }
   }
   if (!keywords || keywords.length === 0) {

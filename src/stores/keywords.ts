@@ -87,16 +87,8 @@ export const useKeywordsStore = defineStore("keywords", () => {
     running.value = anyRunning && !allTargetFinished;
   }
 
-  // Читаемый текст для ошибки 429 (rate limit / квота)
-  const RATE_LIMIT_MESSAGE = [
-    'Вы превысили лимит запросов/токенов за минуту или другой промежуток времени (rate limit) вашей организации. ',
-    'OpenAI Help Center',
-    '',
-    'У вас закончился доступный квота / баланс / кредит или установлен месячный лимит расхода, который вы достигли. ',
-    'OpenAI Developer Community',
-    '',
-    'Ваш ключ API привязан к организации, у которой либо нет активного платёжного метода, либо ключ создан до перехода на платную версию, или баланс ещё не активирован.'
-  ].join('\n');
+  // Короткое понятное сообщение пользователю при ошибках 429/квоты
+  const RATE_LIMIT_MESSAGE = 'Не удалось получить эмбеддинги для классификации. Проверьте OpenAI ключ.';
 
   function mapErrorMessage(payload?: any): string {
     if (!payload) return 'Произошла ошибка';
