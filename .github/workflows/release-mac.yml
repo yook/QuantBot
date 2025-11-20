@@ -27,6 +27,26 @@ jobs:
           node-version: "22"
           cache: "npm"
 
+      - name: Cache electron & build caches
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/electron
+            ~/.cache/electron-builder
+            ~/.cache/node-gyp
+            node_modules/.vite
+          key: ${{ runner.os }}-build-cache-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-build-cache-
+
+      - name: Cache node_modules (optional)
+        uses: actions/cache@v4
+        with:
+          path: node_modules
+          key: ${{ runner.os }}-node-modules-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-node-modules-
+
       - name: Install libvips (sharp dependency)
         run: brew install vips
 
@@ -44,7 +64,7 @@ jobs:
 
       - name: Package app (electron-builder)
         env:
-          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           # Сборка без автоматической публикации. Артефакты загрузим отдельным шагом.
