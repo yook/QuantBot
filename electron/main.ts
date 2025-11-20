@@ -1,4 +1,4 @@
-import { app, BrowserWindow, shell, dialog } from "electron";
+import { app, BrowserWindow, shell, dialog, ipcMain } from "electron";
 import path from "path";
 import { fileURLToPath } from "url";
 import Database from "better-sqlite3";
@@ -98,6 +98,14 @@ function sendLogToRenderer(level: LogLevel, args: any[]) {
     logBuffer.push({ level, args });
     if (logBuffer.length > 1000) logBuffer.shift();
   }
+}
+
+// Форматирование ошибочного значения в безопасную строку для логов
+function errMsg(e: unknown): string {
+  if (e == null) return String(e);
+  if (typeof e === 'string') return e;
+  if (e instanceof Error) return e.message;
+  try { return JSON.stringify(e); } catch { return String(e); }
 }
 
 console.log = (...args: any[]) => {
@@ -256,8 +264,45 @@ app.whenReady().then(() => {
   // Проверка обновлений и уведомление пользователя (только для production releases)
   if (process.env.NODE_ENV === 'production' && !process.env.VITE_DEV_SERVER_URL) {
     console.log('[Main] Checking for updates...');
+
+    // Подробное логирование событий автообновления для отладки
+    try {
+        autoUpdater.on('checking-for-update', () => {
+          console.log('[AutoUpdater] checking-for-update');
+          try { win?.webContents.send('auto-updater', { event: 'checking-for-update' }); } catch (e) {}
+        });
+
+        autoUpdater.on('update-available', (info) => {
+          console.log('[AutoUpdater] update-available', info);
+          try { win?.webContents.send('auto-updater', { event: 'update-available', info }); } catch (e) {}
+        });
+
+        autoUpdater.on('update-not-available', (info) => {
+          console.log('[AutoUpdater] update-not-available', info);
+          try { win?.webContents.send('auto-updater', { event: 'update-not-available', info }); } catch (e) {}
+        });
+
+        autoUpdater.on('error', (err) => {
+          console.error('[AutoUpdater] error', errMsg(err));
+          try { win?.webContents.send('auto-updater', { event: 'error', error: errMsg(err) }); } catch (e) {}
+        });
+
+        autoUpdater.on('download-progress', (progress) => {
+          // progress has properties: bytesPerSecond, percent, total, transferred
+          console.log('[AutoUpdater] download-progress', progress);
+          try { win?.webContents.send('auto-updater', { event: 'download-progress', progress }); } catch (e) {}
+        });
+
+        autoUpdater.on('update-downloaded', (info) => {
+          console.log('[AutoUpdater] update-downloaded', info);
+          try { win?.webContents.send('auto-updater', { event: 'update-downloaded', info }); } catch (e) {}
+        });
+    } catch (e) {
+        console.error('[Main] Failed to attach autoUpdater listeners:', errMsg(e));
+    }
+
     autoUpdater.checkForUpdatesAndNotify().catch(err => {
-      console.error('[Main] Auto-update check failed:', err.message);
+        console.error('[Main] Auto-update check failed:', errMsg(err));
     });
   } else {
     console.log('[Main] Skipping auto-update check in development mode');
@@ -267,6 +312,46 @@ app.whenReady().then(() => {
   console.error('[Main] Stack:', error.stack);
   app.quit();
 });
+
+// IPC handlers to respond to renderer requests related to auto-updater
+try {
+  // Open release page in external browser
+  ipcMain.on('auto-updater-open-release', (_event: Electron.IpcMainEvent, url?: string) => {
+    try {
+      const target = url || 'https://github.com/yook/QuantBot/releases/latest';
+      console.log('[Main] Opening release URL:', target);
+      shell.openExternal(target);
+    } catch (err) {
+      console.error('[Main] Failed to open external URL for release:', (err as any)?.message || err);
+    }
+  });
+
+  // Quit and install (called after update downloaded and user confirmed)
+  ipcMain.on('auto-updater-quit-and-install', () => {
+    try {
+      console.log('[Main] Received request to quit and install update');
+      // This will quit the app and install the update
+      autoUpdater.quitAndInstall();
+    } catch (err) {
+      console.error('[Main] quitAndInstall failed:', (err as any)?.message || err);
+    }
+  });
+
+  // Start download of update when renderer requests it
+  ipcMain.on('auto-updater-download', async () => {
+    try {
+      console.log('[Main] Received request to download update');
+      // downloadUpdate returns a Promise
+      await autoUpdater.downloadUpdate();
+      console.log('[Main] downloadUpdate() resolved');
+    } catch (err) {
+      console.error('[Main] downloadUpdate failed:', (err as any)?.message || err);
+      try { win?.webContents.send('auto-updater', { event: 'error', error: (err as any)?.message || String(err) }); } catch (_) {}
+    }
+  });
+} catch (err) {
+  console.error('[Main] Failed to register auto-updater IPC handlers:', (err as any)?.message || err);
+}
 
 // Crawler handlers are registered via ipc/index.ts
 
