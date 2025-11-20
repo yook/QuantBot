@@ -42,20 +42,13 @@ jobs:
           ls -la release || true
           ls -la dist || true
 
-      - name: Package & Publish (electron-builder)
+      - name: Package app (electron-builder)
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          TOKEN="${GH_TOKEN:-$GITHUB_TOKEN}"
-          if [ -z "$TOKEN" ]; then
-            echo "No GitHub token available, building without publish"
-            npx electron-builder --mac --publish=never
-          else
-            export GH_TOKEN="$TOKEN"
-            echo "Publishing to GitHub Releases"
-            npx electron-builder --mac --publish=always
-          fi
+          # Сборка без автоматической публикации. Артефакты загрузим отдельным шагом.
+          npx electron-builder --mac --publish=never
 
       - name: Upload release artifacts to workflow (fallback)
         if: always()
