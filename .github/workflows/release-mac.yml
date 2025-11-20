@@ -45,11 +45,14 @@ jobs:
       - name: Package & Publish (electron-builder)
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          if [ -z "$GH_TOKEN" ]; then
-            echo "GH_TOKEN not set, building without publish"
+          TOKEN="${GH_TOKEN:-$GITHUB_TOKEN}"
+          if [ -z "$TOKEN" ]; then
+            echo "No GitHub token available, building without publish"
             npx electron-builder --mac --publish=never
           else
+            export GH_TOKEN="$TOKEN"
             echo "Publishing to GitHub Releases"
             npx electron-builder --mac --publish=always
           fi
