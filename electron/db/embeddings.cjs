@@ -20,8 +20,22 @@ function decodeEmbedding(row) {
   const emb = row.embedding;
   try {
     if (Buffer.isBuffer(emb)) {
-      const txt = emb.toString("utf8");
-      return JSON.parse(txt);
+      // Try to decode as raw Float32 binary first
+      try {
+        const buf = emb;
+        // Create Float32Array view over the buffer
+        const floatArray = new Float32Array(
+          buf.buffer,
+          buf.byteOffset,
+          Math.floor(buf.byteLength / 4)
+        );
+        // Return plain JS array for backward compatibility with callers
+        return Array.from(floatArray);
+      } catch (e) {
+        // Fallback to UTF-8 JSON parsing for legacy string blobs
+        const txt = emb.toString("utf8");
+        return JSON.parse(txt);
+      }
     }
     if (typeof emb === "string") return JSON.parse(emb);
     if (Array.isArray(emb)) return emb;
@@ -39,11 +53,22 @@ async function embeddingsCacheGet(key, vectorModel) {
 }
 
 async function embeddingsCachePut(key, embedding, vectorModel) {
-  const payload = Buffer.from(JSON.stringify(embedding));
-  await dbRun(
-    "INSERT OR REPLACE INTO embeddings_cache (key, vector_model, embedding, created_at) VALUES (?, ?, ?, ?)",
-    [key, vectorModel || null, payload, new Date().toISOString()]
-  );
+  // Store as raw Float32 binary for compactness and speed
+  try {
+    const floatArray = Float32Array.from(embedding || []);
+    const payload = Buffer.from(floatArray.buffer);
+    await dbRun(
+      "INSERT OR REPLACE INTO embeddings_cache (key, vector_model, embedding, created_at) VALUES (?, ?, ?, ?)",
+      [key, vectorModel || null, payload, new Date().toISOString()]
+    );
+  } catch (e) {
+    // Fallback to JSON text if something goes wrong
+    const payload = Buffer.from(JSON.stringify(embedding));
+    await dbRun(
+      "INSERT OR REPLACE INTO embeddings_cache (key, vector_model, embedding, created_at) VALUES (?, ?, ?, ?)",
+      [key, vectorModel || null, payload, new Date().toISOString()]
+    );
+  }
   return true;
 }
 
@@ -58,11 +83,20 @@ async function updateTypingSampleEmbeddings(projectId, items, vectorModel) {
     );
     const key = row && row.text ? row.text : null;
     if (!key) continue;
-    const payload = Buffer.from(JSON.stringify(it.vector));
-    await dbRun(
-      "INSERT OR REPLACE INTO embeddings_cache (key, vector_model, embedding, created_at) VALUES (?, ?, ?, ?)",
-      [key, vectorModel || null, payload, new Date().toISOString()]
-    );
+    try {
+      const floatArray = Float32Array.from(it.vector || []);
+      const payload = Buffer.from(floatArray.buffer);
+      await dbRun(
+        "INSERT OR REPLACE INTO embeddings_cache (key, vector_model, embedding, created_at) VALUES (?, ?, ?, ?)",
+        [key, vectorModel || null, payload, new Date().toISOString()]
+      );
+    } catch (e) {
+      const payload = Buffer.from(JSON.stringify(it.vector));
+      await dbRun(
+        "INSERT OR REPLACE INTO embeddings_cache (key, vector_model, embedding, created_at) VALUES (?, ?, ?, ?)",
+        [key, vectorModel || null, payload, new Date().toISOString()]
+      );
+    }
     updated += 1;
   }
   return { updated };

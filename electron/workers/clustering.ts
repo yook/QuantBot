@@ -13,9 +13,26 @@ export async function startClusteringWorker(ctx: ClusteringCtx, projectId: numbe
   const workerPath = path.join(__dirname, '..', 'worker', 'clusterСomponents.cjs');
   const win = getWindow();
 
-  console.log(`Starting clustering worker for project ${projectId}`, { algorithm, eps, minPts });
+  const logDetails =
+    algorithm === 'components'
+      ? `algorithm=components threshold=${eps}`
+      : `algorithm=dbscan eps=${eps}` + (typeof minPts !== 'undefined' ? ` minPts=${minPts}` : '');
+  console.log(`Starting clustering worker for project ${projectId} (${logDetails})`);
 
   try {
+    // Clear previous clustering results for this project to avoid stale labels in UI
+    try {
+      const stmt = db.prepare('UPDATE keywords SET cluster = NULL, cluster_label = NULL WHERE project_id = ?');
+      const res = stmt.run(projectId);
+      console.log(`[clustering] Cleared previous clustering results: ${res.changes} rows`);
+      const w0 = getWindow();
+      if (w0 && !w0.isDestroyed()) {
+        w0.webContents.send('keywords:clusters-reset', { projectId, cleared: res.changes });
+      }
+    } catch (clearErr) {
+      console.warn('[clustering] Failed to clear previous clustering results:', (clearErr as any)?.message || clearErr);
+    }
+
     const keywords = db.prepare('SELECT * FROM keywords WHERE project_id = ? AND target_query = 1').all(projectId) as any[];
     if (!keywords || keywords.length === 0) {
       console.warn(`No target keywords (target_query=1) found for project ${projectId}`);

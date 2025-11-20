@@ -130,8 +130,8 @@
               show-input
             />
             <div class="text-xs text-gray-500 mt-1">
-              Чем больше eps → тем больше расстояние, на котором точки считаются
-              соседями → больше точек будут объединяться в один кластер.
+              Чем больше eps → тем больше точек будут объединяться в один
+              кластер.
             </div>
           </el-form-item>
 
@@ -145,7 +145,7 @@
               :max="10"
               :step="1"
             />
-            <div class="text-xs text-gray-500 mt-1">
+            <div class="form-helper text-xs text-gray-500 mt-1">
               Минимальное количество соседей для формирования плотной области.
               Обычно 2–5.
             </div>
@@ -189,11 +189,21 @@ const value = ref(form.value.eps);
 const dbscanEps = ref(0.3); // косинусное расстояние (1 - similarity)
 const dbscanMinPts = ref(2);
 
+// Locale-safe number coercion [0,1]
+function toNumber01(x) {
+  const n =
+    typeof x === "number" ? x : Number(String(x ?? "").replace(",", "."));
+  if (!isFinite(n) || isNaN(n)) return 0;
+  return Math.max(0, Math.min(1, n));
+}
+
 // Keep form.eps in sync with slider value
 watch(
   () => value.value,
   (v) => {
-    form.value.eps = Number(v);
+    const n = toNumber01(v);
+    if (n !== value.value) value.value = n;
+    form.value.eps = n;
   }
 );
 
@@ -231,9 +241,9 @@ function persistToProject() {
   if (!projectId) return;
   try {
     if (!project.data) project.data = {};
-    project.data.clustering_eps = Number(form.value.eps);
+    project.data.clustering_eps = toNumber01(form.value.eps);
     project.data.clustering_algorithm = form.value.algorithm;
-    project.data.clustering_dbscan_eps = Number(dbscanEps.value);
+    project.data.clustering_dbscan_eps = toNumber01(dbscanEps.value);
     project.data.clustering_dbscan_minPts = Number(dbscanMinPts.value);
     project.updateProject();
   } catch (e) {
@@ -244,14 +254,14 @@ function persistToProject() {
 // Initialize form from current project settings if available
 if (project && project.data) {
   try {
-    const eps = project.data.clustering_eps;
+    const eps = toNumber01(project.data.clustering_eps);
     const algorithm = project.data.clustering_algorithm;
     const dbscan_eps = project.data.clustering_dbscan_eps;
     const dbscan_minPts = project.data.clustering_dbscan_minPts;
 
     if (typeof eps !== "undefined" && eps !== null) {
-      form.value.eps = Number(eps);
-      value.value = Number(eps); // Sync slider
+      form.value.eps = eps;
+      value.value = eps; // Sync slider
     }
     if (typeof algorithm !== "undefined" && algorithm !== null)
       form.value.algorithm = String(algorithm);
@@ -270,15 +280,15 @@ watch(
   (newId) => {
     if (!newId) return;
     try {
-      const eps = project.data && project.data.clustering_eps;
+      const eps = toNumber01(project.data && project.data.clustering_eps);
       const algorithm = project.data && project.data.clustering_algorithm;
       const dbscan_eps = project.data && project.data.clustering_dbscan_eps;
       const dbscan_minPts =
         project.data && project.data.clustering_dbscan_minPts;
 
       if (typeof eps !== "undefined" && eps !== null) {
-        form.value.eps = Number(eps);
-        value.value = Number(eps); // Sync slider
+        form.value.eps = eps;
+        value.value = eps; // Sync slider
       }
       if (typeof algorithm !== "undefined" && algorithm !== null)
         form.value.algorithm = String(algorithm);
@@ -349,13 +359,13 @@ function startClustering() {
   }
 
   const algorithm = String(form.value.algorithm || "components");
-  const eps = Number(form.value.eps);
+  const eps = toNumber01(form.value.eps);
   const minPts = Number(dbscanMinPts.value);
   ipcClient
     .startClustering(
       Number(projectId),
       algorithm,
-      algorithm === "components" ? eps : Number(dbscanEps.value),
+      algorithm === "components" ? eps : toNumber01(dbscanEps.value),
       algorithm === "dbscan" ? minPts : undefined
     )
     .then(() => {
@@ -373,5 +383,9 @@ function startClustering() {
 /* Set filled portion (before value) to theme runway color as requested */
 .class-slider :deep(.el-slider__bar) {
   background-color: var(--el-slider-runway-bg-color) !important;
+}
+
+.form-helper {
+  width: 100%;
 }
 </style>

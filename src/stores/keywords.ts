@@ -1210,7 +1210,10 @@ export const useKeywordsStore = defineStore("keywords", () => {
     ipcClient.on('keywords:categorization-error', (data: any) => {
       if (!data || String(data.projectId) !== String(currentProjectId.value)) return;
         categorizationRunning.value = false;
-        running.value = false;
+        categorizationFinished.value = true;
+        targetCategorization.value = false;
+        categorizationPercent.value = 0;
+        updateOverallProgress();
         ElMessage.error(mapErrorMessage(data));
     });
 
@@ -1243,11 +1246,35 @@ export const useKeywordsStore = defineStore("keywords", () => {
     ipcClient.on('keywords:typing-error', (data: any) => {
       if (!data || String(data.projectId) !== String(currentProjectId.value)) return;
         typingRunning.value = false;
-        running.value = false;
+        typingFinished.value = true;
+        targetTyping.value = false;
+        typingPercent.value = 0;
+        updateOverallProgress();
         ElMessage.error(mapErrorMessage(data));
     });
 
     // Clustering events
+    ipcClient.on('keywords:clusters-reset', (data: any) => {
+      try {
+        if (!data || String(data.projectId) !== String(currentProjectId.value)) return;
+        // Wipe previous clustering fields locally to avoid stale UI
+        if (Array.isArray(keywords.value)) {
+          for (let i = 0; i < keywords.value.length; i++) {
+            const k: any = keywords.value[i];
+            if (!k) continue;
+            // reset only known clustering fields
+            if ('cluster' in k) k.cluster = null;
+            if ('cluster_label' in k) k.cluster_label = null;
+          }
+        }
+        // Reset visible progress for clarity when a new run starts
+        clusteringPercent.value = 0;
+        clusteringFinished.value = false;
+        updateOverallProgress();
+      } catch (e) {
+        console.warn('[Keywords Store] Failed to process keywords:clusters-reset', e);
+      }
+    });
     ipcClient.on('keywords:clustering-progress', (data: any) => {
       if (String(data.projectId) === String(currentProjectId.value)) {
         clusteringRunning.value = true;
@@ -1276,7 +1303,10 @@ export const useKeywordsStore = defineStore("keywords", () => {
     ipcClient.on('keywords:clustering-error', (data: any) => {
       if (String(data.projectId) === String(currentProjectId.value)) {
         clusteringRunning.value = false;
-        running.value = false;
+        clusteringFinished.value = true;
+        targetClustering.value = false;
+        clusteringPercent.value = 0;
+        updateOverallProgress();
         ElMessage.error(data.message || "Ошибка кластеризации");
       }
     });

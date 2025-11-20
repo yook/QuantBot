@@ -155,6 +155,7 @@
               >
                 <div
                   class="cell-content"
+                  @dblclick="selectCellText"
                   :class="{
                     'center-cell':
                       column.prop === '_actions' ||
@@ -164,19 +165,19 @@
                     textAlign: column.prop === '_rowNumber' ? 'center' : 'left',
                   }"
                 >
-                  <span v-if="column.prop === '_rowNumber'">{{
-                    row._rowNumber
-                  }}</span>
-                  <span v-else-if="column.prop === '_actions'">
+                  <template v-if="column.prop === '_rowNumber'">
+                    <span>{{ row._rowNumber }}</span>
+                  </template>
+                  <template v-else-if="column.prop === '_actions'">
                     <el-icon
                       @click="emit('delete-row', row)"
                       style="cursor: pointer; color: var(--el-color-danger)"
                     >
                       <Delete />
                     </el-icon>
-                  </span>
+                  </template>
                   <template
-                    v-if="
+                    v-else-if="
                       column.prop === 'category_info' ||
                       column.prop === 'class_info'
                     "
@@ -630,6 +631,13 @@ const tableHeight = computed(() => {
       typeof props.fixedHeight === "number" &&
       props.fixedHeight > 0
     ) {
+      // Если явно задана fixedHeight, но записей мало (<5), подстраиваем высоту под контент
+      const totalRowsFixed = Number(props.totalCount) || 0;
+      if (totalRowsFixed > 0 && totalRowsFixed < 5) {
+        const headerHeightFallback = rowHeight; // используем высоту строки как оценку шапки
+        const contentH = headerHeightFallback + totalRowsFixed * rowHeight;
+        return contentH + "px";
+      }
       return props.fixedHeight + "px";
     }
 
@@ -643,15 +651,19 @@ const tableHeight = computed(() => {
 
     // Если окно доступно — ограничиваем только сверху: если контента мало, роли не играет
     if (typeof window !== "undefined" && windowHeight.value) {
-      const available = Math.max(270, windowHeight.value - props.heightOffset);
-      // Если строк мало и контента меньше доступной высоты, скролла не будет (берём contentHeight)
-      // Если строк много — ограничим высоту доступной областью (будет внутренний скролл)
-      const final = Math.min(contentHeight, available);
+      const availableRaw = windowHeight.value - props.heightOffset;
+      const available = Math.max(0, availableRaw);
+      // Для пустой таблицы применяем минимальную комфортную высоту (270px)
+      if (totalRows === 0) {
+        const final = Math.min(contentHeight, Math.max(270, available));
+        return final + "px";
+      }
+      // Для непустых таблиц используем общую логику: не принудительно увеличиваем контейнер,
+      // но гарантируем минимум для заголовка + 1 строки, чтобы не обрезать интерфейс
+      const minForOneRow = header + rowHeight;
+      const final = Math.min(contentHeight, Math.max(minForOneRow, available));
       return final + "px";
     }
-
-    // Без доступа к окну: используем контентную высоту с нижней границей
-    return Math.max(270, contentHeight) + "px";
   } catch (e) {
     return "600px";
   }
@@ -697,7 +709,7 @@ const tableColumnsWithRowNumber = computed(() => [
   {
     prop: "_rowNumber",
     name: "#",
-    width: 30,
+    width: 35,
     formatter: (_, __, rowIndex) => rowIndex + 1, // Форматируем номер строки
   },
   ...props.tableColumns,
@@ -1034,7 +1046,7 @@ function getColumnWidth(columnProp) {
   if (columnWidths.value[columnProp]) {
     // Применяем минимальную ширину для _rowNumber
     if (columnProp === "_rowNumber") {
-      return Math.max(30, columnWidths.value[columnProp]);
+      return Math.max(35, columnWidths.value[columnProp]);
     }
     return columnWidths.value[columnProp];
   }
@@ -1047,15 +1059,15 @@ function getColumnWidth(columnProp) {
   ) {
     // Применяем минимальную ширину для _rowNumber
     if (columnProp === "_rowNumber") {
-      return Math.max(30, project.data.columnWidths[getDbKey()][columnProp]);
+      return Math.max(35, project.data.columnWidths[getDbKey()][columnProp]);
     }
     return project.data.columnWidths[getDbKey()][columnProp];
   }
 
   // Find the column in tableColumns
   const column = props.tableColumns.find((col) => col.prop === columnProp);
-  // Default widths: 30px for _rowNumber, otherwise 300px
-  if (columnProp === "_rowNumber") return 30;
+  // Default widths: 35px for _rowNumber, otherwise 300px
+  if (columnProp === "_rowNumber") return 35;
   return column?.width || 300;
 }
 
@@ -1080,7 +1092,7 @@ function handleResize(event) {
 
   const diff = event.pageX - startX.value;
   // Minimum width depends on column type
-  const minWidth = currentColumn.value === "_rowNumber" ? 30 : 80;
+  const minWidth = currentColumn.value === "_rowNumber" ? 35 : 80;
   const newWidth = Math.max(minWidth, startWidth.value + diff);
 
   // Update column width in local state for immediate visual feedback
@@ -1233,7 +1245,7 @@ function onDragEnd() {
 
 function saveColumnWidth(columnProp, width) {
   // Применяем минимальную ширину для _rowNumber
-  const finalWidth = columnProp === "_rowNumber" ? Math.max(30, width) : width;
+  const finalWidth = columnProp === "_rowNumber" ? Math.max(35, width) : width;
 
   // Update columnWidths.value to include this new width
   columnWidths.value = {
@@ -1335,7 +1347,7 @@ function loadColumnWidthsFromLocalStorage() {
       const processedWidths = { ...storedWidths };
       if (processedWidths["_rowNumber"]) {
         processedWidths["_rowNumber"] = Math.max(
-          30,
+          35,
           processedWidths["_rowNumber"]
         );
       }
@@ -1406,7 +1418,7 @@ onMounted(async () => {
       const projectWidths = { ...project.data.columnWidths[getDbKey()] };
       // Применяем минимальную ширину для _rowNumber
       if (projectWidths["_rowNumber"]) {
-        projectWidths["_rowNumber"] = Math.max(30, projectWidths["_rowNumber"]);
+        projectWidths["_rowNumber"] = Math.max(35, projectWidths["_rowNumber"]);
       }
       columnWidths.value = { ...projectWidths };
     }
@@ -1432,7 +1444,7 @@ onMounted(async () => {
         // Применяем минимальную ширину для _rowNumber
         if (projectWidths["_rowNumber"]) {
           projectWidths["_rowNumber"] = Math.max(
-            30,
+            35,
             projectWidths["_rowNumber"]
           );
         }
@@ -1473,6 +1485,13 @@ onMounted(async () => {
         // Используем высоту строки как разумную оценку высоты заголовка,
         // чтобы корректно умещать целое число строк без обрезания.
         if (!headerHeight || headerHeight < 24) headerHeight = rowHeight;
+
+        // If there are very few rows, adapt pageSize to actual rows so container won't have big empty space
+        const totalRowsFixed = Number(props.totalCount) || 0;
+        if (totalRowsFixed > 0 && totalRowsFixed < 5) {
+          pageSize.value = totalRowsFixed;
+          return;
+        }
 
         const availableHeight = props.fixedHeight - headerHeight;
 
@@ -1953,6 +1972,31 @@ function maybeRequestWindowByScroll() {
     // ignore
   }
 }
+
+// Select text inside a cell on double-click. Overrides the global user-select:none
+// set on the virtual scroll container. If the double-click target is an interactive
+// control (icon/button/input) we ignore selection to avoid interfering.
+function selectCellText(e) {
+  try {
+    const target = e && (e.currentTarget || e.target);
+    if (!target) return;
+
+    const tag =
+      (e.target && e.target.tagName && e.target.tagName.toLowerCase()) || "";
+    if (tag === "input" || tag === "textarea" || tag === "button") return;
+    // If an Element Plus icon was clicked, avoid selecting icons
+    if (e.target && e.target.closest && e.target.closest(".el-icon")) return;
+
+    const sel = window.getSelection ? window.getSelection() : null;
+    if (!sel) return;
+    const range = document.createRange();
+    range.selectNodeContents(target);
+    sel.removeAllRanges();
+    sel.addRange(range);
+  } catch (err) {
+    // ignore
+  }
+}
 </script>
 
 <style scoped>
@@ -1984,6 +2028,41 @@ function maybeRequestWindowByScroll() {
 .row-number-cell .cell-content {
   text-align: center;
   justify-content: center;
+}
+
+/* Тени для фиксированных столбцов в теле таблицы (как в шапке) */
+.table-cell.fixed-column {
+  position: sticky;
+  background: var(--el-bg-color);
+  z-index: 5;
+}
+
+/* Первый фиксированный столбец (номер строки) */
+.table-cell.fixed-column:nth-child(1) {
+  left: 0;
+  z-index: 12;
+  box-shadow: 2px 0 6px rgba(0, 0, 0, 0.1);
+}
+
+/* Второй фиксированный столбец (обычно 2-я колонка) */
+.table-cell.fixed-column:nth-child(2) {
+  left: var(--second-column-left, 60px);
+  z-index: 11;
+  box-shadow: 2px 0 5px rgba(0, 0, 0, 0.08);
+}
+
+/* Общая лёгкая тень для остальных фиксированных столбцов */
+.table-cell.fixed-column:not(:nth-child(1)):not(:nth-child(2)) {
+  box-shadow: 2px 0 4px rgba(0, 0, 0, 0.06);
+}
+
+/* Тёмная тема: скорректировать тени */
+html.dark .table-cell.fixed-column {
+  box-shadow: 2px 0 6px rgba(0, 0, 0, 0.28);
+  background: var(--el-bg-color) !important;
+}
+html.dark .table-cell.fixed-column:nth-child(1) {
+  box-shadow: 2px 0 6px rgba(0, 0, 0, 0.32);
 }
 
 .filters-container {
@@ -2169,7 +2248,7 @@ html.dark .table-body-container::-webkit-scrollbar-corner {
   /* Улучшаем контраст границ в светлой теме */
   border: none;
   margin: 0; /* Убираем отступы */
-  height: 100%; /* Растягиваем таблицу на всю высоту контейнера */
+  height: auto; /* Не растягиваем таблицу на всю высоту контейнера — предотвращаем растягивание строк */
 }
 
 .custom-table tbody {
@@ -2244,7 +2323,7 @@ html.dark .custom-table td {
   overflow: hidden;
   text-overflow: ellipsis;
   box-sizing: border-box; /* Учитываем padding и border в ширине */
-  border-right: 1px solid var(--el-border-color-extra-light); /* Добавляем правую границу */
+  border-right: 1px solid var(--el-border-color); /* Добавляем правую границу (light theme uses same color as fixed columns) */
   position: relative; /* Ensure absolute children (resizer) are positioned inside the header cell */
 }
 
@@ -2340,10 +2419,10 @@ html.dark .sortable-header:hover {
 }
 
 .custom-table td {
-  padding: 4px; /* Чуть меньше padding для узких столбцов */
+  padding: 4px 10px; /* Верх/низ 4px, лев/прав 5px */
   line-height: 12px;
   border-bottom: 1px solid rgba(0, 0, 0, 0.08);
-  border-right: 1px solid var(--el-border-color-extra-light);
+  border-right: 1px solid var(--el-border-color);
   color: var(--el-text-color-regular);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -2381,7 +2460,7 @@ html.dark .sortable-header:hover {
 
 /* Темная тема для ячеек таблицы */
 html.dark .custom-table td {
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  border-bottom: 1px solid var(--el-border-color-darker);
   border-right: 1px solid var(--el-border-color-darker);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -2396,14 +2475,19 @@ html.dark .custom-table td {
   border-right: none !important;
 }
 
-/* Убираем нижнюю границу у последней строки */
-.custom-table tbody tr:last-child td {
-  border-bottom: none !important;
+/* Header cells padding: top/bottom 4px, left/right 5px to match data cells */
+.custom-table thead th {
+  padding: 4px 5px;
 }
 
-/* Темная тема: убираем нижнюю границу у последней строки */
+/* Показываем нижнюю границу у последней строки для визуального завершения таблицы */
+.custom-table tbody tr:last-child td {
+  border-bottom: 1px solid var(--el-border-color) !important;
+}
+
+/* Темная тема: нижняя граница у последней строки */
 html.dark .custom-table tbody tr:last-child td {
-  border-bottom: none !important;
+  border-bottom: 1px solid var(--el-border-color-darker) !important;
 }
 
 /* Темная тема: убираем правую границу у последнего столбца */
@@ -2675,6 +2759,11 @@ html.dark .custom-table tbody tr:hover .fixed-column {
   overflow: hidden;
   text-overflow: ellipsis;
   max-width: 100%;
+  /* Allow text selection inside cells even though the virtual scroll container
+     disables selection globally to improve drag behaviors */
+  user-select: text;
+  -webkit-user-select: text;
+  -moz-user-select: text;
 }
 
 /* Центрируем контент для колонок с действиями */

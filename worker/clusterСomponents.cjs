@@ -395,7 +395,7 @@ if (require.main === module) {
           keywords = keywords.filter(
             (k) => k.target_query === 1 || k.target_query === true
           );
-          console.error(
+          console.log(
             `[clustering worker] Filtered keywords by target_query: ${before} -> ${keywords.length}`
           );
         }
@@ -410,23 +410,23 @@ if (require.main === module) {
       source: `kw_${k.id || idx}`,
     }));
 
-    console.error(`[clustering worker] Algorithm: ${algorithm}`);
-    console.error(`[clustering worker] Total keywords: ${enriched.length}`);
+    console.log(`[clustering worker] Algorithm: ${algorithm}`);
+    console.log(`[clustering worker] Total keywords: ${enriched.length}`);
 
     let clusters;
     if (algorithm === "dbscan") {
-      console.error(
+      console.log(
         `[clustering worker] Running DBSCAN with eps=${eps}, minPts=${minPts}`
       );
       clusters = buildClustersWithDBSCAN(enriched, eps, minPts);
     } else {
-      console.error(
+      console.log(
         `[clustering worker] Running connected components with threshold=${threshold}`
       );
       clusters = buildInitialClustersWithVectors(enriched, threshold);
     }
 
-    console.error(`[clustering worker] Generated ${clusters.length} clusters`);
+    console.log(`[clustering worker] Generated ${clusters.length} clusters`);
     // Emit compact per-item assignments only (no vectors in stdout)
     let clusterIdx = 1;
     for (const c of clusters) {

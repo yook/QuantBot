@@ -75,3 +75,27 @@ These rules help AI agents be productive in this repo. Keep responses concise an
 
 - Examples: `src/examples/` contains small usage snippets and migration notes.
 - Element Plus + i18n usage: `src/components/AppHeader.vue`, `src/components/AddNewProject.vue`.
+
+## Release
+
+Пошаговая последовательность патч-релиза (без отдельных скриптов):
+
+1. Определить следующий тег:
+   - `LATEST=$(git tag --list 'v*' --sort=-v:refname | head -n1)`
+   - Разобрать версию: `ver=${LATEST#v}; IFS=. read -r MAJ MIN PATCH <<< "$ver"; PATCH=$((PATCH+1)); NEXT="v${MAJ}.${MIN}.${PATCH}"`
+2. Стадировать и при необходимости закоммитить изменения:
+   - `git add -A`
+   - `git diff --cached --quiet || git commit -m "chore(release): prepare $NEXT"`
+3. Создать аннотированный тег:
+   - `git tag -a "$NEXT" -m "Release $NEXT" -m "Краткие изменения и исправления"`
+4. Запушить ветку и тег:
+   - `BRANCH=$(git rev-parse --abbrev-ref HEAD)`
+   - `git push origin "$BRANCH" && git push origin "$NEXT"`
+5. Создать GitHub Release (если установлен gh):
+   - `gh release create "$NEXT" --title "$NEXT" --notes "Краткие изменения и исправления"`
+   - Если `gh` нет — создать релиз вручную в UI GitHub по тегу `$NEXT`.
+6. CI сборка запустится автоматически по пушу тега.
+
+Адаптация для minor/major: увеличить нужный компонент версии перед формированием `$NEXT`.
+
+Требование: описание изменений (release notes) и дополнительный текст в аннотации тега писать на русском.
