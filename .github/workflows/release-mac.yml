@@ -37,7 +37,16 @@ jobs:
         run: npm run build
 
       - name: Build and publish with electron-builder
+        # Prefer a repo PAT (GH_PAT). If it's not set, fallback to the automatically
+        # provided GITHUB_TOKEN so publishing can still work in many cases.
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
         run: |
-          npx electron-builder --mac --publish=always
+          # If GH_TOKEN exists, we will attempt to publish; otherwise build-only.
+          if [ -z "$GH_TOKEN" ]; then
+            echo "No GH token available, building without publish"
+            npx electron-builder --mac --publish=never
+          else
+            echo "GH token present; publishing to GitHub Releases"
+            npx electron-builder --mac --publish=always
+          fi

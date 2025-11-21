@@ -164,4 +164,5 @@ jobs:
         with:
           files: dist-upload/**
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Prefer a dedicated PAT if present, otherwise use the auto-provided GITHUB_TOKEN
+          GH_TOKEN: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
