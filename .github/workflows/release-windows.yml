@@ -166,3 +166,25 @@ jobs:
         env:
           # Prefer a dedicated PAT if present, otherwise use the auto-provided GITHUB_TOKEN
           GH_TOKEN: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
+
+      - name: Validate GH token (safe)
+        # Do not print the token; only report status and scopes.
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
+        run: |
+          if (-not $env:GH_TOKEN) {
+            Write-Output "GH_TOKEN_STATUS=missing"
+            Write-Output "No GH token configured (GH_PAT or GITHUB_TOKEN) — publish/upload will be skipped"
+          } else {
+            try {
+              $resp = Invoke-WebRequest -UseBasicParsing -Method Head -Uri 'https://api.github.com/user' -Headers @{ Authorization = "token $env:GH_TOKEN" } -ErrorAction Stop
+              $status = $resp.StatusCode
+              $scopes = $resp.Headers['X-OAuth-Scopes'] -join ', '
+            } catch {
+              $status = 0
+              $scopes = ''
+            }
+            Write-Output "GH_TOKEN_STATUS=$status"
+            if ($scopes) { Write-Output "GH_TOKEN_SCOPES=$scopes" }
+            Write-Output "Token HTTP status: $status"
+          }

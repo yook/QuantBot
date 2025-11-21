@@ -36,6 +36,23 @@ jobs:
       - name: Build project
         run: npm run build
 
+      - name: Validate GH token (safe)
+        # Do not print the token. This step only reports status and scopes.
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "GH_TOKEN_STATUS=missing" >> $GITHUB_OUTPUT
+            echo "No GH token configured (GH_PAT or GITHUB_TOKEN) — publish will be skipped"
+          else
+            HTTP=$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: token $GH_TOKEN" https://api.github.com/user || echo "000")
+            SCOPES=$(curl -sI -H "Authorization: token $GH_TOKEN" https://api.github.com/user | grep -i 'x-oauth-scopes:' || true)
+            echo "GH_TOKEN_STATUS=$HTTP" >> $GITHUB_OUTPUT
+            # Print scopes header (safe) so user sees which permissions available
+            echo "GH_TOKEN_SCOPES=${SCOPES#*: }"
+            echo "Token HTTP status: $HTTP"
+          fi
+
       - name: Build and publish with electron-builder
         # Prefer a repo PAT (GH_PAT). If it's not set, fallback to the automatically
         # provided GITHUB_TOKEN so publishing can still work in many cases.
