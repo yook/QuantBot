@@ -18,22 +18,24 @@ export async function startTypingWorker(ctx: TypingCtx, projectId: number) {
     const typingSamples = db.prepare(`SELECT id, project_id, ${typingLabelColumn} AS label, ${typingTextColumn} AS text, ${dateAlias} created_at FROM typing_samples WHERE project_id = ?`).all(projectId);
     const keywords = db.prepare('SELECT * FROM keywords WHERE project_id = ? AND target_query = 1').all(projectId) as any[];
 
-    // Проверяем, задано ли достаточное количество классов (категорий) для обучения/классификации
+    // Проверяем, задано ли достаточное количество классов в `typing_samples`
     try {
-      const row = db.prepare('SELECT COUNT(*) as cnt FROM categories WHERE project_id = ?').get(projectId);
-      const catCount = Number((row as any)?.cnt ?? (row as any)?.count ?? (row as any)?.COUNT ?? (row as any)?.CNT ?? 0);
-      if (catCount < 2) {
-        console.warn(`[Typing] Not enough categories for project ${projectId}: ${catCount}`);
+      const labels = Array.from(new Set((typingSamples || []).map((s: any) => s.label).filter(Boolean)));
+      const labelCount = labels.length;
+      if (labelCount < 2) {
+        console.warn(`[Typing] Not enough labels in typing_samples for project ${projectId}: ${labelCount}`, { labels });
         if (win && !win.isDestroyed()) {
           win.webContents.send('keywords:typing-error', {
             projectId,
-            message: 'Задайте не менее двух классов для классификации.',
+            message: 'Задайте не менее двух классов в образцах (typing_samples) для классификации.',
+            detectedLabels: labelCount,
+            labelsSample: labels.slice(0, 10),
           });
         }
         return;
       }
     } catch (e) {
-      console.warn('[Typing] Failed to check categories count', e);
+      console.warn('[Typing] Failed to check typing_samples labels count', e);
     }
 
     if (!keywords || keywords.length === 0) {
@@ -42,6 +44,13 @@ export async function startTypingWorker(ctx: TypingCtx, projectId: number) {
         win.webContents.send('keywords:typing-error', { projectId, message: 'No target keywords (target_query=1) found for project' });
       }
       return;
+    }
+
+    // Clear previous classification (class_name / class_similarity) for the project to avoid stale values
+    try {
+      db.prepare('UPDATE keywords SET class_name = NULL, class_similarity = NULL WHERE project_id = ?').run(projectId);
+    } catch (e) {
+      console.warn('[Typing] Failed to clear previous class values', e);
     }
 
     const tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'typing-'));

@@ -13,10 +13,10 @@ function getDatabasePath(isDev = false) {
   }
   if (isDev) {
     const repoRoot = process.env.APP_ROOT || process.cwd();
-    return path.join(repoRoot, "db", "quantbot.db");
+    return path.join(repoRoot, "db", "projects.db");
   }
   const userDataPath = path.join(os.homedir(), ".quantbot");
-  return path.join(userDataPath, "quantbot.db");
+  return path.join(userDataPath, "projects.db");
 }
 
 let dbPath;

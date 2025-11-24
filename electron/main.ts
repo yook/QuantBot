@@ -62,10 +62,11 @@ function initializeDatabase() {
     const res = createDatabase({ isDev });
     db = res.db;
     resolvedDbPath = res.dbPath;
-    categoriesNameColumn = res.categoriesNameColumn || categoriesNameColumn;
-    typingLabelColumn = res.typingLabelColumn || typingLabelColumn;
-    typingTextColumn = res.typingTextColumn || typingTextColumn;
-    typingDateColumn = res.typingDateColumn || typingDateColumn;
+    categoriesNameColumn = res.categoriesNameColumn ?? categoriesNameColumn;
+    typingLabelColumn = res.typingLabelColumn ?? typingLabelColumn;
+    typingTextColumn = res.typingTextColumn ?? typingTextColumn;
+    // typingDateColumn can be `null` to indicate the DB has no date column — accept null explicitly
+    typingDateColumn = res.typingDateColumn;
     console.log('[Main] Database initialized via electron/db/init.ts:', resolvedDbPath);
   } catch (err: any) {
     console.error('[Main] Failed to initialize database via createDatabase():', err && err.message ? err.message : err);

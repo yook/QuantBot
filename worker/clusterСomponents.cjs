@@ -13,6 +13,9 @@ function generateClusterId() {
   return `cluster-${__clusterCounter}`;
 }
 
+// DB helper for filtering input keywords by target_query
+const { dbAll } = require("../electron/db/index.cjs");
+
 /* ---------------- math helpers ---------------- */
 function cosineSimilarity(a, b) {
   if (!a || !b || !Array.isArray(a) || !Array.isArray(b)) return 0;
@@ -354,92 +357,146 @@ module.exports = {
 
 // Keep existing standalone behavior: if invoked directly, run the clustering flow
 if (require.main === module) {
-  const fs = require("fs");
-  const path = require("path");
+  (async () => {
+    const fs = require("fs");
+    const path = require("path");
 
-  // Parse command line arguments
-  const args = process.argv.slice(2);
-  let inputFile,
-    threshold = 0.5,
-    algorithm = "components", // 'components' or 'dbscan'
-    eps = 0.3,
-    minPts = 2;
+    // Parse command line arguments
+    const args = process.argv.slice(2);
+    let inputFile,
+      threshold = 0.5,
+      algorithm = "components", // 'components' or 'dbscan'
+      eps = 0.3,
+      minPts = 2;
 
-  for (let i = 0; i < args.length; i++) {
-    if (args[i].startsWith("--inputFile=")) inputFile = args[i].split("=")[1];
-    if (args[i].startsWith("--threshold="))
-      threshold = parseFloat(args[i].split("=")[1]) || 0.5;
-    if (args[i].startsWith("--algorithm=")) algorithm = args[i].split("=")[1];
-    if (args[i].startsWith("--eps="))
-      eps = parseFloat(args[i].split("=")[1]) || 0.3;
-    if (args[i].startsWith("--minPts="))
-      minPts = parseInt(args[i].split("=")[1], 10) || 2;
-  }
+    for (let i = 0; i < args.length; i++) {
+      if (args[i].startsWith("--inputFile=")) inputFile = args[i].split("=")[1];
+      if (args[i].startsWith("--threshold="))
+        threshold = parseFloat(args[i].split("=")[1]) || 0.5;
+      if (args[i].startsWith("--algorithm=")) algorithm = args[i].split("=")[1];
+      if (args[i].startsWith("--eps="))
+        eps = parseFloat(args[i].split("=")[1]) || 0.3;
+      if (args[i].startsWith("--minPts="))
+        minPts = parseInt(args[i].split("=")[1], 10) || 2;
+    }
 
-  if (!inputFile) {
-    console.error("Missing --inputFile");
-    process.exit(1);
-  }
+    if (!inputFile) {
+      console.error("Missing --inputFile");
+      process.exit(1);
+    }
 
-  try {
-    const input = JSON.parse(fs.readFileSync(inputFile, "utf8"));
-    let keywords = input.keywords || [];
-    // If input provides explicit target flags, keep only target items
     try {
-      if (Array.isArray(keywords) && keywords.length > 0) {
-        const allHaveFlag = keywords.every(
-          (k) => typeof k.target_query !== "undefined"
-        );
-        if (allHaveFlag) {
+      const input = JSON.parse(fs.readFileSync(inputFile, "utf8"));
+      let keywords = input.keywords || [];
+      // If input provides keywords list, prefer filtering via DB: select ids present in input that are marked target_query=1.
+      try {
+        if (Array.isArray(keywords) && keywords.length > 0) {
           const before = keywords.length;
-          keywords = keywords.filter(
-            (k) => k.target_query === 1 || k.target_query === true
-          );
+          const inputMap = new Map();
+          const ids = [];
+          for (const k of keywords) {
+            if (k && k.id) {
+              const idn = Number(k.id);
+              if (Number.isFinite(idn)) {
+                ids.push(idn);
+                inputMap.set(idn, k);
+              }
+            }
+          }
+          if (ids.length > 0) {
+            const placeholders = ids.map(() => "?").join(",");
+            const params = [
+              /* projectId to be injected by caller or runtime */ null,
+              ...ids,
+            ];
+            // Attempt to resolve projectId from args (simple heuristic)
+            const args = process.argv.slice(2);
+            let projectId = null;
+            for (const a of args) {
+              if (a.startsWith("--projectId="))
+                projectId = Number(a.split("=")[1]);
+            }
+            if (projectId) {
+              params[0] = projectId;
+              const dbKeywords = await dbAll(
+                `SELECT id, keyword FROM keywords WHERE project_id = ? AND id IN (${placeholders}) AND target_query = 1 ORDER BY id`,
+                params
+              );
+              if (Array.isArray(dbKeywords) && dbKeywords.length > 0) {
+                keywords = dbKeywords.map((k) => {
+                  const orig = inputMap.get(Number(k.id)) || {};
+                  return {
+                    id: k.id,
+                    keyword: k.keyword,
+                    embedding: orig.embedding || orig.vector || null,
+                    embeddingSource:
+                      orig.embeddingSource || orig.source || null,
+                  };
+                });
+              } else {
+                keywords = keywords.filter(
+                  (k) => k && (k.target_query === 1 || k.target_query === true)
+                );
+              }
+            } else {
+              // no projectId provided in args — fallback to input flag filtering
+              keywords = keywords.filter(
+                (k) => k && (k.target_query === 1 || k.target_query === true)
+              );
+            }
+          } else {
+            keywords = keywords.filter(
+              (k) => k && (k.target_query === 1 || k.target_query === true)
+            );
+          }
           console.log(
             `[clustering worker] Filtered keywords by target_query: ${before} -> ${keywords.length}`
           );
         }
+      } catch (e) {
+        // ignore
+      }
+      const enriched = keywords.map((k, idx) => ({
+        id: k.id,
+        text: k.keyword || "",
+        vector: k.embedding,
+        source: `kw_${k.id || idx}`,
+      }));
+
+      console.log(`[clustering worker] Algorithm: ${algorithm}`);
+      console.log(`[clustering worker] Total keywords: ${enriched.length}`);
+
+      let clusters;
+      if (algorithm === "dbscan") {
+        console.log(
+          `[clustering worker] Running DBSCAN with eps=${eps}, minPts=${minPts}`
+        );
+        clusters = buildClustersWithDBSCAN(enriched, eps, minPts);
+      } else {
+        console.log(
+          `[clustering worker] Running connected components with threshold=${threshold}`
+        );
+        clusters = buildInitialClustersWithVectors(enriched, threshold);
+      }
+
+      console.log(`[clustering worker] Generated ${clusters.length} clusters`);
+      // Emit compact per-item assignments only (no vectors in stdout)
+      let clusterIdx = 1;
+      for (const c of clusters) {
+        const items = Array.isArray(c.items) ? c.items : [];
+        for (const it of items) {
+          if (!it || typeof it.id === "undefined" || it.id === null) continue;
+          const line = { id: it.id, cluster: clusterIdx };
+          process.stdout.write(JSON.stringify(line) + "\n");
+        }
+        clusterIdx++;
       }
     } catch (e) {
-      // ignore
+      console.error(e && e.message ? e.message : String(e));
+      process.exit(1);
     }
-    const enriched = keywords.map((k, idx) => ({
-      id: k.id,
-      text: k.keyword || "",
-      vector: k.embedding,
-      source: `kw_${k.id || idx}`,
-    }));
-
-    console.log(`[clustering worker] Algorithm: ${algorithm}`);
-    console.log(`[clustering worker] Total keywords: ${enriched.length}`);
-
-    let clusters;
-    if (algorithm === "dbscan") {
-      console.log(
-        `[clustering worker] Running DBSCAN with eps=${eps}, minPts=${minPts}`
-      );
-      clusters = buildClustersWithDBSCAN(enriched, eps, minPts);
-    } else {
-      console.log(
-        `[clustering worker] Running connected components with threshold=${threshold}`
-      );
-      clusters = buildInitialClustersWithVectors(enriched, threshold);
-    }
-
-    console.log(`[clustering worker] Generated ${clusters.length} clusters`);
-    // Emit compact per-item assignments only (no vectors in stdout)
-    let clusterIdx = 1;
-    for (const c of clusters) {
-      const items = Array.isArray(c.items) ? c.items : [];
-      for (const it of items) {
-        if (!it || typeof it.id === "undefined" || it.id === null) continue;
-        const line = { id: it.id, cluster: clusterIdx };
-        process.stdout.write(JSON.stringify(line) + "\n");
-      }
-      clusterIdx++;
-    }
-  } catch (e) {
+  })().catch((e) => {
     console.error(e && e.message ? e.message : String(e));
     process.exit(1);
-  }
+  });
 }

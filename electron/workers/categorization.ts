@@ -36,6 +36,12 @@ export async function startCategorizationWorker(ctx: CategorizationCtx, projectI
     }
 
     const categories = db.prepare(`SELECT id, project_id, ${categoriesNameColumn} AS category_name, created_at FROM categories WHERE project_id = ?`).all(projectId);
+    // Clear previous categorization results for the project to avoid stale values
+    try {
+      db.prepare('UPDATE keywords SET category_name = NULL, category_similarity = NULL WHERE project_id = ?').run(projectId);
+    } catch (e) {
+      console.warn('[Categorization] Failed to clear previous category values', e);
+    }
     const keywords = db.prepare('SELECT * FROM keywords WHERE project_id = ? AND target_query = 1').all(projectId) as any[];
 
     if (!keywords || keywords.length === 0) {

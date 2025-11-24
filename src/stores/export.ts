@@ -20,7 +20,7 @@ export interface ExportRequest {
   allColumns: ColumnDef[];
 }
 
-export async function downloadDataFromProject(req: ExportRequest) {
+export async function downloadDataFromProject(req: ExportRequest): Promise<string> {
   const { projectId, currentDb, header, allColumns } = req;
 
   // Fetch full dataset via dedicated export IPC
@@ -119,6 +119,7 @@ export async function downloadDataFromProject(req: ExportRequest) {
   const fileName = `${currentDb}-report.xlsx`;
   XLSX.writeFile(book, fileName);
   console.log('[Export] Saved file:', fileName);
+  return fileName;
 }
 
 // Convenience wrapper: export current DB table using project store state
@@ -129,7 +130,7 @@ export async function downloadDataFromProject(req: ExportRequest) {
  * crawler table from the active project. The function checks that there
  * is data to export before requesting all rows from the backend.
  */
-export async function exportCrawlerData(): Promise<boolean> {
+export async function exportCrawlerData(): Promise<string | false> {
   const project = useProjectStore();
 
   const hasData = (typeof project.tableDataLength === "number" && project.tableDataLength > 0)
@@ -153,14 +154,14 @@ export async function exportCrawlerData(): Promise<boolean> {
   });
   
   try {
-    await downloadDataFromProject({
+    const savedFile = await downloadDataFromProject({
       projectId: project.data.id as number | string | undefined,
       currentDb: project.currentDb,
       header,
       allColumns: project.allColumns,
     });
-    console.log("Export finished successfully");
-    return true;
+    console.log("Export finished successfully", { savedFile });
+    return savedFile;
   } catch (err: any) {
     console.error("Export failed:", err);
     alert(

@@ -12,7 +12,7 @@ let dbPath = process.env.DB_PATH;
 if (!dbPath) {
   // Fallback to default location
   const userDataPath = path.join(os.homedir(), ".quantbot");
-  dbPath = path.join(userDataPath, "quantbot.db");
+  dbPath = path.join(userDataPath, "projects.db");
 }
 
 // Ensure directory exists

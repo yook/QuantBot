@@ -51,7 +51,7 @@
         >
           <el-icon><Grid /></el-icon>
         </el-button>
-        <el-button size="small" @click="handleExport">
+        <el-button size="small" :loading="exporting" @click="handleExport">
           <el-icon><Download /></el-icon>.xls
         </el-button>
       </el-col>
@@ -119,7 +119,11 @@ const { t } = useI18n();
 
 const project = useProjectStore();
 // Handler that calls exportCrawlerData and shows messages to the user
+const exporting = ref(false);
+
 const handleExport = async () => {
+  if (exporting.value) return;
+  exporting.value = true;
   try {
     const result = await exportCrawlerData();
     if (!result) {
@@ -128,16 +132,23 @@ const handleExport = async () => {
           "В таблице нет данных для экспорта. Проверьте выбранный отчет, фильтры и повторите попытку.",
         type: "warning",
       });
+      exporting.value = false;
       return;
     }
 
-    ElMessage({ message: "Экспорт успешно завершён.", type: "success" });
+    // result can be filename or true
+    const fileName = typeof result === "string" ? result : undefined;
+    // Do not show a success popup here to avoid premature notifications.
+    // Keep a console log for developer visibility.
+    console.log("Export finished", { fileName });
   } catch (err) {
     console.error("Error during export:", err);
     ElMessage({
       message: "Ошибка при экспорте.",
       type: "error",
     });
+  } finally {
+    exporting.value = false;
   }
 };
 // Wrapper functions for DataTable

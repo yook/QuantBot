@@ -184,8 +184,18 @@ class IPCClient {
   }
 
   off(channel: string, callback?: (data: any) => void) {
-    if (this.ipc && callback) {
+    if (!this.ipc) return;
+    if (callback) {
       this.ipc.removeListener(channel, callback);
+    } else {
+      // Remove all listeners for the channel when no specific callback provided
+      try {
+        if ((this.ipc as any).removeAllListeners) {
+          (this.ipc as any).removeAllListeners(channel);
+          return;
+        }
+      } catch (_e) {}
+      // Fallback: safe no-op if underlying API doesn't support removeAllListeners
     }
   }
 
@@ -307,7 +317,15 @@ export const socket: IpcSocket = {
     ipcClient.on(channel, cb);
   },
   off(_channel: string, _cb?: (...args: any[]) => void) {
-    // IPC handles cleanup
+    try {
+      if (_cb) {
+        ipcClient.off(_channel, _cb as any);
+      } else {
+        ipcClient.off(_channel as any);
+      }
+    } catch (e) {
+      // ignore
+    }
   },
   once(channel: string, cb: (...args: any[]) => void) {
     ipcClient.once(channel, cb);

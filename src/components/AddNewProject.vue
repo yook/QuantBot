@@ -16,6 +16,10 @@
     width="600px"
     :modal="true"
     class="no-drag"
+    :close-on-click-modal="allowClose"
+    :close-on-press-escape="allowClose"
+    :show-close="allowClose"
+    @close="onRequestClose"
   >
     <div class="flex flex-col items-center">
       <el-form
@@ -55,10 +59,11 @@
 </template>
 
 <script setup>
-import { reactive, ref, watch } from "vue";
+import { reactive, ref, watch, computed } from "vue";
 import { useI18n } from "vue-i18n";
 import { useProjectStore } from "../stores/project";
 import { Plus } from "@element-plus/icons-vue";
+import { ElMessage } from "element-plus";
 // i18n
 const { t } = useI18n();
 
@@ -125,6 +130,29 @@ function openNewProjectDialog() {
   showNewProjectDialog.value = true;
 }
 
+const allowClose = computed(() => {
+  try {
+    return !!(project.projects && project.projects.length > 0);
+  } catch (e) {
+    return false;
+  }
+});
+
+function onRequestClose() {
+  // Prevent closing if there are no projects yet
+  if (!allowClose.value) {
+    ElMessage.warning(
+      t("addProject.createFirstWarning") ||
+        "Создайте проект прежде чем закрывать диалог"
+    );
+    // ensure dialog stays open (v-model will be false if parent tried to close)
+    showNewProjectDialog.value = true;
+    return;
+  }
+  // otherwise let it close
+  showNewProjectDialog.value = false;
+}
+
 // Auto-open dialog only after projects list has been fetched at least once
 const autoOpened = ref(false);
 watch(
@@ -144,6 +172,22 @@ watch(
     }
   },
   { immediate: true, deep: false }
+);
+
+// If some external action tries to close the dialog while there are no projects,
+// reopen and show a warning. This covers parent-driven v-model changes.
+watch(
+  () => showNewProjectDialog.value,
+  (val) => {
+    if (val === false && !(project.projects && project.projects.length > 0)) {
+      // reopen and warn
+      showNewProjectDialog.value = true;
+      ElMessage.warning(
+        t("addProject.createFirstWarning") ||
+          "Создайте проект прежде чем закрывать диалог"
+      );
+    }
+  }
 );
 
 // if (!validator.isURL(url, { require_protocol: true })) {

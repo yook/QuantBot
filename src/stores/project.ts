@@ -574,8 +574,36 @@ export const useProjectStore = defineStore("project", {
         });
         
         if (Array.isArray(response)) {
-          this.tableData = response;
-          this.tableDataLength = response.length;
+          // Parse dynamic parser fields stored in `content` (JSON string) and
+          // merge them into the row object so parser columns (e.g. title, h1)
+          // are available as top-level properties for the table component.
+          try {
+            const mapped = response.map((row: any) => {
+              if (!row || typeof row !== 'object') return row;
+              const out = { ...row };
+              if (out.content && typeof out.content === 'string') {
+                try {
+                  const parsed = JSON.parse(out.content);
+                  if (parsed && typeof parsed === 'object') {
+                    // Don't overwrite existing top-level fields
+                    for (const k of Object.keys(parsed)) {
+                      if (typeof out[k] === 'undefined') out[k] = parsed[k];
+                    }
+                  }
+                } catch (_e) {
+                  // ignore parse errors
+                }
+              }
+              return out;
+            });
+            this.tableData = mapped;
+            this.tableDataLength = mapped.length;
+          } catch (e) {
+            const errMsg = (e as any && (e as any).message) || String(e);
+            console.warn('[Project Store] failed to merge parser content:', errMsg);
+            this.tableData = response as any;
+            this.tableDataLength = response.length;
+          }
         } else {
           this.tableData = [];
           this.tableDataLength = 0;
@@ -625,8 +653,14 @@ export const useProjectStore = defineStore("project", {
       if (!this.currentProjectId) return;
       
       try {
-        await ipcClient.deleteProject(Number(this.currentProjectId));
-        
+        const res = await ipcClient.deleteProject(Number(this.currentProjectId));
+
+        // Make sure deletion actually happened in the DB
+        if (!res || (typeof res.changes === 'number' && res.changes === 0)) {
+          console.warn('[Project Store] deleteProject: deletion did not report changes', res);
+          throw new Error('Project deletion failed or no rows affected');
+        }
+
         // Удаляем проект из списка
         const deletedIndex = this.projects.findIndex((p) => String(p.id) === String(this.currentProjectId));
         if (deletedIndex !== -1) {

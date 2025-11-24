@@ -19,6 +19,18 @@ contextBridge.exposeInMainWorld('ipcRenderer', {
     return ipcRenderer.invoke(channel, ...omit)
   },
 
+  emit(...args: any[]) {
+    // Expose emit so renderer code that triggers local ipcRenderer listeners works
+    // ipcRenderer.emit triggers listeners registered via ipcRenderer.on in the renderer context
+    // Use `any` to avoid typing mismatch; arguments are (channel, ...args)
+    try {
+      return (ipcRenderer as any).emit(...args);
+    } catch (e) {
+      // swallow - renderer code should handle absence
+      return undefined;
+    }
+  },
+
   // You can expose other APTs you need here.
   // ...
 })

@@ -3,7 +3,7 @@ import type { IpcContext } from './types';
 import newProjectDefaults from '../../src/stores/schema/new-project.json' assert { type: 'json' };
 
 export function registerProjectsIpc(ctx: IpcContext) {
-  const { db } = ctx;
+  const { db, getWindow } = ctx;
 
   ipcMain.handle('db:projects:getAll', async () => {
     try {
@@ -89,9 +89,51 @@ export function registerProjectsIpc(ctx: IpcContext) {
 
   ipcMain.handle('db:projects:delete', async (_event, id) => {
     try {
-      const result = db.prepare('DELETE FROM projects WHERE id = ?').run(id);
-      return { success: true, data: result };
+      // Use a transaction to remove project and its related rows to avoid orphaned data.
+      // Note: foreign_keys PRAGMA is not relied on here — we explicitly delete children.
+      const stmtBegin = db.prepare('BEGIN TRANSACTION');
+      const stmtCommit = db.prepare('COMMIT');
+      const stmtRollback = db.prepare('ROLLBACK');
+
+      try {
+        stmtBegin.run();
+        // Delete dependent rows in related tables
+        const childTables = ['urls', 'keywords', 'categories', 'typing_samples', 'stop_words', 'embeddings_cache', 'disallowed', 'embeddings_cache'];
+        for (const table of childTables) {
+          try {
+            db.prepare(`DELETE FROM ${table} WHERE project_id = ?`).run(id);
+          } catch (e) {
+            // ignore errors for tables that might not exist in older DBs
+          }
+        }
+
+        // Finally delete the project row
+        const result = db.prepare('DELETE FROM projects WHERE id = ?').run(id);
+
+        stmtCommit.run();
+
+        // Notify renderer (if available) about the deletion so UI can update
+        try {
+          const win = typeof getWindow === 'function' ? getWindow() : null;
+          if (win && !win.isDestroyed()) {
+            win.webContents.send('projectDeleted', Number(id));
+          }
+        } catch (_e) {}
+
+        return { success: true, data: result };
+      } catch (e: any) {
+        try { stmtRollback.run(); } catch (_r) {}
+        try {
+          const win = typeof getWindow === 'function' ? getWindow() : null;
+          if (win && !win.isDestroyed()) win.webContents.send('projectDeleteError', e && e.message ? e.message : String(e));
+        } catch (_e) {}
+        return { success: false, error: e && e.message ? e.message : String(e) };
+      }
     } catch (error: any) {
+      try {
+        const win = typeof getWindow === 'function' ? getWindow() : null;
+        if (win && !win.isDestroyed()) win.webContents.send('projectDeleteError', error && error.message ? error.message : String(error));
+      } catch (_e) {}
       return { success: false, error: error.message };
     }
   });

@@ -23,6 +23,8 @@ const {
 
 const OPENAI_EMBED_URL = "https://api.openai.com/v1/embeddings";
 const DEFAULT_MODEL = "text-embedding-3-small";
+// bump this when changing training/normalization behavior
+const MODEL_VERSION = "logreg_v2";
 
 async function getApiKey() {
   try {
@@ -46,11 +48,14 @@ async function fetchEmbeddings(texts, opts = {}) {
   // texts: array of strings
   if (!Array.isArray(texts) || texts.length === 0) return [];
   const model = opts.model || DEFAULT_MODEL;
+  const batchSize = Math.max(
+    1,
+    Number(opts.batchSize || opts.chunkSize || 100)
+  );
 
   // Prepare result array and determine which inputs are missing from cache
   const results = new Array(texts.length).fill(null);
-  const missing = [];
-  const missingIdxs = [];
+  const missingEntries = [];
 
   for (let i = 0; i < texts.length; i++) {
     const text = texts[i];
@@ -63,31 +68,47 @@ async function fetchEmbeddings(texts, opts = {}) {
     } catch (_) {
       // ignore cache read errors
     }
-    missing.push(text);
-    missingIdxs.push(i);
+    missingEntries.push({ idx: i, text });
   }
 
   // Fetch only the missing ones from OpenAI, if any
-  if (missing.length > 0) {
+  if (missingEntries.length > 0) {
     const key = await getApiKey();
-    const resp = await axios.post(
-      OPENAI_EMBED_URL,
-      { model, input: missing },
-      { headers: { Authorization: `Bearer ${key}` } }
-    );
-    const data = (resp && resp.data && resp.data.data) || [];
-    for (let j = 0; j < data.length; j++) {
-      const emb = data[j] && data[j].embedding;
-      const idx = missingIdxs[j];
-      const text = missing[j];
-      if (Array.isArray(emb) && emb.length) {
-        results[idx] = emb;
-        try {
-          await embeddingsCachePut(text, emb, model);
-        } catch (_) {
-          // ignore cache write errors
+    let processedMissing = 0;
+    for (let start = 0; start < missingEntries.length; start += batchSize) {
+      const chunkEntries = missingEntries.slice(start, start + batchSize);
+      const payload = {
+        model,
+        input: chunkEntries.map((entry) => entry.text),
+      };
+
+      const resp = await axios.post(OPENAI_EMBED_URL, payload, {
+        headers: { Authorization: `Bearer ${key}` },
+      });
+
+      const data = (resp && resp.data && resp.data.data) || [];
+      for (let j = 0; j < data.length; j++) {
+        const emb = data[j] && data[j].embedding;
+        const entry = chunkEntries[j];
+        if (!entry) continue;
+        if (Array.isArray(emb) && emb.length) {
+          results[entry.idx] = emb;
+          try {
+            await embeddingsCachePut(entry.text, emb, model);
+          } catch (_) {
+            // ignore cache write errors
+          }
         }
       }
+      // update processed count and notify progress
+      processedMissing += chunkEntries.length;
+      try {
+        if (opts && typeof opts.onProgress === "function") {
+          try {
+            opts.onProgress(processedMissing, missingEntries.length);
+          } catch (_e) {}
+        }
+      } catch (_e) {}
     }
   }
 
@@ -107,6 +128,27 @@ function softmax(logits) {
   const exps = logits.map((v) => Math.exp(v - max));
   const sum = exps.reduce((s, v) => s + v, 0) || 1;
   return exps.map((v) => v / sum);
+}
+
+function l2norm(arr) {
+  let s = 0;
+  for (let i = 0; i < arr.length; i++) {
+    const v = arr[i];
+    s += v * v;
+  }
+  return Math.sqrt(s);
+}
+
+function normalizeVec(arr) {
+  const out = new Array(arr.length);
+  const n = l2norm(arr);
+  const eps = 1e-12;
+  if (!isFinite(n) || n < eps) {
+    for (let i = 0; i < arr.length; i++) out[i] = arr[i] || 0;
+    return out;
+  }
+  for (let i = 0; i < arr.length; i++) out[i] = arr[i] / n;
+  return out;
 }
 
 function zeros(n) {
@@ -141,6 +183,9 @@ async function trainClassifier(samples, opts = {}) {
   } else {
     embeddings = samples.map((s) => s.embedding);
   }
+
+  // Normalize embeddings to unit length to improve numeric stability
+  embeddings = embeddings.map((e) => normalizeVec(e));
 
   // Validate embeddings: no missing entries and all numbers must be finite
   for (let i = 0; i < embeddings.length; i++) {
@@ -192,6 +237,15 @@ async function trainClassifier(samples, opts = {}) {
   const y = samples.map((s) => labelToIdx[s.label]);
 
   for (let ep = 0; ep < epochs; ep++) {
+    // Notify training progress (epoch-level)
+    try {
+      if (opts && typeof opts.onTrainProgress === "function") {
+        const epochPct = Math.round(((ep + 1) / epochs) * 100);
+        try {
+          opts.onTrainProgress(ep + 1, epochs, epochPct);
+        } catch (_e) {}
+      }
+    } catch (_e) {}
     shuffleArray(idxs);
     for (let s = 0; s < N; s += batchSize) {
       const end = Math.min(s + batchSize, N);
@@ -238,6 +292,8 @@ async function trainClassifier(samples, opts = {}) {
     labels: labels,
     D,
   };
+  // version the model so callers can decide to retrain if incompatible
+  model.model_version = MODEL_VERSION;
   return model;
 }
 
@@ -254,6 +310,9 @@ async function predict(input, model, opts = {}) {
   const K = model.labels.length;
   const D = model.D;
   if (!emb || emb.length !== D) throw new Error("Embedding length mismatch");
+
+  // normalize embedding before computing logits
+  emb = normalizeVec(emb);
 
   // compute logits
   const logits = new Array(K);

@@ -210,7 +210,40 @@ export default defineComponent({
             const { instance } = binding;
             if (!instance) return;
             const { mode, row } = binding.value || {};
-            const MAX_LEN = instance.MAX_LEN || 100; // fallback
+            // helpers to support both proxied (unwrapped) properties and refs
+            const readProp = (name) => {
+              try {
+                const v = instance[name];
+                // If it's a ref object with .value, return that, else return as-is
+                if (
+                  v &&
+                  typeof v === "object" &&
+                  Object.prototype.hasOwnProperty.call(v, "value")
+                )
+                  return v.value;
+                return v;
+              } catch (err) {
+                return undefined;
+              }
+            };
+            const writeProp = (name, val) => {
+              try {
+                const v = instance[name];
+                if (
+                  v &&
+                  typeof v === "object" &&
+                  Object.prototype.hasOwnProperty.call(v, "value")
+                ) {
+                  v.value = val;
+                } else {
+                  // proxy unwrap: assign back to property (may not persist across proxies, but works for our usage)
+                  instance[name] = val;
+                }
+              } catch (err) {
+                // ignore
+              }
+            };
+            const MAX_LEN = readProp("MAX_LEN") || 100; // fallback
             // Split: newlines first, then commas inside each line
             let parts = text
               .split(/\r?\n/)
@@ -230,20 +263,48 @@ export default defineComponent({
               );
             }
             if (mode === "add") {
-              const current = Array.isArray(instance.input.value)
-                ? instance.input.value.slice()
+              const current = Array.isArray(readProp("input"))
+                ? readProp("input").slice()
                 : [];
               const merged = [...current, ...parts];
-              instance.input.value = merged;
-              instance.onInputChange(merged);
-            } else if (mode === "row" && row && row.id != null) {
-              const id = String(row.id);
-              const currentRow = Array.isArray(instance.rowTags.value[id])
-                ? instance.rowTags.value[id].slice()
+              writeProp("input", merged);
+              // call handler if available
+              const onInput =
+                instance.onInputChange || readProp("onInputChange");
+              if (typeof onInput === "function") onInput(merged);
+            } else if (mode === "row" && row && row.label != null) {
+              const id = String(row.label);
+              const currentRowStore = readProp("rowTags") || {};
+              const currentRow = Array.isArray(currentRowStore[id])
+                ? currentRowStore[id].slice()
                 : [];
               const merged = [...currentRow, ...parts];
-              instance.rowTags.value[id] = merged;
-              instance.onTagsChange(row, merged);
+              // write back
+              if (
+                readProp("rowTags") &&
+                typeof readProp("rowTags") === "object"
+              ) {
+                // if it's a ref, writeProp will handle
+                const rt = instance.rowTags;
+                if (
+                  rt &&
+                  typeof rt === "object" &&
+                  Object.prototype.hasOwnProperty.call(rt, "value")
+                ) {
+                  const copy = Object.assign({}, rt.value || {});
+                  copy[id] = merged;
+                  rt.value = copy;
+                } else {
+                  // unwrapped proxy
+                  const obj = Object.assign({}, currentRowStore || {});
+                  obj[id] = merged;
+                  writeProp("rowTags", obj);
+                }
+              } else {
+                writeProp("rowTags", { [id]: merged });
+              }
+              const onTags = instance.onTagsChange || readProp("onTagsChange");
+              if (typeof onTags === "function") onTags(row, merged);
             }
           } catch (err) {
             // silent
@@ -503,7 +564,7 @@ export default defineComponent({
     // Explicit paste handler for per-row tags (fallback if directive missed inner input)
     function handleRowPaste(e, row) {
       try {
-        if (!row || row.id == null) return;
+        if (!row || row.label == null) return;
         const data = e && e.clipboardData && e.clipboardData.getData("text");
         if (!data) return;
         // Process only if multiline or tabs present

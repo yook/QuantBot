@@ -16,7 +16,6 @@ const {
   dbRun,
   embeddingsCacheGet,
   embeddingsCachePut,
-  categoriesInsertBatch,
   getTypingModel,
   upsertTypingModel,
   updateTypingSampleEmbeddings,
@@ -24,6 +23,8 @@ const {
 const cls = require("./embeddingsClassifier.cjs");
 
 const VECTOR_MODEL = process.env.EMBEDDING_MODEL || "text-embedding-3-small";
+// must match embeddingsClassifier.cjs MODEL_VERSION
+const MODEL_VERSION = "logreg_v2";
 
 // Ensure stdout remains clean JSONL for parent process: redirect incidental logs to stderr
 const __origConsoleLog = console.log;
@@ -46,7 +47,7 @@ function parseArgs(argv) {
   return out;
 }
 
-async function fetchWithCache(texts, model) {
+async function fetchWithCache(texts, model, opts = {}) {
   const results = new Array(texts.length).fill(null);
   const missingIdx = [];
   const sources = new Array(texts.length).fill("unknown");
@@ -62,7 +63,41 @@ async function fetchWithCache(texts, model) {
   }
   if (missingIdx.length > 0) {
     const inputs = missingIdx.map((i) => texts[i]);
-    const embs = await cls.fetchEmbeddings(inputs, { model });
+    // Provide progress updates while fetching many embeddings so the parent process
+    // can display progress to users.
+    const cachedCount = results.filter(
+      (r) => Array.isArray(r) && r.length
+    ).length;
+    let lastPct = -1;
+    const embs = await cls.fetchEmbeddings(inputs, {
+      model,
+      batchSize: 64,
+      onProgress: (processedMissingCount, totalMissing) => {
+        try {
+          // If caller provided a mapping onProgress, call it. Caller can compute overall progress
+          if (opts && typeof opts.onProgress === "function") {
+            try {
+              opts.onProgress({
+                processedMissingCount,
+                totalMissing,
+                cachedCount,
+                textsLength: texts.length,
+              });
+            } catch (_e) {}
+            return;
+          }
+
+          const processedTotal = cachedCount + processedMissingCount;
+          const pct = Math.round((processedTotal / texts.length) * 100);
+          if (pct !== lastPct) {
+            try {
+              process.stdout.write(`progress: ${pct}\n`);
+            } catch (e) {}
+            lastPct = pct;
+          }
+        } catch (e) {}
+      },
+    });
     for (let j = 0; j < missingIdx.length; j++) {
       const idx = missingIdx[j];
       const emb = embs[j] || [];
@@ -107,41 +142,33 @@ async function main() {
     return;
   }
 
-  // Ensure categories exist for labels
+  // Classifier should use labels from `typing_samples`, not the `categories` table.
+  // Build label set from typing_samples and keep a label->id map empty (we won't map to categories here).
   const labels = Array.from(new Set(samples.map((s) => String(s.label))));
-  try {
-    await categoriesInsertBatch(projectId, labels);
-  } catch (e) {
-    // continue even if insert batch has warnings
-  }
-  // Build label->id map
-  // Detect categories text column name (legacy 'name' vs 'category_name')
-  async function resolveCategoryNameColumn() {
-    try {
-      const rows = await dbAll("PRAGMA table_info('categories')");
-      const names = (rows || []).map((r) => r && r.name);
-      if (names.includes("name")) return "name";
-      if (names.includes("category_name")) return "category_name";
-    } catch (e) {}
-    return "category_name";
-  }
-
-  const catCol = await resolveCategoryNameColumn();
-  const cats = await dbAll(
-    `SELECT id, ${catCol} AS category_name FROM categories WHERE project_id = ?`,
-    [projectId]
+  console.error(
+    `[trainAndClassify] Detected labels from typing_samples: ${labels.length}`
   );
-  const labelToId = new Map();
-  for (const c of cats || []) labelToId.set(String(c.category_name), c.id);
+  const labelToId = new Map(); // no mapping to categories table; classifier will output label names
 
   // 2) Check model and embeddings coverage
   const sampleIds = samples.map((s) => s.id);
   let existingModelRow = await getTypingModel(projectId);
-  const existingModelValid =
+  let existingModelValid =
     existingModelRow &&
     existingModelRow.vector_model === VECTOR_MODEL &&
     existingModelRow.payload &&
     typeof existingModelRow.payload.D === "number";
+
+  // If model version missing or mismatched, mark as invalid so we retrain
+  if (existingModelValid) {
+    const mv = existingModelRow.payload.model_version || null;
+    if (mv !== MODEL_VERSION) {
+      console.error(
+        `[trainAndClassify] Existing model version ${mv} != ${MODEL_VERSION}, will retrain.`
+      );
+      existingModelValid = false;
+    }
+  }
 
   const existingEmbeddings = new Map();
   const missing = [];
@@ -162,6 +189,37 @@ async function main() {
     }
     missing.push(s);
   }
+
+  // If we have an existing model, ensure embeddings match expected dimension.
+  // If dimensions mismatch, treat those samples as missing so we re-fetch embeddings
+  try {
+    const expectedDim =
+      existingModelRow &&
+      existingModelRow.payload &&
+      typeof existingModelRow.payload.D === "number"
+        ? existingModelRow.payload.D
+        : null;
+    if (expectedDim) {
+      const toRem = [];
+      for (const [sid, emb] of existingEmbeddings.entries()) {
+        if (!Array.isArray(emb) || emb.length !== expectedDim) {
+          // find sample by id and mark missing so we re-fetch a fresh embedding
+          const sample = samples.find((x) => x.id === sid);
+          if (sample) {
+            missing.push(sample);
+            try {
+              await dbRun(
+                "DELETE FROM embeddings_cache WHERE key = ? AND (vector_model = ? OR vector_model IS NULL)",
+                [sample.text, VECTOR_MODEL]
+              );
+            } catch (err) {}
+          }
+          toRem.push(sid);
+        }
+      }
+      for (const sid of toRem) existingEmbeddings.delete(sid);
+    }
+  } catch (e) {}
   console.error(
     `[trainAndClassify] Samples: ${
       samples.length
@@ -171,6 +229,13 @@ async function main() {
   );
 
   // 3) Decide whether to train or reuse
+  // Pipeline stage ranges (overall percentages)
+  const STAGE = {
+    fetchTrainEmb: [5, 45],
+    training: [45, 80],
+    fetchKeywordsEmb: [80, 90],
+    classification: [90, 100],
+  };
   let modelObj = null;
   if (missing.length === 0 && existingModelValid) {
     // Reuse stored model; skip training
@@ -178,6 +243,10 @@ async function main() {
       "[trainAndClassify] Skipping training: model and all embeddings are present."
     );
     modelObj = existingModelRow.payload;
+    // mark training stage as completed (we're reusing model)
+    try {
+      process.stdout.write(`progress: ${STAGE.training[1]}\n`);
+    } catch (e) {}
   } else {
     // Fetch embeddings for missing samples and save to DB
     if (missing.length > 0) {
@@ -185,7 +254,27 @@ async function main() {
         `[trainAndClassify] Fetching embeddings for ${missing.length} missing samples...`
       );
       const missingTexts = missing.map((m) => m.text);
-      const missingEmbs = await fetchWithCache(missingTexts, VECTOR_MODEL);
+      // compute cached count from existingEmbeddings (present embeddings we will reuse)
+      const cachedCountForSamples = existingEmbeddings.size || 0;
+      const samplesTotal = samples.length;
+      const missingEmbs = await fetchWithCache(missingTexts, VECTOR_MODEL, {
+        onProgress: ({ processedMissingCount = 0, totalMissing = 0 } = {}) => {
+          try {
+            const processedTotal =
+              cachedCountForSamples + processedMissingCount;
+            const stagePct = Math.round((processedTotal / samplesTotal) * 100);
+            const start = STAGE.fetchTrainEmb[0];
+            const end = STAGE.fetchTrainEmb[1];
+            const overallPct = Math.min(
+              100,
+              Math.max(0, Math.round(start + (end - start) * (stagePct / 100)))
+            );
+            try {
+              process.stdout.write(`progress: ${overallPct}\n`);
+            } catch (e) {}
+          } catch (e) {}
+        },
+      });
       const itemsMissing = [];
       const dimMissing = (missingEmbs[0] && missingEmbs[0].length) || 0;
       for (let i = 0; i < missing.length; i++) {
@@ -213,7 +302,25 @@ async function main() {
         `[trainAndClassify] Warning: ${unresolved.length} samples still missing embeddings after sync, fetching now...`
       );
       const texts = unresolved.map((s) => s.text);
-      const embs = await fetchWithCache(texts, VECTOR_MODEL);
+      const embs = await fetchWithCache(texts, VECTOR_MODEL, {
+        onProgress: ({ processedMissingCount = 0, totalMissing = 0 } = {}) => {
+          try {
+            // For this secondary fetch, unresolved refers to the subset 'texts' only.
+            const cachedForThis = texts.length - totalMissing;
+            const processedTotal = cachedForThis + processedMissingCount;
+            const stagePct = Math.round((processedTotal / texts.length) * 100);
+            const start = STAGE.fetchTrainEmb[0];
+            const end = STAGE.fetchTrainEmb[1];
+            const overallPct = Math.min(
+              100,
+              Math.max(0, Math.round(start + (end - start) * (stagePct / 100)))
+            );
+            try {
+              process.stdout.write(`progress: ${overallPct}\n`);
+            } catch (e) {}
+          } catch (e) {}
+        },
+      });
       const items = [];
       for (let i = 0; i < unresolved.length; i++) {
         const sample = unresolved[i];
@@ -258,9 +365,31 @@ async function main() {
 
     // Train/retrain model using stored embeddings
     console.error("[trainAndClassify] Training/retraining model...");
-    modelObj = await cls.trainClassifier(trainSet, {});
+    let lastTrainPct = -1;
+    modelObj = await cls.trainClassifier(trainSet, {
+      onTrainProgress: (epochIdx, epochs, epochPct) => {
+        try {
+          const start = STAGE.training[0];
+          const end = STAGE.training[1];
+          const overallPct = Math.min(
+            100,
+            Math.max(0, Math.round(start + (end - start) * (epochPct / 100)))
+          );
+          if (overallPct !== lastTrainPct) {
+            lastTrainPct = overallPct;
+            try {
+              process.stdout.write(`progress: ${overallPct}\n`);
+            } catch (e) {}
+          }
+        } catch (e) {}
+      },
+    });
     await cls.saveModelToDb(projectId, modelObj, VECTOR_MODEL);
     console.error("[trainAndClassify] Model saved.");
+    // ensure training stage fully reported
+    try {
+      process.stdout.write(`progress: ${STAGE.training[1]}\n`);
+    } catch (e) {}
   }
 
   // 4) Read input keywords list
@@ -273,21 +402,61 @@ async function main() {
     } catch (e) {
       // fallback: query DB for unclassified target keywords
     }
-    // If input contains explicit `target_query` flags, process only those marked as target
+    // If input contains keywords array, prefer filtering via DB: select those ids that are marked target_query=1.
     try {
       if (Array.isArray(keywords) && keywords.length > 0) {
-        const allHaveFlag = keywords.every(
-          (k) => typeof k.target_query !== "undefined"
-        );
-        if (allHaveFlag) {
-          const before = keywords.length;
-          keywords = keywords.filter(
-            (k) => k.target_query === 1 || k.target_query === true
+        const before = keywords.length;
+        const ids = keywords
+          .map((k) => (k && k.id ? Number(k.id) : null))
+          .filter((v) => Number.isFinite(v));
+        if (ids.length > 0) {
+          const placeholders = ids.map(() => "?").join(",");
+          const params = [projectId, ...ids];
+          console.error(
+            `[trainAndClassify DEBUG] Input keyword ids (${ids.length}):`,
+            ids.slice(0, 200)
+          );
+          const dbKeywords = await dbAll(
+            `SELECT id, keyword, target_query FROM keywords WHERE project_id = ? AND id IN (${placeholders}) ORDER BY id`,
+            params
           );
           console.error(
-            `[trainAndClassify] Filtered keywords by target_query: ${before} -> ${keywords.length}`
+            `[trainAndClassify DEBUG] DB returned ${
+              Array.isArray(dbKeywords) ? dbKeywords.length : 0
+            } matching ids (pre-filter).`
+          );
+          const filtered = (dbKeywords || []).filter(
+            (d) =>
+              d &&
+              (d.target_query === 1 ||
+                d.target_query === "1" ||
+                d.target_query === true)
+          );
+          console.error(
+            `[trainAndClassify DEBUG] DB filtered target_query===1 count: ${filtered.length}`
+          );
+          if (filtered.length > 0) {
+            keywords = filtered.map((d) => ({ id: d.id, keyword: d.keyword }));
+          } else {
+            console.error(
+              "[trainAndClassify DEBUG] No DB ids matched target_query=1, falling back to input-flag filtering"
+            );
+            keywords = keywords.filter(
+              (k) => k && (k.target_query === 1 || k.target_query === true)
+            );
+          }
+        } else {
+          // No numeric ids present — fall back to input flags
+          console.error(
+            "[trainAndClassify DEBUG] No numeric ids found in input; using input flags for filtering"
+          );
+          keywords = keywords.filter(
+            (k) => k && (k.target_query === 1 || k.target_query === true)
           );
         }
+        console.error(
+          `[trainAndClassify] Filtered keywords by target_query: ${before} -> ${keywords.length}`
+        );
       }
     } catch (e) {
       // ignore filtering errors
@@ -308,11 +477,57 @@ async function main() {
 
   // 5) Classify keywords and print JSONL for HandlerKeywords to persist
   const kwTexts = keywords.map((k) => k.keyword || "");
-  const kwEmbs = await fetchWithCache(kwTexts, VECTOR_MODEL);
+  // Fetch embeddings for keywords (classification stage fetch). Map to fetchKeywordsEmb stage.
+  let lastKwFetchPct = -1;
+  const kwEmbs = await fetchWithCache(kwTexts, VECTOR_MODEL, {
+    onProgress: ({
+      processedMissingCount = 0,
+      totalMissing = 0,
+      cachedCount = 0,
+      textsLength = 0,
+    } = {}) => {
+      try {
+        // processedMissingCount & cachedCount are relative to kwTexts
+        const processedTotal = cachedCount + processedMissingCount;
+        const stagePct = textsLength
+          ? Math.round((processedTotal / textsLength) * 100)
+          : 0;
+        const start = STAGE.fetchKeywordsEmb[0];
+        const end = STAGE.fetchKeywordsEmb[1];
+        const overallPct = Math.min(
+          100,
+          Math.max(0, Math.round(start + (end - start) * (stagePct / 100)))
+        );
+        if (overallPct !== lastKwFetchPct) {
+          lastKwFetchPct = overallPct;
+          try {
+            process.stdout.write(`progress: ${overallPct}\n`);
+          } catch (e) {}
+        }
+      } catch (e) {}
+    },
+  });
+  // ensure keyword-embeddings fetch stage reached end
+  try {
+    process.stdout.write(`progress: ${STAGE.fetchKeywordsEmb[1]}\n`);
+  } catch (e) {}
+  let processedCount = 0;
+  let skippedEmbCount = 0;
+  let lastClassPct = -1;
   for (let i = 0; i < keywords.length; i++) {
     const kw = keywords[i];
     const emb = kwEmbs[i];
-    if (!emb || emb.length !== modelObj.D) continue;
+    if (!emb || emb.length !== modelObj.D) {
+      skippedEmbCount++;
+      console.error(
+        `[trainAndClassify DEBUG] Skipping id=${
+          kw && kw.id ? kw.id : "(no id)"
+        } keyword='${kw && kw.keyword ? kw.keyword : ""}' emb_len=${
+          emb && Array.isArray(emb) ? emb.length : 0
+        } expected=${modelObj.D}`
+      );
+      continue;
+    }
     // Predict
     const pred = await cls.predict(emb, modelObj);
     const bestLabel = pred.label;
@@ -331,7 +546,31 @@ async function main() {
       `trainAndClassify result: ${kw.keyword} -> ${out.bestCategoryName} (sim: ${out.similarity})`
     );
     process.stdout.write(JSON.stringify(out) + "\n");
+    processedCount++;
+    // report classification progress mapped to classification stage
+    try {
+      const classPct = Math.round((processedCount / keywords.length) * 100);
+      const start = STAGE.classification[0];
+      const end = STAGE.classification[1];
+      const overallPct = Math.min(
+        100,
+        Math.max(0, Math.round(start + (end - start) * (classPct / 100)))
+      );
+      if (overallPct !== lastClassPct) {
+        lastClassPct = overallPct;
+        try {
+          process.stdout.write(`progress: ${overallPct}\n`);
+        } catch (e) {}
+      }
+    } catch (e) {}
   }
+  console.error(
+    `[trainAndClassify DEBUG] processed=${processedCount} skipped_embeddings=${skippedEmbCount} total_input=${keywords.length}`
+  );
+  // classification done -> 100%
+  try {
+    process.stdout.write(`progress: 100\n`);
+  } catch (e) {}
 }
 
 main().catch((err) => {

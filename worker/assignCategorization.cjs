@@ -17,10 +17,11 @@
 
 const axios = require("axios");
 const path = require("path");
-// Import DB functions for caching
+// Import DB functions for caching and simple queries
 const {
   embeddingsCacheGet,
   embeddingsCachePut,
+  dbAll,
 } = require("../electron/db/index.cjs");
 const OPENAI_EMBED_URL = "https://api.openai.com/v1/embeddings";
 const MODEL = "text-embedding-3-small";
@@ -191,21 +192,52 @@ async function main() {
   console.error(
     `assignCategorization: loaded ${categories.length} categories, ${keywords.length} keywords`
   );
-  // If input provides explicit target flags, keep only target items
+  // If input provides keywords list, prefer filtering via DB: select ids present in input that are marked target_query=1.
   try {
     if (Array.isArray(keywords) && keywords.length > 0) {
-      const allHaveFlag = keywords.every(
-        (k) => typeof k.target_query !== "undefined"
-      );
-      if (allHaveFlag) {
-        const before = keywords.length;
-        keywords = keywords.filter(
-          (k) => k.target_query === 1 || k.target_query === true
+      const before = keywords.length;
+      const inputMap = new Map();
+      const ids = [];
+      for (const k of keywords) {
+        if (k && k.id) {
+          const idn = Number(k.id);
+          if (Number.isFinite(idn)) {
+            ids.push(idn);
+            inputMap.set(idn, k);
+          }
+        }
+      }
+      if (ids.length > 0) {
+        const placeholders = ids.map(() => "?").join(",");
+        const params = [projectId, ...ids];
+        const dbKeywords = await dbAll(
+          `SELECT id, keyword FROM keywords WHERE project_id = ? AND id IN (${placeholders}) AND target_query = 1 ORDER BY id`,
+          params
         );
-        console.error(
-          `[assignCategorization] Filtered keywords by target_query: ${before} -> ${keywords.length}`
+        if (Array.isArray(dbKeywords) && dbKeywords.length > 0) {
+          // Merge embeddings and metadata from original input when present
+          keywords = dbKeywords.map((k) => {
+            const orig = inputMap.get(Number(k.id)) || {};
+            return Object.assign({}, k, {
+              embedding: orig.embedding || orig.vector || null,
+              embeddingSource: orig.embeddingSource || orig.source || null,
+            });
+          });
+        } else {
+          // Fallback to input-flag filtering if DB returned nothing
+          keywords = keywords.filter(
+            (k) => k && (k.target_query === 1 || k.target_query === true)
+          );
+        }
+      } else {
+        // No ids in input: fall back to input flag filtering
+        keywords = keywords.filter(
+          (k) => k && (k.target_query === 1 || k.target_query === true)
         );
       }
+      console.error(
+        `[assignCategorization] Filtered keywords by target_query: ${before} -> ${keywords.length}`
+      );
     }
   } catch (e) {
     // ignore
