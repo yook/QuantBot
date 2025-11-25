@@ -150,6 +150,17 @@ class IPCClient {
     return result.data;
   }
 
+  // Start stopwords import via worker (bulk) and stream progress events via 'stopwords:progress'
+  async importStopwords(projectId: number, words: string[], applyToKeywords = true) {
+    try {
+      const result = await this.ipc.invoke('stopwords:import', { projectId, dbPath: null, words, applyToKeywords });
+      return result;
+    } catch (err) {
+      console.error('[IPC Client] importStopwords error:', err);
+      throw err;
+    }
+  }
+
   async deleteStopword(id: number) {
     const result = await this.ipc.invoke('db:stopwords:delete', id);
     return result.success ? result.data : null;

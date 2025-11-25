@@ -275,33 +275,35 @@ async function addStopWords() {
   addProgress.value = 0;
   addProgressText.value = `Добавление ${items.length} слов...`;
 
+  // Subscribe to progress events
+  const progressHandler = (payload) => {
+    try {
+      if (!payload || typeof payload !== 'object') return;
+      if (payload.type === 'progress') {
+        addProgress.value = payload.percent || addProgress.value;
+        if (payload.stage) addProgressText.value = `${payload.stage}: ${payload.inserted || payload.processed || ''}`;
+      } else if (payload.type === 'started') {
+        addProgressText.value = `Запущено: ${payload.total || items.length}`;
+      } else if (payload.type === 'finished') {
+        addProgress.value = 100;
+        addProgressText.value = `Готово`; 
+      } else if (payload.type === 'error') {
+        ElMessage.error(payload.message || 'Ошибка при импорте');
+      }
+    } catch (e) { console.error('progress handler', e); }
+  };
+
+  ipcClient.on('stopwords:progress', progressHandler);
+
   try {
-    let added = 0;
-    for (const word of items) {
-      console.log(
-        "[StopWords] Inserting word:",
-        word,
-        "for project:",
-        currentProjectId.value
-      );
-      const result = await ipcClient.insertStopword(
-        currentProjectId.value,
-        word
-      );
-      console.log("[StopWords] Insert result:", result);
-      added++;
-      addProgress.value = Math.round((added / items.length) * 100);
-    }
+    // Call bulk import; ipc handler will spawn worker and stream progress via 'stopwords:progress'
+    await ipcClient.importStopwords(currentProjectId.value, items, true);
 
-    ElMessage.success(`Добавлено ${added} стоп-слов`);
+    ElMessage.success(`Импорт запущен и завершён`);
     stopWordsText.value = "";
-    console.log("[StopWords] Loading stopwords list...");
     await loadData();
-    console.log("[StopWords] Stopwords list loaded");
-
-    // Перезагружаем данные keywords, чтобы обновились колонки "Целевой запрос" и "Правило исключения"
+    // Reload keywords to reflect new stopwords
     if (keywordsStore.currentProjectId) {
-      console.log("[StopWords] Reloading keywords after stopwords added");
       await keywordsStore.loadKeywords(keywordsStore.currentProjectId, {
         skip: 0,
         limit: keywordsStore.windowSize,
@@ -309,9 +311,10 @@ async function addStopWords() {
       });
     }
   } catch (error) {
-    console.error("Error adding stopwords:", error);
+    console.error("Error importing stopwords:", error);
     ElMessage.error("Ошибка добавления стоп-слов");
   } finally {
+    ipcClient.off('stopwords:progress', progressHandler);
     isAddingWithProgress.value = false;
     addProgress.value = 0;
     addProgressText.value = "";
