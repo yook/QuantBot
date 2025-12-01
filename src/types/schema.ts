@@ -291,3 +291,10 @@ export interface LoadSamplesOptions {
   limit?: number;
 }
 
+export interface Stopword {
+  id: number;
+  project_id: number;
+  word: string;
+  created_at: string;
+}
+

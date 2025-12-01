@@ -78,7 +78,7 @@ These rules help AI agents be productive in this repo. Keep responses concise an
 
 ## Release
 
-Пошаговая последовательность патч-релиза (без отдельных скриптов):
+Пошаговая последовательность релиза:
 
 1. Определить следующую версию и тег
 2. Увеличить версию в `package.json`

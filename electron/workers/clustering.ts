@@ -10,7 +10,13 @@ const require = createRequire(import.meta.url);
 export async function startClusteringWorker(ctx: ClusteringCtx, projectId: number, algorithm: string, eps: number, minPts?: number) {
   const { db, getWindow, resolvedDbPath } = ctx;
   const __dirname = path.dirname(fileURLToPath(import.meta.url));
-  const workerPath = path.join(__dirname, '..', 'worker', 'clusterСomponents.cjs');
+  const devCandidate = path.join(process.cwd(), 'worker', 'clusterСomponents.cjs');
+  const packagedCandidate = process.resourcesPath
+    ? path.join(process.resourcesPath, 'app.asar.unpacked', 'worker', 'clusterСomponents.cjs')
+    : null;
+  const workerPath = fs.existsSync(devCandidate)
+    ? devCandidate
+    : (packagedCandidate && fs.existsSync(packagedCandidate) ? packagedCandidate : devCandidate);
   const win = getWindow();
 
   const logDetails =
@@ -33,12 +39,12 @@ export async function startClusteringWorker(ctx: ClusteringCtx, projectId: numbe
       console.warn('[clustering] Failed to clear previous clustering results:', (clearErr as any)?.message || clearErr);
     }
 
-    const keywords = db.prepare('SELECT * FROM keywords WHERE project_id = ? AND target_query = 1').all(projectId) as any[];
+    const keywords = db.prepare('SELECT * FROM keywords WHERE project_id = ? AND (target_query IS NULL OR target_query = 1)').all(projectId) as any[];
     if (!keywords || keywords.length === 0) {
-      console.warn(`No target keywords (target_query=1) found for project ${projectId}`);
+      console.warn(`Не найдены целевые ключевые слова для проекта ${projectId}`);
       if (win && !win.isDestroyed()) {
-        win.webContents.send('keywords:clustering-error', { projectId, message: 'No target keywords (target_query=1) found for project' });
-      }
+          win.webContents.send('keywords:clustering-error', { projectId, messageKey: 'keywords.noTargetKeywords', message: 'Не найдены целевые ключевые слова для проекта' });
+        }
       return;
     }
 
@@ -85,11 +91,13 @@ export async function startClusteringWorker(ctx: ClusteringCtx, projectId: numbe
     }
     if (minPts !== undefined) args.push(`--minPts=${minPts}`);
 
+    let env = Object.assign({}, process.env, {
+      ELECTRON_RUN_AS_NODE: '1',
+      QUANTBOT_DB_DIR: resolvedDbPath ? path.dirname(resolvedDbPath) : undefined,
+    });
+
     const child = spawn(process.execPath, args, {
-      env: Object.assign({}, process.env, {
-        ELECTRON_RUN_AS_NODE: '1',
-        QUANTBOT_DB_DIR: resolvedDbPath ? path.dirname(resolvedDbPath) : undefined,
-      }),
+      env,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
 

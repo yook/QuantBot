@@ -64,4 +64,6 @@ export function registerIntegrationsIpc(ctx: IpcContext) {
       return { success: false, error: error.message };
     }
   });
+
+  // Proxy integration handlers removed
 }

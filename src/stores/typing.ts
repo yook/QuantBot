@@ -1,5 +1,6 @@
 import { defineStore } from "pinia";
 import { ref } from "vue";
+import { ElMessage } from "element-plus";
 import ipcClient from "../stores/socket-client";
 import type { Sample, LoadSamplesOptions } from "../types/schema";
 
@@ -40,34 +41,74 @@ export const useTypingStore = defineStore("typing", () => {
     if (!projectId || !Array.isArray(parsedSamples)) return false;
     currentProjectId.value = projectId;
     
-    // Normalize each sample: split by comma/newline, lowercase, dedupe
-    // Then insert each distinct part as its own typing sample (one sample per row).
-    const entriesToInsert: Array<{ label: string; text: string }> = [];
+    // Normalize input and build counts for duplicates
+    const countsMap = new Map<string, { label: string; text: string; count: number }>();
+    const uniqueKeys: string[] = [];
     for (const s of parsedSamples) {
       if (!s || !s.label || !s.text) continue;
       const label = String(s.label).trim();
-      // split text by comma or newline similar to frontend logic
       const parts = String(s.text)
         .split(/[\,\n]+/)
-        .map((p: string) => p.trim().toLowerCase())
+        .map((p: string) => p.trim())
         .filter(Boolean);
-      const unique = Array.from(new Set(parts));
-      if (unique.length === 0) continue;
-      for (const part of unique) {
-        entriesToInsert.push({ label, text: part });
+      for (const part of parts) {
+        const key = `${label}||${part.toLowerCase()}`; // case-insensitive on text
+        if (!countsMap.has(key)) {
+          countsMap.set(key, { label, text: part, count: 1 });
+          uniqueKeys.push(key);
+        } else {
+          const v = countsMap.get(key)!;
+          v.count = v.count + 1;
+          countsMap.set(key, v);
+        }
       }
     }
-    if (entriesToInsert.length === 0) return false;
+
+    if (uniqueKeys.length === 0) return false;
 
     try {
-      for (const sample of entriesToInsert) {
-        await ipcClient.insertTyping(
-          Number(projectId),
-          sample.label,
-          sample.text,
-          new Date().toISOString()
-        );
+      // Fetch existing samples to avoid inserting duplicates
+      const existing = await ipcClient.getTypingAll(Number(projectId));
+      const existingSet = new Set((existing || []).map((r: any) => `${String(r.label || '').trim()}||${String(r.text || '').trim().toLowerCase()}`));
+
+      let added = 0;
+      let skippedExisting = 0;
+      let skippedDuplicatesInInput = 0;
+      let skippedError = 0;
+
+      for (let i = 0; i < uniqueKeys.length; i++) {
+        const key = uniqueKeys[i];
+        const entry = countsMap.get(key)!;
+
+        if (existingSet.has(key)) {
+          skippedExisting += entry.count;
+        } else {
+          try {
+            const res = await ipcClient.insertTyping(
+              Number(projectId),
+              entry.label,
+              entry.text,
+              new Date().toISOString()
+            );
+            if (res) {
+              added++;
+              if (entry.count > 1) skippedDuplicatesInInput += (entry.count - 1);
+            } else {
+              skippedError += entry.count;
+            }
+          } catch (e) {
+            skippedError += entry.count;
+            console.warn('insertTyping failed for', entry, e);
+          }
+        }
+
+        // optional: update progress (relative to unique keys)
+        // const progress = Math.round(((i + 1) / uniqueKeys.length) * 100);
+        // could expose progress to UI if desired
       }
+
+      const skippedTotal = skippedExisting + skippedDuplicatesInInput + skippedError;
+      ElMessage.success(`Добавлено ${added} новых образцов, пропущено ${skippedTotal} (включая дубликаты)`);
       await loadSamples(projectId);
       return true;
     } catch (error) {

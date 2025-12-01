@@ -11,7 +11,13 @@ const require = createRequire(import.meta.url);
 export async function startCategorizationWorker(ctx: CategorizationCtx, projectId: number) {
   const { db, getWindow, resolvedDbPath, categoriesNameColumn } = ctx;
   const __dirname = path.dirname(fileURLToPath(import.meta.url));
-  const workerPath = path.join(__dirname, '..', 'worker', 'assignCategorization.cjs');
+  const devCandidate = path.join(process.cwd(), 'worker', 'assignCategorization.cjs');
+  const packagedCandidate = process.resourcesPath
+    ? path.join(process.resourcesPath, 'app.asar.unpacked', 'worker', 'assignCategorization.cjs')
+    : null;
+  const workerPath = fs.existsSync(devCandidate)
+    ? devCandidate
+    : (packagedCandidate && fs.existsSync(packagedCandidate) ? packagedCandidate : devCandidate);
   const win = getWindow();
 
   console.log(`Starting categorization worker for project ${projectId}`);
@@ -42,14 +48,15 @@ export async function startCategorizationWorker(ctx: CategorizationCtx, projectI
     } catch (e) {
       console.warn('[Categorization] Failed to clear previous category values', e);
     }
-    const keywords = db.prepare('SELECT * FROM keywords WHERE project_id = ? AND target_query = 1').all(projectId) as any[];
+    const keywords = db.prepare('SELECT * FROM keywords WHERE project_id = ? AND (target_query IS NULL OR target_query = 1)').all(projectId) as any[];
 
     if (!keywords || keywords.length === 0) {
-      console.warn(`No target keywords (target_query=1) found for project ${projectId}`);
+      console.warn(`Не найдены целевые ключевые слова для проекта ${projectId}`);
       if (win && !win.isDestroyed()) {
         win.webContents.send('keywords:categorization-error', {
           projectId,
-          message: 'No target keywords (target_query=1) found for project',
+          messageKey: 'keywords.noTargetKeywords',
+          message: 'Не найдены целевые ключевые слова для проекта',
         });
       }
       return;
@@ -93,11 +100,13 @@ export async function startCategorizationWorker(ctx: CategorizationCtx, projectI
     const input = JSON.stringify({ categories: categories || [], keywords });
     await fs.promises.writeFile(inputPath, input, 'utf8');
 
+    let env = Object.assign({}, process.env, {
+      ELECTRON_RUN_AS_NODE: '1',
+      QUANTBOT_DB_DIR: resolvedDbPath ? path.dirname(resolvedDbPath) : undefined,
+    });
+
     const child = spawn(process.execPath, [workerPath, `--projectId=${projectId}`, `--inputFile=${inputPath}`], {
-      env: Object.assign({}, process.env, {
-        ELECTRON_RUN_AS_NODE: '1',
-        QUANTBOT_DB_DIR: resolvedDbPath ? path.dirname(resolvedDbPath) : undefined,
-      }),
+      env,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
 
@@ -115,6 +124,15 @@ export async function startCategorizationWorker(ctx: CategorizationCtx, projectI
         console.log(`[Categorization Worker ${projectId}]`, line);
         try {
           const obj = JSON.parse(line);
+          // If worker emitted a progress update, forward it to UI
+          if (obj && obj.type === 'progress') {
+            const w = getWindow();
+            if (w && !w.isDestroyed()) {
+              const pct = obj.total && obj.total > 0 ? Math.round((obj.fetched / obj.total) * 100) : undefined;
+              w.webContents.send('keywords:categorization-progress', Object.assign({ projectId, stage: obj.stage, fetched: obj.fetched, total: obj.total, percent: pct }, obj));
+            }
+            continue;
+          }
           processed++;
           if (obj.id && obj.bestCategoryName !== undefined) {
             db.prepare('UPDATE keywords SET category_name = ?, category_similarity = ? WHERE id = ?')

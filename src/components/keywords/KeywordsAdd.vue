@@ -20,17 +20,16 @@
           :striped-flow="keywordsStore.running"
           :duration="7"
         />
-        <el-dropdown
-          v-if="!keywordsStore.running"
-          size="large"
-          split-button
-          type="primary"
-          class="ml-3"
-          @click="startAll"
-        >
-          <el-icon class="text-2xl"><VideoPlay /></el-icon>
+        <el-dropdown v-if="!keywordsStore.running" class="ml-3">
+          <el-button type="primary" size="large">
+            <el-icon class="text-2xl pr-2"><VideoPlay /> </el-icon>
+            <span class="el-icon--right ml-2">▾</span>
+          </el-button>
           <template #dropdown>
             <el-dropdown-menu>
+              <el-dropdown-item @click="startStopWordsOnly">
+                Стоп-слова
+              </el-dropdown-item>
               <el-dropdown-item @click="startTypingOnly">
                 Классификация
               </el-dropdown-item>
@@ -59,9 +58,9 @@
       v-model="dialogVisible"
       title="Добавить ключевые запросы"
       width="900px"
-      :close-on-click-modal="!addingKeywords"
-      :close-on-press-escape="!addingKeywords"
-      :show-close="!addingKeywords"
+      :close-on-click-modal="!keywordsStore.isAddingWithProgress"
+      :close-on-press-escape="!keywordsStore.isAddingWithProgress"
+      :show-close="!keywordsStore.isAddingWithProgress"
     >
       <el-form>
         <el-input
@@ -69,39 +68,24 @@
           type="textarea"
           placeholder="Введите ключевые запросы, разделенные запятыми или новой строкой"
           :rows="5"
-          :disabled="addingKeywords"
+          :disabled="keywordsStore.isAddingWithProgress"
         />
       </el-form>
       <template #footer>
         <div class="flex items-center justify-between w-full">
           <!-- Прогресс-бар в левой части -->
-          <div
-            v-if="keywordsStore.isAddingWithProgress"
-            class="flex items-center gap-3 shrink-0"
-          >
-            <el-progress
-              :text-inside="true"
-              :stroke-width="26"
-              :percentage="keywordsStore.addProgress"
-            />
-            <span
-              v-if="keywordsStore.addProgressText"
-              class="text-sm text-gray-600 dark:text-gray-400"
-            >
-              {{ keywordsStore.addProgressText }}
-            </span>
-          </div>
+          <!-- Progress UI removed: worker progress events are no longer forwarded -->
 
           <!-- Кнопки в правой части -->
           <div class="flex gap-2 ml-auto">
             <el-button
               @click="dialogVisible = false"
-              :disabled="addingKeywords"
+              :disabled="keywordsStore.isAddingWithProgress"
             >
               Отмена
             </el-button>
             <el-button
-              v-if="!addingKeywords"
+              v-if="!keywordsStore.isAddingWithProgress"
               type="primary"
               @click="addKeywords"
             >
@@ -110,7 +94,7 @@
             <el-button
               v-else
               type="primary"
-              :loading="addingKeywords"
+              :loading="keywordsStore.isAddingWithProgress"
               loading-text="Добавление ключевых слов..."
             >
               Добавить
@@ -123,7 +107,7 @@
 </template>
 
 <script setup>
-import { ref } from "vue";
+import { ref, watch, onUnmounted } from "vue";
 import validator from "validator";
 import { ElMessage } from "element-plus";
 import { useI18n } from "vue-i18n";
@@ -137,7 +121,18 @@ const { t } = useI18n();
 
 const dialogVisible = ref(false);
 const keywords = ref("");
-const addingKeywords = ref(false);
+const isMounted = ref(true);
+
+onUnmounted(() => {
+  isMounted.value = false;
+});
+
+// Очищаем поле при закрытии диалога
+watch(dialogVisible, (newVisible) => {
+  if (!newVisible) {
+    keywords.value = "";
+  }
+});
 
 function submitSite() {
   // let url = urlm.value.trim();
@@ -162,30 +157,20 @@ async function addKeywords() {
   console.log("Current keywords:", keywords.value);
 
   if (keywords.value.trim()) {
-    console.log("✅ Keywords provided, starting addition");
-    addingKeywords.value = true;
-
     try {
-      // addKeywords теперь async, ждем завершения
+      // addKeywords теперь async, стор сам управляет флагом isAddingWithProgress
       await keywordsStore.addKeywords(keywords.value);
 
-      console.log("✅ Keywords added successfully");
-      // Сообщение уже показано в store (с количеством добавленных/пропущенных)
-
-      // Очищаем поле и закрываем диалог
+      // Очищаем поле и закрываем диалог (стор уже показал сообщение)
       keywords.value = "";
 
       setTimeout(() => {
-        console.log("=== Closing dialog ===");
         dialogVisible.value = false;
-        addingKeywords.value = false;
-
         // Обновляем таблицу после закрытия диалога
         refreshTable();
-      }, 200);
+      }, 500);
     } catch (error) {
       console.error("❌ Error adding keywords:", error);
-      addingKeywords.value = false;
       // ElMessage об ошибке уже показано в store
     }
   } else {
@@ -210,6 +195,9 @@ function startCategorizationOnly() {
 }
 function startTypingOnly() {
   keywordsStore.startTypingOnly();
+}
+function startStopWordsOnly() {
+  keywordsStore.startStopwordsOnly();
 }
 function startClusteringOnly() {
   keywordsStore.startClusteringOnly();
@@ -273,7 +261,7 @@ function handleKeywordsError(data) {
   console.log("Keywords add error:", data);
   addingKeywords.value = false;
   keywordsStore.resetAddProgress();
-  ElMessage.error(data.message || "Ошибка при добавлении ключевых слов");
+  ElMessage.error(mapErrorMessage(data) || "Ошибка при добавлении ключевых слов");
 
   // Не закрываем диалог при ошибке, чтобы пользователь мог попробовать снова
 }

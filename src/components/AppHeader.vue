@@ -120,7 +120,7 @@ function openIntegrations() {
   align-items: center;
   justify-content: flex-start;
   gap: 12px;
-  padding: 0 16px 0 81px;
+  padding: 0 16px 0 71px;
   height: 100%;
 }
 

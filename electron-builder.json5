@@ -14,6 +14,7 @@
     "dist-electron",
     // Include DB CommonJS helpers used at runtime
     "electron/db/**/*",
+    "electron/db-worker.cjs",
     "worker/**/*",
     "node_modules/**/*",
   ],
@@ -23,6 +24,9 @@
   // node_modules tree.
   asarUnpack: [
     // Workers must be unpacked to be spawnable by Node
+    "electron/db-worker.cjs",
+    // Ensure DB facade is unpacked so worker scripts can require it directly
+    "electron/db/**/*",
     "worker/**/*",
     // Native modules
     "node_modules/better-sqlite3/**",

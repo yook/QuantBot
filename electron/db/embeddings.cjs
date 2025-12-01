@@ -152,6 +152,13 @@ async function attachEmbeddingsToKeywords(keywords, opts = {}) {
   const { fetchEmbeddings } = requireEmbeddingsFetcher();
   const chunkSize = opts.chunkSize || 50;
   const fetchOptions = opts.fetchOptions || {};
+  // Determine projectId for proxy resolution: prefer explicit opt, fallback to keywords array
+  const projectIdFromOpts = opts.projectId ? Number(opts.projectId) : null;
+  const projectIdFromKeywords =
+    keywords && keywords.length && keywords[0].project_id
+      ? Number(keywords[0].project_id)
+      : null;
+  const effectiveProjectId = projectIdFromOpts || projectIdFromKeywords || null;
   const modelUsed =
     fetchOptions.model ||
     process.env.EMBEDDING_MODEL ||
@@ -194,10 +201,9 @@ async function attachEmbeddingsToKeywords(keywords, opts = {}) {
   let fetched = 0;
   for (let start = 0; start < toFetch.length; start += chunkSize) {
     const chunk = toFetch.slice(start, start + chunkSize);
-    const vectors = await fetchEmbeddings(
-      chunk,
-      Object.assign({}, fetchOptions, { model: modelUsed })
-    );
+    const fetchOpts = Object.assign({}, fetchOptions, { model: modelUsed });
+    if (effectiveProjectId) fetchOpts.projectId = effectiveProjectId;
+    const vectors = await fetchEmbeddings(chunk, fetchOpts);
     for (let i = 0; i < chunk.length; i++) {
       const vec = vectors[i];
       const text = chunk[i];

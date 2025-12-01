@@ -25,6 +25,7 @@ body,
 #app {
 	font-family: var(--app-font-sans);
 	font-size: 14px;
+	font-weight: 400;
 	font-synthesis-weight: none;
 	-webkit-font-smoothing: antialiased;
 	-moz-osx-font-smoothing: grayscale;

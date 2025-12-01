@@ -39,7 +39,7 @@ jobs:
       - name: Validate GH token (safe)
         # Do not print the token. This step only reports status and scopes.
         env:
-          GH_TOKEN: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           if [ -z "$GH_TOKEN" ]; then
             echo "GH_TOKEN_STATUS=missing" >> $GITHUB_OUTPUT
@@ -57,7 +57,7 @@ jobs:
         # Prefer a repo PAT (GH_PAT). If it's not set, fallback to the automatically
         # provided GITHUB_TOKEN so publishing can still work in many cases.
         env:
-          GH_TOKEN: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GH_PAT}}
         run: |
           # If GH_TOKEN exists, we will attempt to publish; otherwise build-only.
           if [ -z "$GH_TOKEN" ]; then

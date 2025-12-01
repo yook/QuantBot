@@ -10,6 +10,40 @@
 
 const fs = require("fs");
 const path = require("path");
+function resolveDbFacade() {
+  const candidates = [];
+  try {
+    candidates.push(path.join(__dirname, "..", "electron", "db", "index.cjs"));
+  } catch (_) {}
+  try {
+    if (process.resourcesPath)
+      candidates.push(
+        path.join(
+          process.resourcesPath,
+          "app.asar.unpacked",
+          "electron",
+          "db",
+          "index.cjs"
+        )
+      );
+  } catch (_) {}
+  try {
+    candidates.push(path.join(process.cwd(), "electron", "db", "index.cjs"));
+  } catch (_) {}
+  let facadePath = null;
+  for (const c of candidates) {
+    try {
+      if (c && fs.existsSync(c)) {
+        facadePath = c;
+        break;
+      }
+    } catch (_) {}
+  }
+  if (!facadePath) facadePath = candidates[0];
+  return require(facadePath);
+}
+
+const dbFacade = resolveDbFacade();
 const {
   dbAll,
   dbGet,
@@ -19,7 +53,7 @@ const {
   getTypingModel,
   upsertTypingModel,
   updateTypingSampleEmbeddings,
-} = require("../electron/db/index.cjs");
+} = dbFacade;
 const cls = require("./embeddingsClassifier.cjs");
 
 const VECTOR_MODEL = process.env.EMBEDDING_MODEL || "text-embedding-3-small";
@@ -72,6 +106,7 @@ async function fetchWithCache(texts, model, opts = {}) {
     const embs = await cls.fetchEmbeddings(inputs, {
       model,
       batchSize: 64,
+      projectId: opts.projectId,
       onProgress: (processedMissingCount, totalMissing) => {
         try {
           // If caller provided a mapping onProgress, call it. Caller can compute overall progress
@@ -258,6 +293,7 @@ async function main() {
       const cachedCountForSamples = existingEmbeddings.size || 0;
       const samplesTotal = samples.length;
       const missingEmbs = await fetchWithCache(missingTexts, VECTOR_MODEL, {
+        projectId,
         onProgress: ({ processedMissingCount = 0, totalMissing = 0 } = {}) => {
           try {
             const processedTotal =
@@ -303,6 +339,7 @@ async function main() {
       );
       const texts = unresolved.map((s) => s.text);
       const embs = await fetchWithCache(texts, VECTOR_MODEL, {
+        projectId,
         onProgress: ({ processedMissingCount = 0, totalMissing = 0 } = {}) => {
           try {
             // For this secondary fetch, unresolved refers to the subset 'texts' only.
@@ -428,7 +465,9 @@ async function main() {
           const filtered = (dbKeywords || []).filter(
             (d) =>
               d &&
-              (d.target_query === 1 ||
+              (d.target_query === undefined ||
+                d.target_query === null ||
+                d.target_query === 1 ||
                 d.target_query === "1" ||
                 d.target_query === true)
           );
@@ -442,7 +481,12 @@ async function main() {
               "[trainAndClassify DEBUG] No DB ids matched target_query=1, falling back to input-flag filtering"
             );
             keywords = keywords.filter(
-              (k) => k && (k.target_query === 1 || k.target_query === true)
+              (k) =>
+                k &&
+                (k.target_query === undefined ||
+                  k.target_query === null ||
+                  k.target_query === 1 ||
+                  k.target_query === true)
             );
           }
         } else {
@@ -451,7 +495,12 @@ async function main() {
             "[trainAndClassify DEBUG] No numeric ids found in input; using input flags for filtering"
           );
           keywords = keywords.filter(
-            (k) => k && (k.target_query === 1 || k.target_query === true)
+            (k) =>
+              k &&
+              (k.target_query === undefined ||
+                k.target_query === null ||
+                k.target_query === 1 ||
+                k.target_query === true)
           );
         }
         console.error(
@@ -465,7 +514,7 @@ async function main() {
   if (!keywords || keywords.length === 0) {
     // Fallback: target keywords without category
     keywords = await dbAll(
-      `SELECT id, keyword FROM keywords WHERE project_id = ? AND target_query = 1 AND (category_id IS NULL OR category_id = '') AND (category_name IS NULL OR category_name = '') ORDER BY id LIMIT 100000`,
+      `SELECT id, keyword FROM keywords WHERE project_id = ? AND (target_query IS NULL OR target_query = 1) AND (category_id IS NULL OR category_id = '') AND (category_name IS NULL OR category_name = '') ORDER BY id LIMIT 100000`,
       [projectId]
     );
   }
@@ -480,6 +529,7 @@ async function main() {
   // Fetch embeddings for keywords (classification stage fetch). Map to fetchKeywordsEmb stage.
   let lastKwFetchPct = -1;
   const kwEmbs = await fetchWithCache(kwTexts, VECTOR_MODEL, {
+    projectId,
     onProgress: ({
       processedMissingCount = 0,
       totalMissing = 0,

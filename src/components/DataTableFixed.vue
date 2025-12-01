@@ -26,7 +26,7 @@
       '--second-column-left': secondColumnLeft,
     }"
   >
-    <div class="table-container">
+    <div class="table-container" v-loading="loading || loadingMore">
       <div class="virtual-scroll-container" @wheel.prevent="mousewheel">
         <table class="custom-table">
           <thead>

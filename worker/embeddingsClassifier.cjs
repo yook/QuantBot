@@ -11,15 +11,50 @@
 // - saveEmbeddingsToDb(projectId, items, vectorModel)
 // - saveModelToDb(projectId, payload)
 
+// (Proxy support removed)
 const axios = require("axios");
 const fs = require("fs");
 const path = require("path");
+function resolveDbFacade() {
+  const candidates = [];
+  try {
+    candidates.push(path.join(__dirname, "..", "electron", "db", "index.cjs"));
+  } catch (_) {}
+  try {
+    if (process.resourcesPath)
+      candidates.push(
+        path.join(
+          process.resourcesPath,
+          "app.asar.unpacked",
+          "electron",
+          "db",
+          "index.cjs"
+        )
+      );
+  } catch (_) {}
+  try {
+    candidates.push(path.join(process.cwd(), "electron", "db", "index.cjs"));
+  } catch (_) {}
+  let facadePath = null;
+  for (const c of candidates) {
+    try {
+      if (c && fs.existsSync(c)) {
+        facadePath = c;
+        break;
+      }
+    } catch (_) {}
+  }
+  if (!facadePath) facadePath = candidates[0];
+  return require(facadePath);
+}
+
+const dbFacade = resolveDbFacade();
 const {
   embeddingsCacheGet,
   embeddingsCachePut,
   updateTypingSampleEmbeddings,
   upsertTypingModel,
-} = require("../electron/db/index.cjs");
+} = dbFacade;
 
 const OPENAI_EMBED_URL = "https://api.openai.com/v1/embeddings";
 const DEFAULT_MODEL = "text-embedding-3-small";
@@ -82,9 +117,26 @@ async function fetchEmbeddings(texts, opts = {}) {
         input: chunkEntries.map((entry) => entry.text),
       };
 
-      const resp = await axios.post(OPENAI_EMBED_URL, payload, {
-        headers: { Authorization: `Bearer ${key}` },
-      });
+      // Proxy support removed: use a simple axios options object with Authorization header
+      let axiosOpts = { headers: { Authorization: `Bearer ${key}` } };
+
+      // No proxy diagnostics
+
+      let resp;
+      try {
+        resp = await axios.post(OPENAI_EMBED_URL, payload, axiosOpts);
+      } catch (err) {
+        try {
+          if (err && err.response) {
+            console.error(
+              "[embeddingsClassifier] OpenAI error response:",
+              JSON.stringify(err.response.data)
+            );
+          }
+        } catch (_) {}
+        // Proxy support removed — rethrow original error after logging
+        throw err;
+      }
 
       const data = (resp && resp.data && resp.data.data) || [];
       for (let j = 0; j < data.length; j++) {

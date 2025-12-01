@@ -1,9 +1,40 @@
 #!/usr/bin/env node
-const {
-  dbAll,
-  embeddingsCacheGet,
-  getTypingModel,
-} = require("../electron/db/index.cjs");
+function resolveDbFacade() {
+  const path = require("path");
+  const fs = require("fs");
+  const candidates = [];
+  try {
+    candidates.push(path.join(__dirname, "..", "electron", "db", "index.cjs"));
+  } catch (_) {}
+  try {
+    if (process.resourcesPath)
+      candidates.push(
+        path.join(
+          process.resourcesPath,
+          "app.asar.unpacked",
+          "electron",
+          "db",
+          "index.cjs"
+        )
+      );
+  } catch (_) {}
+  try {
+    candidates.push(path.join(process.cwd(), "electron", "db", "index.cjs"));
+  } catch (_) {}
+  let facadePath = null;
+  for (const c of candidates) {
+    try {
+      if (c && fs.existsSync(c)) {
+        facadePath = c;
+        break;
+      }
+    } catch (_) {}
+  }
+  if (!facadePath) facadePath = candidates[0];
+  return require(facadePath);
+}
+
+const { dbAll, embeddingsCacheGet, getTypingModel } = resolveDbFacade();
 const cls = require("../worker/embeddingsClassifier.cjs");
 
 function parseArgs(argv) {

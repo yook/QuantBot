@@ -17,6 +17,15 @@ const messages = {
       virtualTable: 'Virtual Table',
       settings: 'Settings',
     },
+    integrations: {
+      proxy: {
+        title: 'Proxy',
+        url: 'URL',
+        login: 'Login',
+        password: 'Password',
+      },
+      openai: 'OpenAI'
+    },
     header: {
       selectProject: 'Select project',
       noProjects: 'No projects found',
@@ -130,6 +139,7 @@ const messages = {
       select_project: 'Please select a project',
       phrase_too_long: 'Phrases longer than {max} characters were removed',
       duplicate_removed: 'Duplicate phrase removed: {phrase}',
+      noTargetKeywords: 'No target keywords found for project',
     },
     delete: 'Delete',
     cancel: 'Cancel',
@@ -158,9 +168,18 @@ const messages = {
     },
     menu: {
       crawling: 'Краулинг',
-      keywords: 'Ключевые слова',
+      keywords: 'Ключевые запросы',
       virtualTable: 'Виртуальная таблица',
       settings: 'Настройки',
+    },
+    integrations: {
+      proxy: {
+        title: 'Прокси',
+        url: 'URL',
+        login: 'Логин',
+        password: 'Пароль',
+      },
+      openai: 'OpenAI'
     },
     header: {
       selectProject: 'Выберите проект',
@@ -228,9 +247,9 @@ const messages = {
         userAgent: 'User-Agent',
         respectRobotsTxt: 'Учитывать robots.txt',
         scanSubdomains: 'Сканировать поддомены',
-        stripQueryString: 'Убирать параметры из адреса',
-        stripQueryStringTooltip: 'Убирать ли параметры строки запроса из URL.',
-        sortQueryParameters: 'Сортировать параметры запроса',
+        stripQueryString: 'Убирать get-параметры из URL',
+        stripQueryStringTooltip: 'Убирать get-параметры из URL.',
+        sortQueryParameters: 'Сортировать get-параметры в URL',
         parseScriptTags: 'Парсить Script теги',
         scanImages: 'Сканировать изображения',
       },
@@ -275,6 +294,7 @@ const messages = {
       select_project: 'Пожалуйста, выберите проект',
       phrase_too_long: 'Фразы длиннее {max} символов были удалены',
       duplicate_removed: 'Дубликат удален: {phrase}',
+      noTargetKeywords: 'Не найдены целевые ключевые слова для проекта',
     },
     delete: 'Удалить',
     cancel: 'Отмена',

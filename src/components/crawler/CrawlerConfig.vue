@@ -1,7 +1,7 @@
 <template>
   <div class="m-10">
     <el-row class="py-2 items-center">
-      <el-col :span="6">
+      <el-col :span="8">
         {{ t("crawler.config.depth") }}
         <el-popover
           placement="top"
@@ -27,7 +27,7 @@
     </el-row>
 
     <el-row class="py-2 items-center">
-      <el-col :span="6">
+      <el-col :span="8">
         {{ t("crawler.config.concurrency") }}
         <el-popover
           placement="top"
@@ -52,7 +52,7 @@
     </el-row>
 
     <el-row class="py-2 items-center">
-      <el-col :span="6">
+      <el-col :span="8">
         {{ t("crawler.config.interval") }}
         <el-popover
           placement="top"
@@ -77,7 +77,7 @@
     </el-row>
 
     <el-row class="py-2 items-center">
-      <el-col :span="6">
+      <el-col :span="8">
         {{ t("crawler.config.timeout") }}
         <el-popover
           placement="top"
@@ -91,7 +91,7 @@
           </template>
         </el-popover>
       </el-col>
-      <el-col :span="8"
+      <el-col :span="16"
         ><div class="grid-content bg-purple-light" />
         <el-input-number
           v-model="project.data.crawler.timeout"
@@ -102,15 +102,15 @@
     </el-row>
 
     <el-row class="py-2 items-center">
-      <el-col :span="6"> {{ t("crawler.config.userAgent") }} </el-col>
-      <el-col :span="18"
+      <el-col :span="8"> {{ t("crawler.config.userAgent") }} </el-col>
+      <el-col :span="16"
         ><div class="grid-content bg-purple-light" />
         <el-input v-model="project.data.crawler.userAgent" @change="saveData" />
       </el-col>
     </el-row>
 
     <el-row class="py-2 items-center">
-      <el-col :span="6"> {{ t("crawler.config.respectRobotsTxt") }} </el-col>
+      <el-col :span="8"> {{ t("crawler.config.respectRobotsTxt") }} </el-col>
       <el-col :span="8"
         ><div class="grid-content bg-purple-light" />
         <el-switch
@@ -120,7 +120,7 @@
       </el-col>
     </el-row>
     <el-row class="py-2 items-center">
-      <el-col :span="6"> {{ t("crawler.config.scanSubdomains") }} </el-col>
+      <el-col :span="8"> {{ t("crawler.config.scanSubdomains") }} </el-col>
       <el-col :span="8"
         ><div class="grid-content bg-purple-light" />
         <el-switch
@@ -131,19 +131,8 @@
     </el-row>
 
     <el-row class="py-2 items-center">
-      <el-col :span="6">
+      <el-col :span="8">
         {{ t("crawler.config.stripQueryString") }}
-        <el-popover
-          placement="top"
-          title=""
-          :width="300"
-          trigger="hover"
-          :content="t('crawler.config.stripQueryStringTooltip')"
-        >
-          <template #reference>
-            <el-icon><QuestionFilled /></el-icon>
-          </template>
-        </el-popover>
       </el-col>
       <el-col :span="8"
         ><div class="grid-content bg-purple-light" />
@@ -155,7 +144,7 @@
     </el-row>
 
     <el-row class="py-2 items-center">
-      <el-col :span="6">
+      <el-col :span="8">
         {{ t("crawler.config.sortQueryParameters") }}
         <!-- <el-popover
         placement="top"
@@ -179,7 +168,7 @@
     </el-row>
 
     <el-row class="py-2 items-center">
-      <el-col :span="6">
+      <el-col :span="8">
         {{ t("crawler.config.parseScriptTags") }}
         <!-- <el-popover
         placement="top"
@@ -202,7 +191,7 @@
     </el-row>
 
     <el-row class="py-2 items-center">
-      <el-col :span="6"> {{ t("crawler.config.scanImages") }} </el-col>
+      <el-col :span="8"> {{ t("crawler.config.scanImages") }} </el-col>
       <el-col :span="8"
         ><div class="grid-content bg-purple-light" />
         <el-switch

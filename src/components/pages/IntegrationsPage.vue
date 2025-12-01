@@ -63,6 +63,7 @@
                 </el-form>
               </el-card>
             </el-col>
+            <!-- Proxy settings removed -->
           </el-row>
         </div>
       </el-card>
@@ -74,6 +75,7 @@
 import { reactive, onMounted, watch, onUnmounted, markRaw } from "vue";
 import { socket } from "../../stores/socket-client";
 import { useProjectStore } from "../../stores/project";
+import { useI18n } from "vue-i18n";
 import { ElMessageBox, ElMessage } from "element-plus";
 import { Delete } from "@element-plus/icons-vue";
 // no additional vue refs needed
@@ -85,10 +87,13 @@ const masked = reactive({ key: null, updated_at: null });
 const maskedInput = reactive({ value: "" });
 const cacheSize = reactive({ value: 0 });
 
+const { t } = useI18n();
+
 onMounted(() => {
   const pid = project.currentProjectId;
   if (pid)
     socket.emit("integrations:get", { projectId: pid, service: "openai" });
+  // no proxy settings requested from main process (proxy UI removed)
 
   // Get cache size
   socket.emit("get-embeddings-cache-size");
@@ -126,6 +131,12 @@ socket.on("integrations:info", (data) => {
     }
   } catch (e) {}
 });
+
+// proxy support removed: no handler
+
+// proxy draft persistence removed (proxy UI removed)
+
+// proxy support removed: no handler
 
 socket.on("integrations:setKey:ok", (data) => {
   if (!data) return;
@@ -176,7 +187,7 @@ onUnmounted(() => {
   } catch (e) {}
 });
 
-function save(kind) {
+async function save(kind) {
   if (kind === "openai") {
     const pid = project.currentProjectId;
     if (!pid) {
@@ -197,7 +208,9 @@ function save(kind) {
       service: "openai",
       key: form.openaiKey,
     });
+    return;
   }
+  // proxy UI removed
 }
 
 // master-key handling removed
@@ -228,6 +241,8 @@ function clearCache() {
 }
 
 // editing via focus removed; input is readonly when key exists
+
+// proxy password input handling removed
 </script>
 
 <style scoped>

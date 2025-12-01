@@ -122,7 +122,7 @@ const tableSettingsDialog = ref(false);
 const allColumns = [
   // Ключевой запрос — обязательная колонка, не даём отключать
   { prop: "keyword", name: "Ключевой запрос", width: 400, disabled: true },
-  { prop: "target_query", name: "Целевой запрос", width: 100 },
+  { prop: "target_query", name: "Фильтр по стоп-словам", width: 240 },
   { prop: "blocking_rule", name: "Правило исключения", width: 240 },
   { prop: "created_at", name: t("table.date"), width: 180 },
   { prop: "category_info", name: "Категория", width: 240 },

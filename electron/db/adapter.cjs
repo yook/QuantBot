@@ -317,6 +317,10 @@ if (db) {
     "ALTER TABLE projects ADD COLUMN clustering_eps REAL DEFAULT 0.5",
     "ALTER TABLE projects ADD COLUMN clustering_min_points INTEGER DEFAULT 5",
     "ALTER TABLE projects ADD COLUMN clustering_method TEXT DEFAULT 'cosine'",
+    "ALTER TABLE projects ADD COLUMN proxy_url TEXT",
+    "ALTER TABLE projects ADD COLUMN proxy_user TEXT",
+    "ALTER TABLE projects ADD COLUMN proxy_pass TEXT",
+    "ALTER TABLE projects ADD COLUMN proxy_enabled INTEGER DEFAULT 0",
   ];
   alters.forEach((sql) => {
     try {

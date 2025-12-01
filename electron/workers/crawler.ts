@@ -33,7 +33,13 @@ export function startCrawlerWorker(ctx: CrawlerCtx, project: { id: number; url: 
     };
     fs.writeFileSync(cfgPath, JSON.stringify(payload), 'utf8');
     const __dirname = path.dirname(fileURLToPath(import.meta.url));
-    const workerPath = path.join(__dirname, '..', 'worker', 'crawlerWorker.cjs');
+    const devCandidate = path.join(process.cwd(), 'worker', 'crawlerWorker.cjs');
+    const packagedCandidate = process.resourcesPath
+      ? path.join(process.resourcesPath, 'app.asar.unpacked', 'worker', 'crawlerWorker.cjs')
+      : null;
+    const workerPath = fs.existsSync(devCandidate)
+      ? devCandidate
+      : (packagedCandidate && fs.existsSync(packagedCandidate) ? packagedCandidate : devCandidate);
     console.log('[CrawlerWorker] Spawning worker', { workerPath, projectId: project.id, url: project.url });
     const child = spawn(process.execPath, [workerPath, `--config=${cfgPath}`], {
       env: Object.assign({}, process.env, {

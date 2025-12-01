@@ -49,34 +49,14 @@
         :disabled="categoriesStore.isAddingWithProgress"
       />
       <div class="flex items-center mt-4">
-        <div
-          v-if="categoriesStore.isAddingWithProgress"
-          class="flex items-center gap-3"
-        >
-          <el-progress
-            :text-inside="true"
-            :stroke-width="26"
-            :percentage="categoriesStore.addProgress"
-          />
-          <span v-if="categoriesStore.addProgressText" class="text-sm">
-            {{ categoriesStore.addProgressText }}
-          </span>
-        </div>
         <div class="ml-auto">
           <el-button
-            v-if="!categoriesStore.isAddingWithProgress"
             type="primary"
             @click="addCategories"
+            :loading="categoriesStore.isAddingWithProgress"
+            :disabled="categoriesStore.isAddingWithProgress"
           >
             Добавить категории
-          </el-button>
-          <el-button
-            v-else
-            type="primary"
-            :loading="categoriesStore.isAddingWithProgress"
-            loading-text="Добавление категорий..."
-          >
-            Добавить
           </el-button>
         </div>
       </div>
@@ -91,6 +71,7 @@
         :loading="categoriesStore.loading"
         :loadingMore="categoriesStore.loadingMore"
         :sort="categoriesStore.sort"
+        :windowStart="categoriesStore.windowStart"
         :loadWindow="loadWindow"
         :sortData="sortData"
         :loadData="loadData"
@@ -113,7 +94,7 @@ import saveColumnOrder from "../../../utils/columnOrder";
 
 const categories = ref("");
 
-function addCategories() {
+async function addCategories() {
   if (!categories.value.trim()) {
     ElMessage.warning("Введите категории");
     return;
@@ -124,8 +105,16 @@ function addCategories() {
     return;
   }
 
-  categoriesStore.addCategories(categories.value);
-  // Не очищаем поле сразу, очистим после успешного добавления
+  try {
+    // Вызываем стор и ждём завершения — стор выставляет флаги прогресса
+    await categoriesStore.addCategories(categories.value);
+    // Очистим поле ввода после успешного добавления
+    categories.value = "";
+  } catch (e) {
+    // Ошибки уже обрабатываются в сторе, но на всякий случай логируем
+    console.error("addCategories error", e);
+  }
+  // Не блокируем UI здесь — стор управляет флагом isAddingWithProgress
 }
 
 function startCategorization() {
@@ -133,7 +122,7 @@ function startCategorization() {
     ElMessage.error("Проект не выбран");
     return;
   }
-  if (!categoriesData.value || categoriesData.value.length === 0) {
+  if (!categoriesStore.totalCount || categoriesStore.totalCount === 0) {
     ElMessage.warning("Нет категорий. Сначала добавьте категории.");
     return;
   }
@@ -149,6 +138,12 @@ import { useKeywordsStore } from "../../../stores/keywords";
 const project = useProjectStore();
 const categoriesStore = useCategoriesStore();
 const keywordsStore = useKeywordsStore();
+
+const isMounted = ref(true);
+
+onUnmounted(() => {
+  isMounted.value = false;
+});
 
 // Столбцы для таблицы категорий
 const tableColumns = ref([
@@ -191,13 +186,13 @@ function deleteCategory(row) {
 
 // Удаление всех категорий
 function deleteAllCategories() {
-  if (!categoriesData.value || categoriesData.value.length === 0) {
+  if (!categoriesStore.totalCount || categoriesStore.totalCount === 0) {
     ElMessage.warning("Нет категорий для удаления");
     return;
   }
 
   ElMessageBox.confirm(
-    `Удалить все категории (${categoriesData.value.length} шт.)?`,
+    `Удалить все категории (${categoriesStore.totalCount} шт.)?`,
     "Подтверждение удаления",
     {
       confirmButtonText: "Удалить все",
@@ -245,6 +240,10 @@ onMounted(() => {
 watch(
   () => project.currentProjectId,
   (newProjectId) => {
+    if (!isMounted.value) return;
+
+    // Очищаем поле при смене проекта
+    categories.value = "";
     if (newProjectId) {
       categoriesStore.setCurrentProjectId(newProjectId);
       categoriesStore.loadCategories(newProjectId);
@@ -283,18 +282,13 @@ function onColumnsReorder(newOrder) {
 import { watch } from "vue";
 
 watch(
-  () => ({
-    running: categoriesStore.isAddingWithProgress,
-    progress: categoriesStore.addProgress,
-  }),
-  (state) => {
-    const { running, progress } = state || {};
-    // Очищаем поле только при успешном завершении (100%)
-    if (!running && progress === 100 && categories.value) {
+  () => categoriesStore.isAddingWithProgress,
+  (running) => {
+    // Очищаем поле после завершения операции (флаг завершился)
+    if (!running && categories.value) {
       categories.value = "";
     }
-  },
-  { deep: true }
+  }
 );
 </script>
 

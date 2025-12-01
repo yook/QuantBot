@@ -2,6 +2,10 @@
 // Runs in separate Node process to avoid Electron ABI mismatch
 // Communicates with parent via IPC (stdin/stdout JSON-RPC)
 
+console.error("[DB Worker] Process started, PID:", process.pid);
+console.error("[DB Worker] Working directory:", process.cwd());
+console.error("[DB Worker] Environment DB_PATH:", process.env.DB_PATH);
+
 const path = require("path");
 const os = require("os");
 const fs = require("fs");
@@ -148,6 +152,30 @@ function initializeSchema() {
   db.prepare(
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_keywords_project_keyword ON keywords(project_id, keyword);"
   ).run();
+  try {
+    const cols = db.prepare("PRAGMA table_info(keywords)").all();
+    const hasIsStop = cols.some((c) => c && c.name === "is_stop");
+    if (!hasIsStop) {
+      console.error("[DB Worker] Adding missing column is_stop to keywords");
+      db.prepare(
+        "ALTER TABLE keywords ADD COLUMN is_stop INTEGER DEFAULT 0"
+      ).run();
+    }
+    const hasTargetQuery = cols.some((c) => c && c.name === "target_query");
+    if (!hasTargetQuery) {
+      console.error(
+        "[DB Worker] Adding missing column target_query to keywords"
+      );
+      db.prepare(
+        "ALTER TABLE keywords ADD COLUMN target_query INTEGER DEFAULT NULL"
+      ).run();
+    }
+  } catch (e) {
+    console.error(
+      "[DB Worker] Failed to ensure columns:",
+      e && e.message ? e.message : e
+    );
+  }
 
   // Categories table
   db.prepare(
@@ -204,10 +232,12 @@ function initializeSchema() {
 }
 
 // JSON-RPC handler
+console.error("[DB Worker] Setting up stdin handler");
 process.stdin.setEncoding("utf8");
 let buffer = "";
 
 process.stdin.on("data", (chunk) => {
+  console.error("[DB Worker] Received stdin data, length:", chunk.length);
   buffer += chunk;
   const lines = buffer.split("\n");
   buffer = lines.pop() || "";
@@ -234,16 +264,7 @@ function handleRequest(req) {
   try {
     let result;
 
-    // Log incoming request for debugging
-    if (method.includes("insertBulk")) {
-      console.error(`[DB Worker] ${method} called with params:`, {
-        paramsLength: params.length,
-        keywordsCount: Array.isArray(params[0])
-          ? params[0].length
-          : "not array",
-        projectId: params[1],
-      });
-    }
+    // Note: suppress verbose logging for bulk insert operations to avoid noisy stderr.
 
     switch (method) {
       // Generic DB methods
@@ -383,9 +404,7 @@ function handleRequest(req) {
         const keywords = params[0]; // array of strings
         const projectId = params[1];
 
-        console.error(
-          `[DB Worker] insertBulk: ${keywords?.length} keywords for project ${projectId}`
-        );
+        // bulk-insert started (verbose stderr logging suppressed)
 
         if (!Array.isArray(keywords)) {
           throw new Error(
@@ -397,37 +416,87 @@ function handleRequest(req) {
           throw new Error("Project ID is required");
         }
 
-        // Use INSERT OR IGNORE to skip duplicates (unique index on project_id, keyword)
-        // Only insert keyword and project_id - other fields have defaults or are optional
-        const insertStmt = db.prepare(
-          "INSERT OR IGNORE INTO keywords (keyword, project_id) VALUES (?, ?)"
-        );
-        let inserted = 0;
-        const insertMany = db.transaction((kws) => {
-          for (const kw of kws) {
-            try {
-              const info = insertStmt.run(kw, projectId);
-              if (info.changes > 0) inserted++;
-            } catch (err) {
-              console.error(
-                `[DB Worker] Failed to insert keyword "${kw}":`,
-                err.message
-              );
-              throw err;
+        // Strategy: use a temporary table to import keywords in batches,
+        // then perform a single INSERT OR IGNORE FROM temp table and a single UPDATE JOIN
+        // to mark `is_stop` based on `stop_words` (substring match).
+
+        try {
+          db.prepare(
+            "CREATE TEMP TABLE IF NOT EXISTS _import_keywords (keyword TEXT)"
+          ).run();
+          db.prepare("DELETE FROM _import_keywords").run();
+
+          const insertTemp = db.prepare(
+            "INSERT INTO _import_keywords (keyword) VALUES (?)"
+          );
+          const batchSize = 500;
+          let total = keywords.length;
+          let insertedTemp = 0;
+
+          const insertTxn = db.transaction((items) => {
+            for (const k of items) {
+              insertTemp.run(k);
+              insertedTemp++;
             }
+          });
+
+          for (let i = 0; i < keywords.length; i += batchSize) {
+            const chunk = keywords.slice(i, i + batchSize);
+            insertTxn(chunk);
+            const rawPercent = (insertedTemp / Math.max(1, total)) * 100;
+            const pct = Math.max(0, Math.min(100, Math.ceil(rawPercent)));
+            // emit progress message for parent process
+            try {
+              console.log(
+                JSON.stringify({
+                  type: "progress",
+                  stage: "import",
+                  inserted: insertedTemp,
+                  total,
+                  percent: pct,
+                })
+              );
+            } catch (_) {}
           }
-        });
-        insertMany(keywords);
-        console.error(
-          `[DB Worker] Successfully inserted ${inserted} new keywords (${
-            keywords.length - inserted
-          } duplicates skipped)`
-        );
-        result = {
-          inserted,
-          total: keywords.length,
-          skipped: keywords.length - inserted,
-        };
+          // No artificial upper bound — percent will naturally reach 100 when insertedTemp == total
+
+          // Bulk insert from temp table into keywords
+          const insertFromTemp = db.prepare(
+            "INSERT OR IGNORE INTO keywords (keyword, project_id, target_query) SELECT keyword, ?, NULL FROM _import_keywords"
+          );
+          const beforeChanges = db
+            .prepare("SELECT COUNT(*) AS c FROM keywords WHERE project_id = ?")
+            .get(projectId).c;
+          const info = insertFromTemp.run(projectId);
+          const afterChanges = db
+            .prepare("SELECT COUNT(*) AS c FROM keywords WHERE project_id = ?")
+            .get(projectId).c;
+          const actuallyInserted = Math.max(0, afterChanges - beforeChanges);
+
+          // Emit final progress after insertion
+          try {
+            console.log(
+              JSON.stringify({
+                type: "progress",
+                stage: "inserted",
+                inserted: actuallyInserted,
+                totalImported: insertedTemp,
+              })
+            );
+          } catch (_) {}
+
+          result = {
+            inserted: actuallyInserted,
+            total: total,
+            skipped: Math.max(0, total - actuallyInserted),
+          };
+        } catch (err) {
+          console.error(
+            "[DB Worker] keywords:insertBulk failed",
+            err && err.message ? err.message : err
+          );
+          throw err;
+        }
         break;
       }
       case "keywords:deleteByProject":

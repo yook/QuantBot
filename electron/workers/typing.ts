@@ -8,7 +8,13 @@ import type { TypingCtx } from './types.js';
 export async function startTypingWorker(ctx: TypingCtx, projectId: number) {
   const { db, getWindow, resolvedDbPath, typingLabelColumn, typingTextColumn, typingDateColumn } = ctx;
   const __dirname = path.dirname(fileURLToPath(import.meta.url));
-  const workerPath = path.join(__dirname, '..', 'worker', 'trainAndClassify.cjs');
+  const devCandidate = path.join(process.cwd(), 'worker', 'trainAndClassify.cjs');
+  const packagedCandidate = process.resourcesPath
+    ? path.join(process.resourcesPath, 'app.asar.unpacked', 'worker', 'trainAndClassify.cjs')
+    : null;
+  const workerPath = fs.existsSync(devCandidate)
+    ? devCandidate
+    : (packagedCandidate && fs.existsSync(packagedCandidate) ? packagedCandidate : devCandidate);
   const win = getWindow();
 
   console.log(`Starting typing worker for project ${projectId}`);
@@ -16,7 +22,7 @@ export async function startTypingWorker(ctx: TypingCtx, projectId: number) {
   try {
     const dateAlias = typingDateColumn ? `${typingDateColumn} AS date,` : '';
     const typingSamples = db.prepare(`SELECT id, project_id, ${typingLabelColumn} AS label, ${typingTextColumn} AS text, ${dateAlias} created_at FROM typing_samples WHERE project_id = ?`).all(projectId);
-    const keywords = db.prepare('SELECT * FROM keywords WHERE project_id = ? AND target_query = 1').all(projectId) as any[];
+    const keywords = db.prepare('SELECT * FROM keywords WHERE project_id = ? AND (target_query IS NULL OR target_query = 1)').all(projectId) as any[];
 
     // Проверяем, задано ли достаточное количество классов в `typing_samples`
     try {
@@ -39,10 +45,10 @@ export async function startTypingWorker(ctx: TypingCtx, projectId: number) {
     }
 
     if (!keywords || keywords.length === 0) {
-      console.warn(`No target keywords (target_query=1) found for project ${projectId}`);
+      console.warn(`Не найдены целевые ключевые слова для проекта ${projectId}`);
       if (win && !win.isDestroyed()) {
-        win.webContents.send('keywords:typing-error', { projectId, message: 'No target keywords (target_query=1) found for project' });
-      }
+        win.webContents.send('keywords:typing-error', { projectId, messageKey: 'keywords.noTargetKeywords', message: 'Не найдены целевые ключевые слова для проекта' });
+        }
       return;
     }
 
@@ -73,11 +79,13 @@ export async function startTypingWorker(ctx: TypingCtx, projectId: number) {
       console.warn('[Typing] Failed to stat workerPath', e);
     }
 
+    let env = Object.assign({}, process.env, {
+      ELECTRON_RUN_AS_NODE: '1',
+      QUANTBOT_DB_DIR: resolvedDbPath ? path.dirname(resolvedDbPath) : undefined,
+    });
+
     const child = spawn(process.execPath, [workerPath, `--projectId=${projectId}`, `--inputFile=${inputPath}`], {
-      env: Object.assign({}, process.env, {
-        ELECTRON_RUN_AS_NODE: '1',
-        QUANTBOT_DB_DIR: resolvedDbPath ? path.dirname(resolvedDbPath) : undefined,
-      }),
+      env,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
 

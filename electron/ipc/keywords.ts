@@ -1,4 +1,5 @@
 import path from 'path';
+import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { ipcMain } from 'electron';
 import type { IpcContext } from './types';
@@ -6,7 +7,7 @@ import { createRequire } from 'module';
 const require = createRequire(import.meta.url);
 
 export function registerKeywordsIpc(ctx: IpcContext) {
-  const { db } = ctx;
+  const { db, getWindow, resolvedDbPath } = ctx;
 
   ipcMain.handle('db:keywords:getAll', async (_event, projectId) => {
     try {
@@ -95,7 +96,7 @@ export function registerKeywordsIpc(ctx: IpcContext) {
 
   ipcMain.handle('db:keywords:insert', async (_event, keyword, projectId, categoryId, _color, disabled) => {
     try {
-      const result = db.prepare('INSERT INTO keywords (keyword, project_id, category_id, disabled) VALUES (?, ?, ?, ?)')
+      const result = db.prepare('INSERT INTO keywords (keyword, project_id, category_id, disabled, target_query) VALUES (?, ?, ?, ?, NULL)')
         .run(keyword, projectId, categoryId, disabled);
       try {
         // Use DB facade to apply stop-words (migrated from legacy socket helpers)
@@ -144,28 +145,110 @@ export function registerKeywordsIpc(ctx: IpcContext) {
       if (!projectId) {
         throw new Error('Project ID is required');
       }
-      const insertStmt = db.prepare('INSERT OR IGNORE INTO keywords (keyword, project_id) VALUES (?, ?)');
-      let inserted = 0;
-      const insertMany = db.transaction((kws: string[]) => {
-        for (const kw of kws) {
-          const info = insertStmt.run(kw, projectId);
-          if (info.changes > 0) inserted++;
-        }
+
+      return await new Promise((resolve, reject) => {
+        const win = getWindow ? getWindow() : undefined;
+        // Resolve worker path: prefer packaged location when present, otherwise fall back to source path.
+        const packagedCandidate = process.resourcesPath
+          ? path.join(process.resourcesPath, 'app.asar.unpacked', 'electron', 'db-worker.cjs')
+          : null;
+        const devCandidate = path.join(process.cwd(), 'electron', 'db-worker.cjs');
+        // Prefer dev worker when available (dev workflow). Fall back to packaged location.
+        const workerPath = fs.existsSync(devCandidate)
+          ? devCandidate
+          : packagedCandidate && fs.existsSync(packagedCandidate)
+          ? packagedCandidate
+          : devCandidate;
+        const child = require('child_process').spawn(process.execPath, [workerPath], {
+          env: Object.assign({}, process.env, {
+            DB_PATH: resolvedDbPath || process.env.DB_PATH,
+            ELECTRON_RUN_AS_NODE: '1',
+          }),
+          stdio: ['pipe', 'pipe', 'pipe'],
+        });
+
+        let childExited = false;
+        let requestSent = false;
+
+        // Write JSON-RPC request to worker stdin after ensuring child is ready
+        const req = { id: 1, method: 'keywords:insertBulk', params: [keywords, projectId] };
+        
+        // Wait a bit for child to initialize, then send request
+        setTimeout(() => {
+          if (childExited) {
+            console.error('[IPC] db-worker exited before sending request');
+            reject(new Error('db-worker exited before request could be sent'));
+            return;
+          }
+          
+          try {
+            console.log('[IPC] Sending request to db-worker:', { method: req.method, paramsCount: req.params.length });
+            child.stdin.write(JSON.stringify(req) + '\n');
+            requestSent = true;
+            console.log('[IPC] Request sent to db-worker successfully');
+          } catch (e: any) {
+            console.error('[IPC] Failed to write to db-worker stdin:', e);
+            if (!childExited) {
+              reject(new Error(`Failed to send request to db-worker: ${e.message}`));
+            }
+          }
+        }, 100); // Small delay to allow child to initialize
+
+        let stdoutBuf = '';
+        child.stdout.setEncoding('utf8');
+        child.stdout.on('data', (chunk: string) => {
+          stdoutBuf += chunk;
+          const lines = stdoutBuf.split('\n');
+          stdoutBuf = lines.pop() || '';
+          for (const line of lines) {
+            if (!line.trim()) continue;
+            try {
+              const obj = JSON.parse(line);
+              // Do not forward worker 'progress' events to renderer to avoid UI spam
+              if (obj && obj.type === 'progress') {
+                continue;
+              }
+              // final JSON-RPC response
+              if (obj && obj.id === 1) {
+                if (obj.error) {
+                  reject(new Error(obj.error));
+                } else {
+                  resolve({ success: true, data: obj.result });
+                }
+              }
+            } catch (e) {
+              // ignore non-json lines
+            }
+          }
+        });
+
+        child.stderr.setEncoding('utf8');
+        child.stderr.on('data', (d: string) => {
+          const text = String(d).trim();
+          console.error('[db-worker stderr]', text);
+          // Filter out informational messages from db-worker to avoid cluttering UI
+          if (text.includes('[DB Worker]')) {
+            // Skip sending these to UI
+            return;
+          }
+          if (win && !win.isDestroyed()) win.webContents.send('keywords:import-progress', { type: 'error', message: text });
+        });
+
+        child.on('error', (err: any) => {
+          childExited = true;
+          console.error('[IPC] db-worker error event:', err);
+          reject(new Error(`db-worker failed to start: ${err.message}`));
+        });
+
+        child.on('close', (code: number) => {
+          childExited = true;
+          if (code !== 0) {
+            reject(new Error(`db-worker exited with code ${code}`));
+          } else if (!requestSent) {
+            reject(new Error('db-worker exited before request was processed'));
+          }
+        });
       });
-      insertMany(keywords);
-      try {
-        const facadePath = path.join(process.env.APP_ROOT || path.join(path.dirname(new URL(import.meta.url).pathname), '..'), 'electron', 'db', 'index.cjs');
-        const dbFacade = require(facadePath);
-        if (dbFacade && dbFacade.keywords && typeof dbFacade.keywords.applyStopWords === 'function') {
-          await dbFacade.keywords.applyStopWords(projectId);
-        } else if (dbFacade && typeof dbFacade.keywordsApplyStopWords === 'function') {
-          await dbFacade.keywordsApplyStopWords(projectId);
-        }
-      } catch (e) {
-        console.error('[IPC] Error applying stop-words after insertBulk:', e);
-      }
-      const result = { inserted, total: keywords.length, skipped: keywords.length - inserted };
-      return { success: true, data: result };
     } catch (error: any) {
       return { success: false, error: error.message };
     }

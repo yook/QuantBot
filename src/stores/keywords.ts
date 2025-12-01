@@ -2,6 +2,7 @@ import { defineStore } from "pinia";
 import { ref, computed } from "vue";
 import { ElMessage } from "element-plus";
 import { ipcClient } from "./socket-client";
+import { i18n } from "../i18n";
 import { useProjectStore } from "./project";
 import type { Keyword, LoadKeywordsOptions } from "../types/schema";
 
@@ -46,6 +47,9 @@ export const useKeywordsStore = defineStore("keywords", () => {
   const categorizationRunning = ref(false);
   const typingRunning = ref(false);
   const clusteringRunning = ref(false);
+  const stopwordsRunning = ref(false);
+  const stopwordsFinished = ref(false);
+  const stopwordsPercent = ref(0);
   const categorizationFinished = ref(false);
   const typingFinished = ref(false);
   const clusteringFinished = ref(false);
@@ -58,6 +62,7 @@ export const useKeywordsStore = defineStore("keywords", () => {
   const targetCategorization = ref(false);
   const targetTyping = ref(false);
   const targetClustering = ref(false);
+  const targetStopwords = ref(false);
 
   function updateOverallProgress() {
     // Учитываем только те процессы, которые пользователь запустил (target*)
@@ -65,6 +70,7 @@ export const useKeywordsStore = defineStore("keywords", () => {
       targetCategorization.value ? categorizationPercent.value : null,
       targetTyping.value ? typingPercent.value : null,
       targetClustering.value ? clusteringPercent.value : null,
+      targetStopwords.value ? stopwordsPercent.value : null,
     ].filter((v) => v !== null) as number[];
 
     if (targets.length === 0) {
@@ -79,12 +85,15 @@ export const useKeywordsStore = defineStore("keywords", () => {
       (targetTyping.value && typingRunning.value) ||
       (targetClustering.value && clusteringRunning.value);
 
+    // include stopwords
+    const anyStopwordsRunning = targetStopwords.value && stopwordsRunning.value;
+
     const allTargetFinished =
       (!targetCategorization.value || categorizationFinished.value) &&
       (!targetTyping.value || typingFinished.value) &&
       (!targetClustering.value || clusteringFinished.value);
 
-    running.value = anyRunning && !allTargetFinished;
+    running.value = (anyRunning || anyStopwordsRunning) && !allTargetFinished;
   }
 
   // Короткое понятное сообщение пользователю при ошибках 429/квоты
@@ -94,12 +103,38 @@ export const useKeywordsStore = defineStore("keywords", () => {
     if (!payload) return 'Произошла ошибка';
     // Support both object payloads and plain strings
     if (typeof payload === 'object') {
+      // Prefer explicit `message` field if present (display raw message text)
+      if (payload.message && typeof payload.message === 'string' && payload.message.trim() !== '') {
+        return payload.message;
+      }
+      // Fallback to messageKey translation if message is not provided
+      if (payload.messageKey && typeof payload.messageKey === 'string') {
+        try {
+          return i18n.global.t(payload.messageKey as any) as string;
+        } catch (e) {
+          // fallback to raw message if translation fails
+        }
+      }
+      // If `message` itself contains a translation key (e.g. 'keywords.noTargetKeywords'), try resolving it
+      if (payload.message && typeof payload.message === 'string' && payload.message.indexOf('.') !== -1 && !/\s/.test(payload.message)) {
+        try {
+          return i18n.global.t(payload.message as any) as string;
+        } catch (e) {
+          // ignore and continue
+        }
+      }
       if (payload.status === 429) return RATE_LIMIT_MESSAGE;
       const msg = payload.message || '';
       if (/429/.test(String(msg)) || /rate limit/i.test(String(msg))) return RATE_LIMIT_MESSAGE;
       return msg || 'Произошла ошибка';
     }
     const msg = String(payload);
+    // If payload is a string and looks like a translation key, try resolving it
+    if (msg.indexOf('.') !== -1 && !/\s/.test(msg)) {
+      try {
+        return i18n.global.t(msg as any) as string;
+      } catch (e) {}
+    }
     if (/429/.test(msg) || /rate limit/i.test(msg)) return RATE_LIMIT_MESSAGE;
     return msg || 'Произошла ошибка';
   }
@@ -143,7 +178,7 @@ export const useKeywordsStore = defineStore("keywords", () => {
   }
 
   async function addKeywords(newKeywords: string) {
-    console.log('[Keywords Store] addKeywords called with:', newKeywords.substring(0, 100) + '...');
+    // logging removed for production: addKeywords called
     
     if (!currentProjectId.value) {
       error.value = "No project selected" as any;
@@ -156,16 +191,13 @@ export const useKeywordsStore = defineStore("keywords", () => {
 
     try {
       // Парсим ключевые слова
-      const parsedKeywords = newKeywords
-        .split(/[,\n]/)
+      let parsedKeywords = newKeywords
+        .split(/[\,\n]/)
         .map((k) => k.trim())
-        .filter((k) => k.length > 0);
+        .filter((k) => k.length > 0)
+        .map((k) => k.toLowerCase());
 
-      console.log('[Keywords Store] Parsed keywords:', {
-        count: parsedKeywords.length,
-        first: parsedKeywords[0],
-        last: parsedKeywords[parsedKeywords.length - 1]
-      });
+      // parsed keywords (logging removed)
 
       if (parsedKeywords.length === 0) {
         ElMessage.warning("Нет ключевых слов для добавления");
@@ -179,7 +211,7 @@ export const useKeywordsStore = defineStore("keywords", () => {
         addProgress.value = 0;
       }
 
-      console.log(`[Keywords Store] Добавление ${parsedKeywords.length} ключевых слов в проект ${currentProjectId.value}`);
+      // adding keywords (logging removed)
       
       // Вызываем IPC метод для массового добавления
       const result = await ipcClient.insertKeywordsBulk(
@@ -187,7 +219,7 @@ export const useKeywordsStore = defineStore("keywords", () => {
         currentProjectId.value as number
       );
 
-      console.log('[Keywords Store] insertKeywordsBulk returned:', result);
+      // insertKeywordsBulk result received
 
       if (result) {
         const { inserted, skipped } = result;
@@ -197,12 +229,16 @@ export const useKeywordsStore = defineStore("keywords", () => {
           ElMessage.success(`Добавлено ${inserted} ключевых слов`);
         }
         // Перезагружаем текущее окно
-        console.log('[Keywords Store] Reloading keywords window...');
         await loadKeywords(currentProjectId.value as number, {
           skip: windowStart.value,
           limit: windowSize.value,
           sort: sort.value,
         });
+        // Дадим прогресс-бару время отобразиться перед сбросом состояния
+        setTimeout(() => {
+          isAddingWithProgress.value = false;
+          addProgress.value = 0;
+        }, 2000);
       } else {
         console.error('[Keywords Store] Result is null or undefined');
         ElMessage.error("Ошибка при добавлении ключевых слов");
@@ -214,9 +250,6 @@ export const useKeywordsStore = defineStore("keywords", () => {
       ElMessage.error(`Ошибка: ${err.message}`);
     } finally {
       loading.value = false;
-      isAddingWithProgress.value = false;
-      addProgress.value = 0;
-      console.log('[Keywords Store] addKeywords finished');
     }
   }
 
@@ -389,6 +422,11 @@ export const useKeywordsStore = defineStore("keywords", () => {
     targetCategorization.value = false;
     targetTyping.value = false;
     targetClustering.value = false;
+    // stopwords
+    stopwordsRunning.value = false;
+    stopwordsFinished.value = false;
+    stopwordsPercent.value = 0;
+    targetStopwords.value = false;
   }
 
   // Запуск всех процессов последовательно (сохранено для удобства)
@@ -409,6 +447,33 @@ export const useKeywordsStore = defineStore("keywords", () => {
       const algorithm = String((projectStore?.data as any)?.clustering_algorithm ?? "components");
       const dbscanEps = Number((projectStore?.data as any)?.clustering_dbscan_eps ?? 0.3);
       const dbscanMinPts = Number((projectStore?.data as any)?.clustering_dbscan_minPts ?? 2);
+
+      // First: apply stop-words if any (run before other processes)
+      try {
+        targetStopwords.value = true;
+        stopwordsRunning.value = true;
+        running.value = true;
+        updateOverallProgress();
+        await ipcClient.startApplyStopwords(Number(currentProjectId.value));
+        stopwordsFinished.value = true;
+        stopwordsRunning.value = false;
+        // reload keywords after applying stopwords in the Start All flow
+        try {
+          if (currentProjectId.value) {
+            await loadKeywords(currentProjectId.value as number, {
+              skip: windowStart.value,
+              limit: windowSize.value,
+              sort: sort.value,
+            });
+          }
+        } catch (e) {
+          console.error('[Keywords Store] Error reloading keywords after startAll stopwords apply', e);
+        }
+      } catch (swErr) {
+        console.error('Error applying stopwords:', swErr);
+        stopwordsRunning.value = false;
+        // proceed with other processes even if stopwords application fails
+      }
 
       await ipcClient.startCategorization(Number(currentProjectId.value));
       categorizationRunning.value = true;
@@ -475,6 +540,41 @@ export const useKeywordsStore = defineStore("keywords", () => {
   typingRunning.value = false;
   running.value = anyProcessRunning();
   ElMessage.error(`Ошибка запуска классификации: ${err.message}`);
+    }
+  }
+
+  // Запуск только применения стоп-слов
+  async function startStopwordsOnly() {
+    if (!currentProjectId.value) {
+      ElMessage.error("Проект не выбран");
+      return;
+    }
+    try {
+      resetProcessState();
+      targetStopwords.value = true;
+      stopwordsRunning.value = true;
+      running.value = true;
+      updateOverallProgress();
+      await ipcClient.startApplyStopwords(Number(currentProjectId.value));
+      stopwordsFinished.value = true;
+      // Reload keywords to reflect applied stop-words
+      try {
+        if (currentProjectId.value) {
+          await loadKeywords(currentProjectId.value as number, {
+            skip: windowStart.value,
+            limit: windowSize.value,
+            sort: sort.value,
+          });
+        }
+      } catch (e) {
+        console.error('[Keywords Store] Error reloading keywords after startStopwordsOnly', e);
+      }
+      ElMessage.success("Применение стоп-слов завершено");
+    } catch (err: any) {
+      console.error("Error applying stopwords:", err);
+      stopwordsRunning.value = false;
+      running.value = anyProcessRunning();
+      ElMessage.error(`Ошибка применения стоп-слов: ${err.message}`);
     }
   }
 
@@ -1071,7 +1171,7 @@ export const useKeywordsStore = defineStore("keywords", () => {
       if (data.projectId === currentProjectId.value) {
         categorizationRunning.value = false;
         running.value = false;
-        ElMessage.error(data.message || "Ошибка категоризации");
+        ElMessage.error(mapErrorMessage(data) || "Ошибка категоризации");
       }
     });
 
@@ -1108,7 +1208,7 @@ export const useKeywordsStore = defineStore("keywords", () => {
       if (data.projectId === currentProjectId.value) {
         typingRunning.value = false;
         running.value = false;
-        ElMessage.error(data.message || "Ошибка типизации");
+        ElMessage.error(mapErrorMessage(data) || "Ошибка типизации");
       }
     });
 
@@ -1157,7 +1257,7 @@ export const useKeywordsStore = defineStore("keywords", () => {
       if (data.projectId === currentProjectId.value) {
         clusteringRunning.value = false;
         running.value = false;
-        ElMessage.error(data.message || "Ошибка кластеризации");
+        ElMessage.error(mapErrorMessage(data) || "Ошибка кластеризации");
       }
     });
 
@@ -1165,7 +1265,7 @@ export const useKeywordsStore = defineStore("keywords", () => {
       // Сбрасываем прогресс при ошибке
       resetAddProgress();
 
-      error.value = data.message;
+      error.value = mapErrorMessage(data);
       loading.value = false;
     });
   }
@@ -1253,6 +1353,49 @@ export const useKeywordsStore = defineStore("keywords", () => {
         ElMessage.error(mapErrorMessage(data));
     });
 
+    // Stop-words apply events (worker streams apply-progress)
+    ipcClient.on('stopwords:apply-progress', (data: any) => {
+      try {
+        if (!data || String(data.projectId) !== String(currentProjectId.value)) return;
+
+        // If worker reported an error object, show it
+        if (data.type === 'error') {
+          stopwordsRunning.value = false;
+          stopwordsFinished.value = true;
+          targetStopwords.value = false;
+          stopwordsPercent.value = 0;
+          updateOverallProgress();
+          ElMessage.error(mapErrorMessage(data));
+          return;
+        }
+
+        stopwordsRunning.value = true;
+        stopwordsPercent.value = Math.max(0, Math.min(100, Number(data.percent) || 0));
+
+        if (stopwordsPercent.value === 100) {
+          stopwordsRunning.value = false;
+          stopwordsFinished.value = true;
+          // Reload keywords window to reflect updated target_query/blocking_rule
+          try {
+            if (currentProjectId.value) {
+              loadKeywords(currentProjectId.value as number, {
+                skip: windowStart.value,
+                limit: windowSize.value,
+                sort: sort.value,
+              });
+            }
+          } catch (e) {
+            console.error('[Keywords Store] Error reloading keywords after stopwords apply', e);
+          }
+        }
+
+        updateOverallProgress();
+      } catch (e) {
+        // ignore handler errors
+        console.error('[Keywords Store] stopwords:apply-progress handler error', e);
+      }
+    });
+
     // Clustering events
     ipcClient.on('keywords:clusters-reset', (data: any) => {
       try {
@@ -1307,7 +1450,31 @@ export const useKeywordsStore = defineStore("keywords", () => {
         targetClustering.value = false;
         clusteringPercent.value = 0;
         updateOverallProgress();
-        ElMessage.error(data.message || "Ошибка кластеризации");
+        ElMessage.error(mapErrorMessage(data) || "Ошибка кластеризации");
+      }
+    });
+
+    // Progress events from db-worker for bulk import
+    ipcClient.on('keywords:import-progress', (data: any) => {
+      try {
+        console.log('[Keywords Store] Received import-progress:', data);
+        // data may be { type: 'progress', stage, inserted, total, percent }
+        if (!data) return;
+        if (data.type === 'error') {
+          addProgressText.value = mapErrorMessage(data) || 'Ошибка';
+          ElMessage.error(mapErrorMessage(data) || 'Ошибка при импорте');
+          return;
+        }
+        // Accept percent even if 0, but only while importing into temp
+        if (data.stage === 'import' && typeof data.percent !== 'undefined') {
+          addProgress.value = Math.max(0, Math.min(100, Number(data.percent) || 0));
+          isAddingWithProgress.value = true;
+        }
+        if (typeof data.inserted !== 'undefined' && typeof data.total !== 'undefined') {
+          addProgressText.value = `${data.inserted} из ${data.total}`;
+        }
+      } catch (e) {
+        console.error('[Keywords Store] Error handling import-progress', e);
       }
     });
 
@@ -1374,6 +1541,7 @@ export const useKeywordsStore = defineStore("keywords", () => {
   startAllProcesses,
   startCategorizationOnly,
   startTypingOnly,
+  startStopwordsOnly,
   startClusteringOnly,
     // New actions/flags
     // startCategorization, // TODO: IPC migration

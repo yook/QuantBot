@@ -38,7 +38,11 @@ async function remove(projectId, idOrKeyword) {
   }
 }
 
-async function applyStopWords(projectId) {
+/**
+ * Apply stop-words for a project.
+ * Optional second argument `onProgress` is a function called with { processed, total, percent }
+ */
+async function applyStopWords(projectId, onProgress) {
   // Read stop-words
   const stopRows = await dbAll(
     "SELECT word FROM stop_words WHERE project_id = ?",
@@ -51,6 +55,8 @@ async function applyStopWords(projectId) {
       "UPDATE keywords SET target_query = 1, blocking_rule = NULL WHERE project_id = ?",
       [projectId]
     );
+    if (typeof onProgress === "function")
+      onProgress({ processed: 0, total: 0, percent: 100 });
     return { updated: 0, total: 0 };
   }
 
@@ -82,7 +88,9 @@ async function applyStopWords(projectId) {
     "UPDATE keywords SET target_query = 0, blocking_rule = ? WHERE id = ?";
   const sqlAllow =
     "UPDATE keywords SET target_query = 1, blocking_rule = NULL WHERE id = ?";
-
+  const total = rows.length;
+  const progressInterval = Math.max(50, Math.floor(total / 100));
+  let processed = 0;
   for (const k of rows) {
     const kw = (k.keyword || "").toString();
     let matchedRule = null;
@@ -110,8 +118,22 @@ async function applyStopWords(projectId) {
     } else {
       await dbRun(sqlAllow, [k.id]);
     }
+    processed += 1;
+    if (
+      typeof onProgress === "function" &&
+      (processed % progressInterval === 0 || processed === total)
+    ) {
+      const percent = Math.round((processed / Math.max(1, total)) * 100);
+      try {
+        onProgress({ processed, total, percent });
+      } catch (_) {}
+    }
   }
-  return { updated, total: rows.length };
+  if (typeof onProgress === "function")
+    try {
+      onProgress({ processed: total, total, percent: 100 });
+    } catch (_) {}
+  return { updated, total };
 }
 
 module.exports = {

@@ -76,19 +76,7 @@
         </ul>
       </div>
       <div class="flex items-center justify-between mt-4">
-        <div v-if="isAddingWithProgress" class="flex items-center gap-3">
-          <el-progress
-            :text-inside="true"
-            :stroke-width="26"
-            :percentage="addProgress"
-          />
-          <span
-            v-if="addProgressText"
-            class="text-sm text-gray-600 dark:text-gray-400"
-          >
-            {{ addProgressText }}
-          </span>
-        </div>
+        <!-- Progress UI removed: worker progress events are no longer forwarded -->
         <div class="ml-auto">
           <el-button
             v-if="!isAddingWithProgress"
@@ -114,10 +102,11 @@
       <DataTableFixed
         :tableColumns="tableColumns"
         :data="stopWords"
-        :totalCount="stopWords.length"
+        :totalCount="stopwordsStore.totalCount"
         :loading="loading"
         :loadingMore="loadingMore"
         :sort="sort"
+        :windowStart="stopwordsStore.windowStart"
         :loadWindow="loadWindow"
         :sortData="sortData"
         :loadData="loadData"
@@ -132,7 +121,7 @@
 </template>
 
 <script setup>
-import { ref, computed, watch } from "vue";
+import { ref, computed, watch, onUnmounted } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { markRaw } from "vue";
 import { Delete, InfoFilled } from "@element-plus/icons-vue";
@@ -141,12 +130,21 @@ import saveColumnOrder from "../../../utils/columnOrder";
 import ipcClient from "../../../stores/socket-client";
 import { useProjectStore } from "../../../stores/project";
 import { useKeywordsStore } from "../../../stores/keywords";
+import { useStopwordsStore } from "../../../stores/stopwords";
 
 const project = useProjectStore();
 const keywordsStore = useKeywordsStore();
+const stopwordsStore = useStopwordsStore();
 
 const stopWordsText = ref("");
-const stopWords = ref([]);
+// Use store data instead of local ref
+const stopWords = computed(() => stopwordsStore.stopwords);
+
+const isMounted = ref(true);
+
+onUnmounted(() => {
+  isMounted.value = false;
+});
 
 // Computed helpers to show regex hints and validate regex lines
 const inputLines = computed(() => {
@@ -173,13 +171,15 @@ const invalidRegexLines = computed(() => {
   });
 });
 
-// UI / progress flags (по аналогии с categoriesStore)
-const isAddingWithProgress = ref(false);
-const addProgress = ref(0);
-const addProgressText = ref("");
-const loading = ref(false);
-const loadingMore = ref(false);
-const sort = ref({});
+// UI / progress flags (use store values)
+const isAddingWithProgress = computed(
+  () => stopwordsStore.isAddingWithProgress
+);
+const addProgress = computed(() => stopwordsStore.addProgress);
+const addProgressText = computed(() => stopwordsStore.addProgressText);
+const loading = computed(() => stopwordsStore.loading);
+const loadingMore = computed(() => stopwordsStore.loadingMore);
+const sort = computed(() => stopwordsStore.sort);
 
 // Настройка колонок для DataTableFixed
 const tableColumns = ref([
@@ -190,26 +190,14 @@ const tableColumns = ref([
 
 // Data loading helpers
 async function loadWindow(start) {
-  // For stopwords we load all data
-  await loadData();
+  await stopwordsStore.loadWindow(start);
 }
 function sortData(newSort) {
-  sort.value = newSort;
-  // server-side sorting can be added if needed
+  stopwordsStore.sortStopwords(newSort);
 }
 async function loadData() {
   if (!currentProjectId.value) return;
-
-  loading.value = true;
-  try {
-    const data = await ipcClient.getStopwordsAll(currentProjectId.value);
-    stopWords.value = data || [];
-  } catch (error) {
-    console.error("Error loading stopwords:", error);
-    ElMessage.error("Ошибка загрузки стоп-слов");
-  } finally {
-    loading.value = false;
-  }
+  await stopwordsStore.loadStopwords(currentProjectId.value);
 }
 
 const currentProjectId = ref(null);
@@ -271,53 +259,23 @@ async function addStopWords() {
     return;
   }
 
-  isAddingWithProgress.value = true;
-  addProgress.value = 0;
-  addProgressText.value = `Добавление ${items.length} слов...`;
-
-  // Subscribe to progress events
-  const progressHandler = (payload) => {
-    try {
-      if (!payload || typeof payload !== 'object') return;
-      if (payload.type === 'progress') {
-        addProgress.value = payload.percent || addProgress.value;
-        if (payload.stage) addProgressText.value = `${payload.stage}: ${payload.inserted || payload.processed || ''}`;
-      } else if (payload.type === 'started') {
-        addProgressText.value = `Запущено: ${payload.total || items.length}`;
-      } else if (payload.type === 'finished') {
-        addProgress.value = 100;
-        addProgressText.value = `Готово`; 
-      } else if (payload.type === 'error') {
-        ElMessage.error(payload.message || 'Ошибка при импорте');
-      }
-    } catch (e) { console.error('progress handler', e); }
-  };
-
-  ipcClient.on('stopwords:progress', progressHandler);
-
   try {
-    // Call bulk import; ipc handler will spawn worker and stream progress via 'stopwords:progress'
-    await ipcClient.importStopwords(currentProjectId.value, items, true);
+    // Normalize stop-words: lowercase plain words, preserve regex lines (/pattern/flags)
+    const normalized = items.map((it) => {
+      const trimmed = String(it).trim();
+      if (/^\/.*\/[gimsuy]*$/.test(trimmed)) return trimmed; // regex - keep as is
+      return trimmed.toLowerCase();
+    });
 
-    ElMessage.success(`Импорт запущен и завершён`);
+    // Join back to text format for the store
+    const text = normalized.join("\n");
+
+    // Use store method
+    await stopwordsStore.addStopwords(text);
     stopWordsText.value = "";
-    await loadData();
-    // Reload keywords to reflect new stopwords
-    if (keywordsStore.currentProjectId) {
-      await keywordsStore.loadKeywords(keywordsStore.currentProjectId, {
-        skip: 0,
-        limit: keywordsStore.windowSize,
-        sort: keywordsStore.sort,
-      });
-    }
   } catch (error) {
-    console.error("Error importing stopwords:", error);
+    console.error("Error adding stopwords:", error);
     ElMessage.error("Ошибка добавления стоп-слов");
-  } finally {
-    ipcClient.off('stopwords:progress', progressHandler);
-    isAddingWithProgress.value = false;
-    addProgress.value = 0;
-    addProgressText.value = "";
   }
 }
 
@@ -335,9 +293,7 @@ async function removeRow(row) {
       }
     );
 
-    await ipcClient.deleteStopword(row.id);
-    ElMessage.success("Стоп-слово удалено");
-    await loadData();
+    await stopwordsStore.deleteStopword(row.id);
 
     // Перезагружаем данные keywords, чтобы обновились колонки "Целевой запрос" и "Правило исключения"
     if (keywordsStore.currentProjectId) {
@@ -370,9 +326,7 @@ async function deleteAll() {
       }
     );
 
-    await ipcClient.deleteStopwordsByProject(currentProjectId.value);
-    ElMessage.success("Все стоп-слова удалены");
-    await loadData();
+    await stopwordsStore.deleteAllStopwords();
 
     // Перезагружаем данные keywords, чтобы обновились колонки "Целевой запрос" и "Правило исключения"
     if (keywordsStore.currentProjectId) {
@@ -395,11 +349,16 @@ async function deleteAll() {
 watch(
   () => project.data?.id,
   async (newId) => {
+    if (!isMounted.value) return;
+
+    // Очищаем поле при смене проекта
+    stopWordsText.value = "";
     currentProjectId.value = newId;
+    stopwordsStore.setCurrentProjectId(newId);
     if (newId) {
       await loadData();
     } else {
-      stopWords.value = [];
+      stopwordsStore.initializeState();
     }
   },
   { immediate: true }

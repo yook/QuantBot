@@ -15,14 +15,46 @@
 
 */
 
+// (Proxy support removed)
 const axios = require("axios");
 const path = require("path");
+const fs = require("fs");
 // Import DB functions for caching and simple queries
-const {
-  embeddingsCacheGet,
-  embeddingsCachePut,
-  dbAll,
-} = require("../electron/db/index.cjs");
+function resolveDbFacade() {
+  const candidates = [];
+  try {
+    candidates.push(path.join(__dirname, "..", "electron", "db", "index.cjs"));
+  } catch (_) {}
+  try {
+    if (process.resourcesPath)
+      candidates.push(
+        path.join(
+          process.resourcesPath,
+          "app.asar.unpacked",
+          "electron",
+          "db",
+          "index.cjs"
+        )
+      );
+  } catch (_) {}
+  try {
+    candidates.push(path.join(process.cwd(), "electron", "db", "index.cjs"));
+  } catch (_) {}
+  let facadePath = null;
+  for (const c of candidates) {
+    try {
+      if (c && fs.existsSync(c)) {
+        facadePath = c;
+        break;
+      }
+    } catch (_) {}
+  }
+  if (!facadePath) facadePath = candidates[0];
+  return require(facadePath);
+}
+
+const dbFacade = resolveDbFacade();
+const { embeddingsCacheGet, embeddingsCachePut, dbAll } = dbFacade;
 const OPENAI_EMBED_URL = "https://api.openai.com/v1/embeddings";
 const MODEL = "text-embedding-3-small";
 
@@ -109,23 +141,66 @@ async function fetchEmbeddings(texts) {
         process.exit(1);
       }
 
-      const resp = await axios.post(
-        OPENAI_EMBED_URL,
-        { model: MODEL, input: toFetch },
-        { headers: { Authorization: `Bearer ${key}` } }
-      );
-      if (resp.data && resp.data.data) {
-        const fetchedEmbeddings = resp.data.data.map((d) => d.embedding);
-        // Save to cache and assign to results
-        for (let j = 0; j < fetchedEmbeddings.length; j++) {
-          const embedding = fetchedEmbeddings[j];
-          const text = toFetch[j];
-          const index = toFetchIndices[j];
-          results[index] = embedding;
-          // Save to cache
-          await embeddingsCachePut(text, embedding, MODEL);
-        }
+      // Use a simple axios options object with Authorization header
+      let axiosOpts = { headers: { Authorization: `Bearer ${key}` } };
+
+      // Chunk requests to avoid exceeding token / input limits. Allow override via
+      // environment variable `EMBEDDING_BATCH_SIZE` (number of texts per request).
+      // Use same default as other workers (trainAndClassify) to avoid too-large requests
+      const defaultBatchSize = Number(process.env.EMBEDDING_BATCH_SIZE) || 64;
+      const chunks = await chunkArray(toFetch, defaultBatchSize);
+      const indexChunks = await chunkArray(toFetchIndices, defaultBatchSize);
+      // helper to emit progress JSON lines on stdout so parent process can forward to UI
+      function emitProgress(obj) {
+        try {
+          process.stdout.write(JSON.stringify(obj) + "\n");
+        } catch (_) {}
       }
+
+      for (let ci = 0; ci < chunks.length; ci++) {
+        const chunk = chunks[ci];
+        const idxChunk = indexChunks[ci] || [];
+        try {
+          const resp = await axios.post(
+            OPENAI_EMBED_URL,
+            { model: MODEL, input: chunk },
+            axiosOpts
+          );
+          if (resp.data && resp.data.data) {
+            const fetchedEmbeddings = resp.data.data.map((d) => d.embedding);
+            for (let j = 0; j < fetchedEmbeddings.length; j++) {
+              const embedding = fetchedEmbeddings[j];
+              const text = chunk[j];
+              const index = idxChunk[j];
+              if (typeof index === "number") results[index] = embedding;
+              try {
+                await embeddingsCachePut(text, embedding, MODEL);
+              } catch (_) {}
+            }
+          }
+        } catch (errChunk) {
+          const respData =
+            errChunk && errChunk.response && errChunk.response.data;
+          console.error(
+            "OpenAI embeddings chunk error:",
+            respData || (errChunk && errChunk.message) || errChunk
+          );
+          // Re-throw to be handled by outer catch so caller sees overall failure
+          throw errChunk;
+        }
+        // Emit progress after this chunk
+        try {
+          const fetchedSoFar = Math.min((ci + 1) * defaultBatchSize, toFetch.length);
+          emitProgress({ type: 'progress', stage: 'embeddings', fetched: fetchedSoFar, total: toFetch.length });
+        } catch (_) {}
+        // Small delay between chunk requests to reduce burstiness
+        if (ci < chunks.length - 1)
+          await new Promise((r) =>
+            setTimeout(r, Number(process.env.EMBEDDING_CHUNK_DELAY_MS) || 50)
+          );
+      }
+      // Final progress emit
+      try { emitProgress({ type: 'progress', stage: 'embeddings', fetched: toFetch.length, total: toFetch.length }); } catch (_) {}
     } catch (err) {
       // Detect common auth / invalid key errors and print a clearer message
       const respData = err && err.response && err.response.data;
@@ -211,7 +286,7 @@ async function main() {
         const placeholders = ids.map(() => "?").join(",");
         const params = [projectId, ...ids];
         const dbKeywords = await dbAll(
-          `SELECT id, keyword FROM keywords WHERE project_id = ? AND id IN (${placeholders}) AND target_query = 1 ORDER BY id`,
+          `SELECT id, keyword FROM keywords WHERE project_id = ? AND id IN (${placeholders}) AND (target_query IS NULL OR target_query = 1) ORDER BY id`,
           params
         );
         if (Array.isArray(dbKeywords) && dbKeywords.length > 0) {
@@ -226,13 +301,23 @@ async function main() {
         } else {
           // Fallback to input-flag filtering if DB returned nothing
           keywords = keywords.filter(
-            (k) => k && (k.target_query === 1 || k.target_query === true)
+            (k) =>
+              k &&
+              (k.target_query === undefined ||
+                k.target_query === null ||
+                k.target_query === 1 ||
+                k.target_query === true)
           );
         }
       } else {
         // No ids in input: fall back to input flag filtering
         keywords = keywords.filter(
-          (k) => k && (k.target_query === 1 || k.target_query === true)
+          (k) =>
+            k &&
+            (k.target_query === undefined ||
+              k.target_query === null ||
+              k.target_query === 1 ||
+              k.target_query === true)
         );
       }
       console.error(

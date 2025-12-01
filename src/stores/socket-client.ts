@@ -94,13 +94,25 @@ class IPCClient {
     return result.success ? result.data : [];
   }
 
+  async getCategoriesWindow(projectId: number, skip: number, limit: number, sort: Record<string, number> = {}, searchQuery: string = '') {
+    // Serialize sort to plain object to avoid IPC cloning errors
+    const plainSort = JSON.parse(JSON.stringify(sort));
+    const result = await this.ipc.invoke('db:categories:getWindow', projectId, skip, limit, plainSort, searchQuery);
+    return result.success ? { data: result.data, total: result.total } : null;
+  }
+
   async insertCategory(name: string, projectId: number) {
     const result = await this.ipc.invoke('db:categories:insert', name, projectId);
     return result.success ? result.data : null;
   }
 
-  async updateCategory(name: string, id: number) {
-    const result = await this.ipc.invoke('db:categories:update', name, id);
+  async insertCategoriesBulk(categories: string[], projectId: number) {
+    const result = await this.ipc.invoke('db:categories:insertBulk', categories, projectId);
+    return result.success ? result.data : null;
+  }
+
+  async deleteCategoriesByProject(projectId: number) {
+    const result = await this.ipc.invoke('db:categories:deleteByProject', projectId);
     return result.success ? result.data : null;
   }
 
@@ -137,6 +149,13 @@ class IPCClient {
   async getStopwordsAll(projectId: number) {
     const result = await this.ipc.invoke('db:stopwords:getAll', projectId);
     return result.success ? result.data : [];
+  }
+
+  async getStopwordsWindow(projectId: number, skip: number, limit: number, sort: Record<string, number> = {}, searchQuery: string = '') {
+    // Serialize sort to plain object to avoid IPC cloning errors
+    const plainSort = JSON.parse(JSON.stringify(sort));
+    const result = await this.ipc.invoke('db:stopwords:getWindow', projectId, skip, limit, plainSort, searchQuery);
+    return result.success ? { data: result.data, total: result.total } : null;
   }
 
   async insertStopword(projectId: number, word: string) {
@@ -180,6 +199,16 @@ class IPCClient {
   async startTyping(projectId: number) {
     const result = await this.ipc.invoke('keywords:start-typing', projectId);
     return result.success ? result.data : null;
+  }
+
+  async startApplyStopwords(projectId: number) {
+    try {
+      const result = await this.ipc.invoke('stopwords:apply', { projectId, dbPath: null });
+      return result && result.ok ? result : null;
+    } catch (err) {
+      console.error('[IPC Client] startApplyStopwords error:', err);
+      throw err;
+    }
   }
 
   async startClustering(projectId: number, algorithm: string, eps: number, minPts?: number) {
@@ -347,14 +376,13 @@ export const socket: IpcSocket = {
     try {
       switch (eventName) {
         case 'integrations:get':
-          ipcClient['ipc']?.invoke('integrations:get', arg0.projectId ?? null, arg0.service);
-          break;
+          return ipcClient['ipc']?.invoke('integrations:get', arg0.projectId ?? null, arg0.service);
         case 'integrations:setKey':
-          ipcClient['ipc']?.invoke('integrations:setKey', arg0.projectId ?? null, arg0.service, arg0.key);
-          break;
+          return ipcClient['ipc']?.invoke('integrations:setKey', arg0.projectId ?? null, arg0.service, arg0.key);
+        // Proxy-related events removed
         case 'integrations:delete':
-          ipcClient['ipc']?.invoke('integrations:delete', arg0.projectId ?? null, arg0.service);
-          break;
+          return ipcClient['ipc']?.invoke('integrations:delete', arg0.projectId ?? null, arg0.service);
+        
         case 'get-embeddings-cache-size':
           try {
             ipcClient['ipc']?.invoke('embeddings:getCacheSize').then((res: any) => {

@@ -2,17 +2,17 @@ import { defineStore } from "pinia";
 import { ref, computed } from "vue";
 import { ElMessage } from "element-plus";
 import ipcClient from "./socket-client";
-import type { Category } from "../types/schema";
+import type { Stopword } from "../types/schema";
 
-interface LoadCategoriesOptions {
+interface LoadStopwordsOptions {
   skip?: number;
   limit?: number;
   sort?: Record<string, number>;
 }
 
-export const useCategoriesStore = defineStore("categories", () => {
+export const useStopwordsStore = defineStore("stopwords", () => {
   // State
-  const categories = ref<Category[]>([]);
+  const stopwords = ref<Stopword[]>([]);
   const loading = ref<boolean>(false);
   const error = ref<string | null>(null);
   const currentProjectId = ref<string | number | null>(null);
@@ -22,7 +22,6 @@ export const useCategoriesStore = defineStore("categories", () => {
   const pageSize = ref<number>(100);
 
   // Параметры сортировки
-  // Используем единый числовой формат: { columnName: 1 } где 1 = ASC, -1 = DESC
   const sort = ref<Record<string, number>>({}); // Объект сортировки в числовом формате
 
   // Новые параметры для окна данных
@@ -32,21 +31,20 @@ export const useCategoriesStore = defineStore("categories", () => {
   const visibleStart = ref(0); // Начало видимой области в окне
   const loadingMore = ref(false); // Флаг загрузки дополнительных данных
 
-  // Прогресс добавления категорий
+  // Прогресс добавления стоп-слов
   const addProgress = ref(0); // Процент выполнения (0-100)
   const addProgressText = ref(""); // Текст прогресса
   const isAddingWithProgress = ref(false); // Флаг показа прогресса
 
   // Getters
-  const categoryCount = computed(() => categories.value?.length || 0);
+  const stopwordCount = computed(() => stopwords.value?.length || 0);
   const isEmpty = computed(
-    () => !categories.value || categories.value.length === 0
+    () => !stopwords.value || stopwords.value.length === 0
   );
 
   // Actions
   function initializeState() {
-    // Гарантируем начальное состояние
-    setCategories([]);
+    setStopwords([]);
     loading.value = false;
     error.value = null;
     currentProjectId.value = null;
@@ -62,8 +60,8 @@ export const useCategoriesStore = defineStore("categories", () => {
     loadingMore.value = false;
   }
 
-  function setCategories(newCategories: any) {
-    categories.value = Array.isArray(newCategories) ? newCategories : [];
+  function setStopwords(newStopwords: any) {
+    stopwords.value = Array.isArray(newStopwords) ? newStopwords : [];
   }
 
   function setLoading(state: boolean) {
@@ -104,17 +102,7 @@ export const useCategoriesStore = defineStore("categories", () => {
     isAddingWithProgress.value = false;
   }
 
-  function setAddProgress(
-    progress: number,
-    text: string = "",
-    showProgress: boolean = false
-  ) {
-    addProgress.value = progress;
-    addProgressText.value = text;
-    isAddingWithProgress.value = showProgress;
-  }
-
-  async function loadCategories(projectId: string | number, options?: LoadCategoriesOptions) {
+  async function loadStopwords(projectId: string | number, options?: LoadStopwordsOptions) {
     if (!options) options = {};
     const skip = options.skip || 0;
     const limit = options.limit || windowSize.value;
@@ -122,35 +110,35 @@ export const useCategoriesStore = defineStore("categories", () => {
 
     try {
       loading.value = true;
-      const result = await ipcClient.getCategoriesWindow(Number(projectId), skip, limit, sortOptions);
+      const result = await ipcClient.getStopwordsWindow(Number(projectId), skip, limit, sortOptions);
       if (result) {
-        setCategories(result.data || []);
+        setStopwords(result.data || []);
         setTotalCount(result.total || 0);
         setHasMore((result.data?.length || 0) >= limit);
         setCurrentSkip(skip);
         setWindowStart(skip); // Устанавливаем windowStart
       } else {
-        setCategories([]);
+        setStopwords([]);
         setTotalCount(0);
         setHasMore(false);
       }
       setError(null);
     } catch (err: any) {
-      console.error("Error loading categories:", err);
+      console.error("Error loading stopwords:", err);
       setError(err.message);
-      ElMessage.error(`Ошибка загрузки категорий: ${err.message}`);
+      ElMessage.error(`Ошибка загрузки стоп-слов: ${err.message}`);
     } finally {
       loading.value = false;
     }
   }
 
-  async function sortCategories(options: Record<string, number>) {
-    setSort(options);
+  async function sortStopwords(newSort: Record<string, number>) {
+    setSort(newSort);
     if (!currentProjectId.value) return;
-    await loadCategories(currentProjectId.value, {
+    await loadStopwords(currentProjectId.value, {
       skip: windowStart.value,
       limit: windowSize.value,
-      sort: options,
+      sort: newSort,
     });
   }
 
@@ -158,7 +146,7 @@ export const useCategoriesStore = defineStore("categories", () => {
     if (!currentProjectId.value) return;
     loadingMore.value = true;
     try {
-      await loadCategories(currentProjectId.value, {
+      await loadStopwords(currentProjectId.value, {
         skip: newWindowStart,
         limit: windowSize.value,
         sort: sort.value,
@@ -168,8 +156,7 @@ export const useCategoriesStore = defineStore("categories", () => {
     }
   }
 
-  // Добавление категорий
-  async function addCategories(categoriesText: string) {
+  async function addStopwords(text: string) {
     if (!currentProjectId.value) {
       error.value = "No project selected";
       return;
@@ -179,39 +166,41 @@ export const useCategoriesStore = defineStore("categories", () => {
     error.value = null;
 
     try {
-      // Парсим категории
-      let parsedCategories = categoriesText
+      // Парсим стоп-слова
+      let parsedStopwords = text
         .split(/[\,\n]/)
         .map((k) => k.trim())
-        .filter((k) => k.length > 0);
+        .filter((k) => k.length > 0)
+        .map((k) => k.toLowerCase());
 
-      if (parsedCategories.length === 0) {
-        ElMessage.warning("Нет категорий для добавления");
+      if (parsedStopwords.length === 0) {
+        ElMessage.warning("Нет стоп-слов для добавления");
         loading.value = false;
         return;
       }
 
       // Если больше 20000 записей, показываем прогресс
-      if (parsedCategories.length > 20000) {
+      if (parsedStopwords.length > 20000) {
         isAddingWithProgress.value = true;
         addProgress.value = 0;
       }
 
       // Вызываем IPC метод для массового добавления
-      const result = await ipcClient.insertCategoriesBulk(
-        parsedCategories,
-        currentProjectId.value as number
+      const result = await ipcClient.importStopwords(
+        currentProjectId.value as number,
+        parsedStopwords,
+        true
       );
 
       if (result) {
         const { inserted, skipped } = result;
         if (skipped > 0) {
-          ElMessage.success(`Добавлено ${inserted} новых категорий (${skipped} дубликатов пропущено)`);
+          ElMessage.success(`Добавлено ${inserted} новых стоп-слов (${skipped} дубликатов пропущено)`);
         } else {
-          ElMessage.success(`Добавлено ${inserted} категорий`);
+          ElMessage.success(`Добавлено ${inserted} стоп-слов`);
         }
         // Перезагружаем текущее окно
-        await loadCategories(currentProjectId.value, {
+        await loadStopwords(currentProjectId.value, {
           skip: windowStart.value,
           limit: windowSize.value,
           sort: sort.value,
@@ -223,10 +212,10 @@ export const useCategoriesStore = defineStore("categories", () => {
         }, 2000);
       } else {
         console.error("Result is null or undefined");
-        ElMessage.error("Ошибка при добавлении категорий");
+        ElMessage.error("Ошибка при добавлении стоп-слов");
       }
     } catch (err: any) {
-      console.error("Error adding categories:", err);
+      console.error("Error adding stopwords:", err);
       error.value = err.message;
       ElMessage.error(`Ошибка: ${err.message}`);
     } finally {
@@ -234,34 +223,9 @@ export const useCategoriesStore = defineStore("categories", () => {
     }
   }
 
-  // Очистка всех категорий проекта
-  async function clearCategories() {
-    if (!currentProjectId.value) {
-      console.error("No current project ID set");
-      return;
-    }
 
-    try {
-      const result = await ipcClient.deleteCategoriesByProject(Number(currentProjectId.value));
-      if (result !== null) {
-        ElMessage.success("Все категории удалены");
-        // Перезагружаем
-        await loadCategories(currentProjectId.value, {
-          skip: 0,
-          limit: windowSize.value,
-          sort: sort.value,
-        });
-      } else {
-        ElMessage.error("Ошибка при удалении");
-      }
-    } catch (error: any) {
-      console.error("Error clearing categories:", error);
-      ElMessage.error(`Ошибка: ${error.message}`);
-    }
-  }
 
-  // Удалить одну категорию по id
-  async function deleteCategory(id: number | string) {
+  async function deleteStopword(id: number | string) {
     if (!currentProjectId.value) {
       console.error("No current project ID set");
       ElMessage.error("Проект не выбран");
@@ -269,34 +233,61 @@ export const useCategoriesStore = defineStore("categories", () => {
     }
 
     if (!id) {
-      console.error("No id provided to deleteCategory");
+      console.error("No id provided to deleteStopword");
       return;
     }
 
     try {
-      await ipcClient.deleteCategory(Number(id));
-      ElMessage.success("Категория удалена");
-      // Перезагружаем текущее окно
-      await loadCategories(currentProjectId.value, {
-        skip: windowStart.value,
-        limit: windowSize.value,
-        sort: sort.value,
-      });
-    } catch (error: any) {
-      console.error("Error deleting category:", error);
-      ElMessage.error(`Ошибка: ${error.message}`);
+      console.log("Store: deleting stopword with id:", id);
+      const result = await ipcClient.deleteStopword(Number(id));
+
+      if (result !== null) {
+        ElMessage.success("Стоп-слово удалено");
+        // Перезагружаем текущее окно
+        await loadStopwords(currentProjectId.value, {
+          skip: windowStart.value,
+          limit: windowSize.value,
+          sort: sort.value,
+        });
+      } else {
+        ElMessage.error("Ошибка при удалении");
+      }
+    } catch (err: any) {
+      console.error("Error deleting stopword:", err);
+      ElMessage.error(`Ошибка: ${err.message}`);
     }
   }
 
-  // Удалить все категории в текущем проекте
-  async function deleteAllCategories() {
-    await clearCategories();
+  async function deleteAllStopwords() {
+    if (!currentProjectId.value) {
+      ElMessage.error("Проект не выбран");
+      return;
+    }
+
+    try {
+      const result = await ipcClient.deleteStopwordsByProject(Number(currentProjectId.value));
+      if (result !== null) {
+        ElMessage.success("Все стоп-слова удалены");
+        // Перезагружаем
+        await loadStopwords(currentProjectId.value, {
+          skip: 0,
+          limit: windowSize.value,
+          sort: sort.value,
+        });
+      } else {
+        ElMessage.error("Ошибка при удалении");
+      }
+    } catch (err: any) {
+      console.error("Error deleting all stopwords:", err);
+      ElMessage.error(`Ошибка: ${err.message}`);
+    }
   }
 
   return {
     // State
-    categories,
+    stopwords,
     loading,
+    loadingMore,
     error,
     currentProjectId,
     totalCount,
@@ -304,22 +295,19 @@ export const useCategoriesStore = defineStore("categories", () => {
     currentSkip,
     pageSize,
     sort,
-    addProgress,
-    addProgressText,
-    isAddingWithProgress,
     windowSize,
     bufferSize,
     windowStart,
     visibleStart,
-    loadingMore,
-
+    addProgress,
+    addProgressText,
+    isAddingWithProgress,
     // Getters
-    categoryCount,
+    stopwordCount,
     isEmpty,
-
     // Actions
     initializeState,
-    setCategories,
+    setStopwords,
     setLoading,
     setError,
     setCurrentProjectId,
@@ -329,13 +317,11 @@ export const useCategoriesStore = defineStore("categories", () => {
     setWindowStart,
     setSort,
     resetAddProgress,
-    setAddProgress,
-    loadCategories,
-    sortCategories,
+    loadStopwords,
     loadWindow,
-    addCategories,
-    clearCategories,
-    deleteCategory,
-    deleteAllCategories,
+    sortStopwords,
+    addStopwords,
+    deleteStopword,
+    deleteAllStopwords,
   };
 });
