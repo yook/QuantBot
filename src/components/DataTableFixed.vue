@@ -705,15 +705,19 @@ const showLoadingMore = computed(() => {
 });
 
 // Новое вычисляемое свойство для столбцов таблицы с номером строки
-const tableColumnsWithRowNumber = computed(() => [
-  {
-    prop: "_rowNumber",
-    name: "#",
-    width: 35,
-    formatter: (_, __, rowIndex) => rowIndex + 1, // Форматируем номер строки
-  },
-  ...props.tableColumns,
-]);
+const tableColumnsWithRowNumber = computed(() => {
+  // Defensive: ensure props.tableColumns is iterable (array). If not, fall back to empty array.
+  const cols = Array.isArray(props.tableColumns) ? props.tableColumns : [];
+  return [
+    {
+      prop: "_rowNumber",
+      name: "#",
+      width: 35,
+      formatter: (_, __, rowIndex) => rowIndex + 1, // Формируем номер строки
+    },
+    ...cols,
+  ];
+});
 
 function formatCellValue(value, columnProp, row = null) {
   try {

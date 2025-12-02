@@ -96,8 +96,44 @@ export async function startCategorizationWorker(ctx: CategorizationCtx, projectI
 
     const tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'categorization-'));
     const inputPath = path.join(tmpDir, `input-${Date.now()}.json`);
-    const input = JSON.stringify({ categories: categories || [], keywords });
-    await fs.promises.writeFile(inputPath, input, 'utf8');
+
+    // Stream the input to avoid creating a huge string in memory
+    const keywordCount = keywords.length;
+    const avgEmbeddingSize = keywords[0]?.embedding?.length || 1536;
+    const estimatedSizeMB = Math.round((keywordCount * avgEmbeddingSize * 8) / (1024 * 1024));
+    console.log(`[categorization] Writing ${keywordCount} keywords (~${estimatedSizeMB} MB estimated) to temp file...`);
+
+    try {
+      const writeStream = fs.createWriteStream(inputPath, { encoding: 'utf8' });
+      await new Promise<void>((resolve, reject) => {
+        writeStream.on('error', reject);
+        writeStream.on('finish', resolve);
+
+        writeStream.write('{"categories":');
+        writeStream.write(JSON.stringify(categories || []));
+        writeStream.write(',"keywords":[');
+        for (let i = 0; i < keywords.length; i++) {
+          if (i > 0) writeStream.write(',');
+          writeStream.write(JSON.stringify(keywords[i]));
+        }
+        writeStream.write(']');
+        writeStream.write('}');
+        writeStream.end();
+      });
+      console.log(`[categorization] Successfully wrote input file: ${inputPath}`);
+    } catch (writeErr: any) {
+      console.error('[categorization] Failed to write input file:', writeErr?.message || writeErr);
+      if (win && !win.isDestroyed()) {
+        win.webContents.send('keywords:categorization-error', {
+          projectId,
+          message: `Не удалось подготовить данные для категоризации (примерный размер: ~${estimatedSizeMB} MB). ${writeErr?.message || 'Unknown error'}`,
+          status: 'WRITE_ERROR',
+          debug: { keywordCount, estimatedSizeMB, error: writeErr?.message }
+        });
+      }
+      try { await fs.promises.rm(tmpDir, { recursive: true, force: true }); } catch {}
+      return;
+    }
 
     let env = Object.assign({}, process.env, {
       ELECTRON_RUN_AS_NODE: '1',

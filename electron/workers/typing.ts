@@ -60,8 +60,44 @@ export async function startTypingWorker(ctx: TypingCtx, projectId: number) {
 
     const tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'typing-'));
     const inputPath = path.join(tmpDir, `input-${Date.now()}.json`);
-    const input = JSON.stringify({ typingSamples: typingSamples || [], keywords: keywords || [] });
-    await fs.promises.writeFile(inputPath, input, 'utf8');
+
+    // Stream the input to avoid creating a huge string in memory
+    const keywordCount = (keywords || []).length;
+    const avgEmbeddingSize = (keywords && keywords[0]?.embedding?.length) || 1536;
+    const estimatedSizeMB = Math.round((keywordCount * avgEmbeddingSize * 8) / (1024 * 1024));
+    console.log(`[typing] Writing ${keywordCount} keywords (~${estimatedSizeMB} MB estimated) to temp file...`);
+
+    try {
+      const writeStream = fs.createWriteStream(inputPath, { encoding: 'utf8' });
+      await new Promise<void>((resolve, reject) => {
+        writeStream.on('error', reject);
+        writeStream.on('finish', resolve);
+
+        writeStream.write('{"typingSamples":');
+        writeStream.write(JSON.stringify(typingSamples || []));
+        writeStream.write(',"keywords":[');
+        for (let i = 0; i < (keywords || []).length; i++) {
+          if (i > 0) writeStream.write(',');
+          writeStream.write(JSON.stringify(keywords[i]));
+        }
+        writeStream.write(']');
+        writeStream.write('}');
+        writeStream.end();
+      });
+      console.log(`[typing] Successfully wrote input file: ${inputPath}`);
+    } catch (writeErr: any) {
+      console.error('[typing] Failed to write input file:', writeErr?.message || writeErr);
+      if (win && !win.isDestroyed()) {
+        win.webContents.send('keywords:typing-error', {
+          projectId,
+          message: `Не удалось подготовить данные для классификации (примерный размер: ~${estimatedSizeMB} MB). ${writeErr?.message || 'Unknown error'}`,
+          status: 'WRITE_ERROR',
+          debug: { keywordCount, estimatedSizeMB, error: writeErr?.message }
+        });
+      }
+      try { await fs.promises.rm(tmpDir, { recursive: true, force: true }); } catch {}
+      return;
+    }
 
     console.log(`[Typing] workerPath: ${workerPath}, resolvedDbPath: ${resolvedDbPath}`);
     try {

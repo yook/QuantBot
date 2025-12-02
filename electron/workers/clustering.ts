@@ -77,8 +77,45 @@ export async function startClusteringWorker(ctx: ClusteringCtx, projectId: numbe
 
     const tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'clustering-'));
     const inputPath = path.join(tmpDir, `input-${Date.now()}.json`);
-    const input = JSON.stringify({ keywords, algorithm, eps, minPts });
-    await fs.promises.writeFile(inputPath, input, 'utf8');
+    
+    // Use streaming write to avoid "Invalid string length" error for large datasets
+    // Calculate approximate size before writing
+    const keywordCount = keywords.length;
+    const avgEmbeddingSize = keywords[0]?.embedding?.length || 1536;
+    const estimatedSizeMB = Math.round((keywordCount * avgEmbeddingSize * 8) / (1024 * 1024));
+    console.log(`[clustering] Writing ${keywordCount} keywords (~${estimatedSizeMB} MB estimated) to temp file...`);
+    
+    try {
+      const writeStream = fs.createWriteStream(inputPath, { encoding: 'utf8' });
+      await new Promise<void>((resolve, reject) => {
+        writeStream.on('error', reject);
+        writeStream.on('finish', resolve);
+        
+        writeStream.write('{"keywords":[');
+        for (let i = 0; i < keywords.length; i++) {
+          if (i > 0) writeStream.write(',');
+          writeStream.write(JSON.stringify(keywords[i]));
+        }
+        writeStream.write(`],"algorithm":"${algorithm}","eps":${eps}`);
+        if (minPts !== undefined) writeStream.write(`,"minPts":${minPts}`);
+        writeStream.write('}');
+        writeStream.end();
+      });
+      console.log(`[clustering] Successfully wrote input file: ${inputPath}`);
+    } catch (writeErr: any) {
+      console.error('[clustering] Failed to write input file:', writeErr?.message || writeErr);
+      const w = getWindow();
+      if (w && !w.isDestroyed()) {
+        w.webContents.send('keywords:clustering-error', {
+          projectId,
+          message: `Не удалось подготовить данные для кластеризации (размер: ~${estimatedSizeMB} MB). ${writeErr?.message || 'Unknown error'}`,
+          status: 'WRITE_ERROR',
+          debug: { keywordCount, estimatedSizeMB, error: writeErr?.message }
+        });
+      }
+      try { await fs.promises.rm(tmpDir, { recursive: true, force: true }); } catch {}
+      return;
+    }
 
     // For 'components' algorithm the worker expects a similarity `threshold` (not `eps`),
     // for 'dbscan' the worker expects `eps` (cosine distance). Map accordingly.
