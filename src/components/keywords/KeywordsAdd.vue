@@ -28,16 +28,16 @@
           <template #dropdown>
             <el-dropdown-menu>
               <el-dropdown-item @click="startStopWordsOnly">
-                Стоп-слова
+                Фильтр по стоп-словам
               </el-dropdown-item>
               <el-dropdown-item @click="startTypingOnly">
-                Классификация
+                Определение типа
               </el-dropdown-item>
               <el-dropdown-item @click="startClusteringOnly">
-                Кластеризация
+                Разделение на кластеры
               </el-dropdown-item>
               <el-dropdown-item @click="startCategorizationOnly">
-                Категоризация
+                Присвоение категории
               </el-dropdown-item>
             </el-dropdown-menu>
           </template>

@@ -1314,6 +1314,10 @@ export const useKeywordsStore = defineStore("keywords", () => {
         targetCategorization.value = false;
         categorizationPercent.value = 0;
         updateOverallProgress();
+        // Log detailed payload to renderer console for diagnostics (status/debug)
+        try {
+          console.error('[Worker Error] keywords:categorization-error', data, 'status=', data?.status, 'debug=', data?.debug || data?.error || null);
+        } catch (e) {}
         ElMessage.error(mapErrorMessage(data));
     });
 
@@ -1350,6 +1354,9 @@ export const useKeywordsStore = defineStore("keywords", () => {
         targetTyping.value = false;
         typingPercent.value = 0;
         updateOverallProgress();
+        try {
+          console.error('[Worker Error] keywords:typing-error', data, 'status=', data?.status, 'debug=', data?.debug || data?.error || null);
+        } catch (e) {}
         ElMessage.error(mapErrorMessage(data));
     });
 
@@ -1450,6 +1457,9 @@ export const useKeywordsStore = defineStore("keywords", () => {
         targetClustering.value = false;
         clusteringPercent.value = 0;
         updateOverallProgress();
+        try {
+          console.error('[Worker Error] keywords:clustering-error', data, 'status=', data?.status, 'debug=', data?.debug || data?.error || null);
+        } catch (e) {}
         ElMessage.error(mapErrorMessage(data) || "Ошибка кластеризации");
       }
     });

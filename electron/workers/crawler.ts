@@ -2,7 +2,7 @@ import path from 'path';
 import fs from 'fs';
 import os from 'os';
 import { spawn, type ChildProcess } from 'node:child_process';
-import { fileURLToPath } from 'url';
+// fileURLToPath not required here
 import type { CrawlerCtx } from './types.js';
 
 const crawlerChildren: Map<number, ChildProcess> = new Map();
@@ -32,7 +32,6 @@ export function startCrawlerWorker(ctx: CrawlerCtx, project: { id: number; url: 
       dbPath: resolvedDbPath,
     };
     fs.writeFileSync(cfgPath, JSON.stringify(payload), 'utf8');
-    const __dirname = path.dirname(fileURLToPath(import.meta.url));
     const devCandidate = path.join(process.cwd(), 'worker', 'crawlerWorker.cjs');
     const packagedCandidate = process.resourcesPath
       ? path.join(process.resourcesPath, 'app.asar.unpacked', 'worker', 'crawlerWorker.cjs')

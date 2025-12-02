@@ -62,20 +62,83 @@ const DEFAULT_MODEL = "text-embedding-3-small";
 const MODEL_VERSION = "logreg_v2";
 
 async function getApiKey() {
+  // Try machine-bound secret store first (electron/db/secret-store.cjs)
   try {
-    const keytar = require("keytar");
-    const key = await keytar.getPassword("site-analyzer", "openai");
-    if (!key)
-      throw new Error(
-        "OpenAI key not found in keytar (service=site-analyzer, account=openai)"
+    const path = require("path");
+    const fs = require("fs");
+    const candidates = [];
+    try {
+      candidates.push(
+        path.join(__dirname, "..", "electron", "db", "secret-store.cjs")
       );
-    return key;
-  } catch (err) {
-    // rethrow with clearer message
+    } catch (_) {}
+    try {
+      if (process.resourcesPath)
+        candidates.push(
+          path.join(
+            process.resourcesPath,
+            "app.asar.unpacked",
+            "electron",
+            "db",
+            "secret-store.cjs"
+          )
+        );
+    } catch (_) {}
+    try {
+      candidates.push(
+        path.join(process.cwd(), "electron", "db", "secret-store.cjs")
+      );
+    } catch (_) {}
+    let ss = null;
+    for (const c of candidates) {
+      try {
+        if (c && fs.existsSync(c)) {
+          ss = require(c);
+          break;
+        }
+      } catch (_) {}
+    }
+    if (!ss) {
+      try {
+        ss = require("../electron/db/secret-store.cjs");
+      } catch (_) {}
+    }
+    if (ss && typeof ss.getSecret === "function") {
+      try {
+        const fromStore = await ss.getSecret("openai");
+        if (fromStore) return fromStore;
+      } catch (e) {
+        // fallback silently to keytar/env
+        console.warn(
+          "[embeddingsClassifier] secret-store getSecret error",
+          e && e.message ? e.message : e
+        );
+      }
+    }
+
+    // Next try keytar
+    try {
+      const keytar = require("keytar");
+      const key = await keytar.getPassword("site-analyzer", "openai");
+      if (key) return key;
+    } catch (_) {}
+
+    // Fallback: check environment variable (useful in packaged apps or CI)
+    const envKey = process.env.OPENAI_API_KEY || process.env.OPENAI_KEY || null;
+    if (envKey) {
+      try {
+        console.error(
+          "[embeddingsClassifier] OpenAI key loaded from environment variable OPENAI_API_KEY"
+        );
+      } catch (_) {}
+      return envKey;
+    }
+
     throw new Error(
-      "Failed to read OpenAI key from keytar. Ensure keytar is available and the key is stored under service 'site-analyzer' account 'openai'. " +
-        (err && err.message ? err.message : err)
+      "Failed to read OpenAI key from secret-store/keytar and no OPENAI_API_KEY env var present"
     );
+  } catch (err) {
+    throw err;
   }
 }
 
@@ -126,15 +189,28 @@ async function fetchEmbeddings(texts, opts = {}) {
       try {
         resp = await axios.post(OPENAI_EMBED_URL, payload, axiosOpts);
       } catch (err) {
+        // Include response status and body in error message for better diagnostics
         try {
           if (err && err.response) {
+            const status = err.response.status;
+            const body = err.response.data;
             console.error(
-              "[embeddingsClassifier] OpenAI error response:",
-              JSON.stringify(err.response.data)
+              "[embeddingsClassifier] OpenAI error response status=",
+              status
             );
+            try {
+              console.error(
+                "[embeddingsClassifier] OpenAI error response body=",
+                JSON.stringify(body)
+              );
+            } catch (_) {}
+            const msg =
+              `OpenAI API request failed with status ${status}` +
+              (body ? `: ${JSON.stringify(body).slice(0, 1024)}` : "");
+            throw new Error(msg);
           }
-        } catch (_) {}
-        // Proxy support removed — rethrow original error after logging
+        } catch (inner) {}
+        // If no structured response, rethrow original error
         throw err;
       }
 

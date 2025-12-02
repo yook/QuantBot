@@ -2,12 +2,11 @@ import path from 'path';
 import fs from 'fs';
 import os from 'os';
 import { spawn } from 'node:child_process';
-import { fileURLToPath } from 'url';
+// fileURLToPath not required here
 import type { TypingCtx } from './types.js';
 
 export async function startTypingWorker(ctx: TypingCtx, projectId: number) {
   const { db, getWindow, resolvedDbPath, typingLabelColumn, typingTextColumn, typingDateColumn } = ctx;
-  const __dirname = path.dirname(fileURLToPath(import.meta.url));
   const devCandidate = path.join(process.cwd(), 'worker', 'trainAndClassify.cjs');
   const packagedCandidate = process.resourcesPath
     ? path.join(process.resourcesPath, 'app.asar.unpacked', 'worker', 'trainAndClassify.cjs')
@@ -106,8 +105,26 @@ export async function startTypingWorker(ctx: TypingCtx, projectId: number) {
           processed++;
           const cname = obj.bestCategoryName ?? obj.className ?? null;
           if (obj.id && cname !== null) {
+            // Normalize similarity to 0..1 before writing
+            let sim: any = obj.similarity;
+            try {
+              if (typeof sim === 'string') sim = sim.trim().replace('%', '');
+                sim = Number(sim);
+                if (!Number.isFinite(sim) || Number.isNaN(sim)) sim = null;
+                else {
+                    // Round to 4 decimals to avoid floating point noise
+                    sim = Number(sim.toFixed(4));
+                    // Special-case: treat 0.01 as exact match => 1
+                    if (sim === 0.01) sim = 1;
+                    if (sim > 1 && sim <= 100) sim = sim / 100;
+                    sim = Math.max(0, Math.min(1, sim));
+                }
+            } catch (_) {
+              sim = null;
+            }
+
             db.prepare('UPDATE keywords SET class_name = ?, class_similarity = ? WHERE id = ?')
-              .run(cname, obj.similarity ?? null, obj.id);
+              .run(cname, sim, obj.id);
             try {
               const updated = db.prepare('SELECT * FROM keywords WHERE id = ?').get(obj.id);
               const w = getWindow();

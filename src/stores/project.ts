@@ -689,16 +689,9 @@ export const useProjectStore = defineStore("project", {
         }
         const res = await ipc.invoke('embeddings:clearCache');
         if (res && res.success) {
-          // Синтетически отправим события для совместимости с существующими слушателями
-          // Use ipcRenderer.emit so local listeners (registered via ipcRenderer.on) fire
-          try {
-            ipc.emit('embeddings-cache-cleared', null, {});
-          } catch (e) {}
-          const sizeRes = await ipc.invoke('embeddings:getCacheSize');
-          const payload = sizeRes && sizeRes.success ? (sizeRes.data || { size: 0 }) : { size: 0 };
-          try {
-            ipc.emit('embeddings-cache-size', null, payload);
-          } catch (e) {}
+          // Main process already notifies renderer via IPC channels
+          // (it sends 'embeddings-cache-cleared' and 'embeddings-cache-size'),
+          // so avoid emitting synthetic duplicate events here.
         } else {
           console.warn('[Project Store] embeddings:clearCache returned error', res?.error);
         }

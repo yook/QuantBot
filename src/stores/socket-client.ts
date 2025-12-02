@@ -400,13 +400,9 @@ export const socket: IpcSocket = {
           break;
         case 'clear-embeddings-cache':
           try {
-            ipcClient['ipc']?.invoke('embeddings:clearCache').then(() => {
-              ipcClient['ipc']?.emit('embeddings-cache-cleared', null, {});
-              ipcClient['ipc']?.invoke('embeddings:getCacheSize').then((res2: any) => {
-                const payload = res2 && res2.success ? (res2.data || { size: 0 }) : { size: 0 };
-                ipcClient['ipc']?.emit('embeddings-cache-size', null, payload);
-              });
-            }).catch((e: any) => {
+            // Ask main process to clear the embeddings cache. The main process will
+            // notify renderer with 'embeddings-cache-cleared' and 'embeddings-cache-size'.
+            ipcClient['ipc']?.invoke('embeddings:clearCache').catch((e: any) => {
               console.error('[IPC Socket] embeddings:clearCache invoke error:', e?.message || e);
             });
           } catch (e: any) {

@@ -10,7 +10,6 @@ const require = createRequire(import.meta.url);
 
 export async function startCategorizationWorker(ctx: CategorizationCtx, projectId: number) {
   const { db, getWindow, resolvedDbPath, categoriesNameColumn } = ctx;
-  const __dirname = path.dirname(fileURLToPath(import.meta.url));
   const devCandidate = path.join(process.cwd(), 'worker', 'assignCategorization.cjs');
   const packagedCandidate = process.resourcesPath
     ? path.join(process.resourcesPath, 'app.asar.unpacked', 'worker', 'assignCategorization.cjs')
@@ -135,8 +134,27 @@ export async function startCategorizationWorker(ctx: CategorizationCtx, projectI
           }
           processed++;
           if (obj.id && obj.bestCategoryName !== undefined) {
+            // Normalize similarity to 0..1 before writing (worker may return 0..1 or 0..100)
+            let sim: any = obj.similarity;
+            try {
+                if (typeof sim === 'string') sim = sim.trim().replace('%', '');
+                sim = Number(sim);
+                if (!Number.isFinite(sim) || Number.isNaN(sim)) sim = null;
+                else {
+                  // Round to 4 decimal places before normalization to avoid
+                  // floating-point artifacts (e.g. 0.010000000000000002)
+                  sim = Number(sim.toFixed(4));
+                  // Special-case: treat 0.01 (artifact) as exact match => 1
+                  if (sim === 0.01) sim = 1;
+                  if (sim > 1 && sim <= 100) sim = sim / 100;
+                  sim = Math.max(0, Math.min(1, sim));
+                }
+            } catch (_) {
+              sim = null;
+            }
+
             db.prepare('UPDATE keywords SET category_name = ?, category_similarity = ? WHERE id = ?')
-              .run(obj.bestCategoryName, obj.similarity || null, obj.id);
+              .run(obj.bestCategoryName, sim, obj.id);
             try {
               const updated = db.prepare('SELECT * FROM keywords WHERE id = ?').get(obj.id);
               const w = getWindow();

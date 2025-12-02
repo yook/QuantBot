@@ -9,7 +9,6 @@ const require = createRequire(import.meta.url);
 
 export async function startClusteringWorker(ctx: ClusteringCtx, projectId: number, algorithm: string, eps: number, minPts?: number) {
   const { db, getWindow, resolvedDbPath } = ctx;
-  const __dirname = path.dirname(fileURLToPath(import.meta.url));
   const devCandidate = path.join(process.cwd(), 'worker', 'clusterСomponents.cjs');
   const packagedCandidate = process.resourcesPath
     ? path.join(process.resourcesPath, 'app.asar.unpacked', 'worker', 'clusterСomponents.cjs')

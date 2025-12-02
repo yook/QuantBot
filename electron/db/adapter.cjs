@@ -307,6 +307,23 @@ if (db) {
     console.error("Error creating typing_model table:", err);
   }
 
+  try {
+    db.prepare(
+      `CREATE TABLE IF NOT EXISTS secrets (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        key TEXT NOT NULL UNIQUE,
+        value TEXT NOT NULL,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      )`
+    ).run();
+    db.prepare(
+      "CREATE UNIQUE INDEX IF NOT EXISTS idx_secrets_key ON secrets(key);"
+    ).run();
+  } catch (err) {
+    console.error("Error creating secrets table:", err);
+  }
+
   const alters = [
     "ALTER TABLE projects ADD COLUMN freezed INTEGER DEFAULT 0",
     "ALTER TABLE projects ADD COLUMN stats TEXT",

@@ -126,17 +126,59 @@ async function fetchEmbeddings(texts) {
       // Resolve API key dynamically per project from DB
       const args = parseArgs();
       const projectId = args.projectId ? Number(args.projectId) : null;
-      // Only read key from OS keyring (keytar). If missing, exit with error.
+      // Resolve API key: try machine-bound secret-store, then keytar, then exit with error.
       let key = null;
       try {
-        const keytar = require("keytar");
-        key = await keytar.getPassword("site-analyzer", "openai");
-      } catch (e) {
-        // keytar not available or error
+        const path = require("path");
+        const fs = require("fs");
+        const candidates = [];
+        try {
+          candidates.push(
+            path.join(__dirname, "..", "electron", "db", "secret-store.cjs")
+          );
+        } catch (_) {}
+        try {
+          if (process.resourcesPath)
+            candidates.push(
+              path.join(
+                process.resourcesPath,
+                "app.asar.unpacked",
+                "electron",
+                "db",
+                "secret-store.cjs"
+              )
+            );
+        } catch (_) {}
+        try {
+          candidates.push(
+            path.join(process.cwd(), "electron", "db", "secret-store.cjs")
+          );
+        } catch (_) {}
+        for (const c of candidates) {
+          try {
+            if (c && fs.existsSync(c)) {
+              const ss = require(c);
+              if (ss && typeof ss.getSecret === "function") {
+                try {
+                  key = await ss.getSecret("openai");
+                  if (key) break;
+                } catch (e) {
+                  // ignore
+                }
+              }
+            }
+          } catch (_) {}
+        }
+      } catch (_) {}
+      if (!key) {
+        try {
+          const keytar = require("keytar");
+          key = await keytar.getPassword("site-analyzer", "openai");
+        } catch (e) {}
       }
       if (!key) {
         console.error(
-          "OpenAI API key not found in system keychain (keytar). Please save the key under service 'site-analyzer' account 'openai'."
+          "OpenAI API key not found in secret-store or system keychain (keytar). Please save the key under service 'site-analyzer' account 'openai'."
         );
         process.exit(1);
       }
@@ -190,8 +232,16 @@ async function fetchEmbeddings(texts) {
         }
         // Emit progress after this chunk
         try {
-          const fetchedSoFar = Math.min((ci + 1) * defaultBatchSize, toFetch.length);
-          emitProgress({ type: 'progress', stage: 'embeddings', fetched: fetchedSoFar, total: toFetch.length });
+          const fetchedSoFar = Math.min(
+            (ci + 1) * defaultBatchSize,
+            toFetch.length
+          );
+          emitProgress({
+            type: "progress",
+            stage: "embeddings",
+            fetched: fetchedSoFar,
+            total: toFetch.length,
+          });
         } catch (_) {}
         // Small delay between chunk requests to reduce burstiness
         if (ci < chunks.length - 1)
@@ -200,7 +250,14 @@ async function fetchEmbeddings(texts) {
           );
       }
       // Final progress emit
-      try { emitProgress({ type: 'progress', stage: 'embeddings', fetched: toFetch.length, total: toFetch.length }); } catch (_) {}
+      try {
+        emitProgress({
+          type: "progress",
+          stage: "embeddings",
+          fetched: toFetch.length,
+          total: toFetch.length,
+        });
+      } catch (_) {}
     } catch (err) {
       // Detect common auth / invalid key errors and print a clearer message
       const respData = err && err.response && err.response.data;

@@ -256,8 +256,29 @@ export function registerKeywordsIpc(ctx: IpcContext) {
 
   ipcMain.handle('db:keywords:updateCategory', async (_event, id, categoryName, categorySimilarity) => {
     try {
+      // Normalize similarity to canonical 0..1 range before writing
+      let sim: any = categorySimilarity;
+      try {
+        if (typeof sim === 'string') {
+          sim = sim.trim().replace('%', '');
+        }
+        sim = Number(sim);
+        if (!Number.isFinite(sim) || Number.isNaN(sim)) sim = null;
+        else {
+          // Round to 4 decimals before normalization to avoid FP artifacts
+          sim = Number(sim.toFixed(4));
+          // Special-case: treat 0.01 after rounding as exact match => 1
+          if (sim === 0.01) sim = 1;
+          if (sim > 1 && sim <= 100) sim = sim / 100;
+          // clamp to [0,1]
+          sim = Math.max(0, Math.min(1, sim));
+        }
+      } catch (_) {
+        sim = null;
+      }
+
       const result = db.prepare('UPDATE keywords SET category_name = ?, category_similarity = ? WHERE id = ?')
-        .run(categoryName, categorySimilarity, id);
+        .run(categoryName, sim, id);
       return { success: true, data: result };
     } catch (error: any) {
       return { success: false, error: error.message };
@@ -266,8 +287,26 @@ export function registerKeywordsIpc(ctx: IpcContext) {
 
   ipcMain.handle('db:keywords:updateClass', async (_event, id, className, classSimilarity) => {
     try {
+      // Normalize similarity to canonical 0..1 range before writing
+      let sim: any = classSimilarity;
+      try {
+        if (typeof sim === 'string') {
+          sim = sim.trim().replace('%', '');
+        }
+        sim = Number(sim);
+        if (!Number.isFinite(sim) || Number.isNaN(sim)) sim = null;
+        else {
+          sim = Number(sim.toFixed(4));
+          if (sim === 0.01) sim = 1;
+          if (sim > 1 && sim <= 100) sim = sim / 100;
+          sim = Math.max(0, Math.min(1, sim));
+        }
+      } catch (_) {
+        sim = null;
+      }
+
       const result = db.prepare('UPDATE keywords SET class_name = ?, class_similarity = ? WHERE id = ?')
-        .run(className, classSimilarity, id);
+        .run(className, sim, id);
       return { success: true, data: result };
     } catch (error: any) {
       return { success: false, error: error.message };

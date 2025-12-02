@@ -258,6 +258,23 @@ function send(response) {
   process.stdout.write(JSON.stringify(response) + "\n");
 }
 
+function normalizeSimilarityRaw(v) {
+  try {
+    if (typeof v === "string") v = v.trim().replace("%", "");
+    v = Number(v);
+    if (!Number.isFinite(v) || Number.isNaN(v)) return null;
+    // Round to 4 decimals before normalization to reduce floating artifacts
+    v = Number(v.toFixed(4));
+    // Special-case: treat 0.01 after rounding as exact match => 1
+    if (v === 0.01) v = 1;
+    if (v > 1 && v <= 100) v = v / 100;
+    v = Math.max(0, Math.min(1, v));
+    return v;
+  } catch (e) {
+    return null;
+  }
+}
+
 function handleRequest(req) {
   const { id, method, params = [] } = req;
 
@@ -510,7 +527,7 @@ function handleRequest(req) {
           .prepare(
             "UPDATE keywords SET category_name = ?, category_similarity = ? WHERE id = ?"
           )
-          .run(params[1], params[2], params[0]);
+          .run(params[1], normalizeSimilarityRaw(params[2]), params[0]);
         break;
       case "keywords:updateClass":
         // params: [id, className, classSimilarity]
@@ -518,7 +535,7 @@ function handleRequest(req) {
           .prepare(
             "UPDATE keywords SET class_name = ?, class_similarity = ? WHERE id = ?"
           )
-          .run(params[1], params[2], params[0]);
+          .run(params[1], normalizeSimilarityRaw(params[2]), params[0]);
         break;
       case "keywords:updateCluster":
         // params: [id, cluster]

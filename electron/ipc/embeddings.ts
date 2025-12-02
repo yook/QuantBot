@@ -24,6 +24,8 @@ export function registerEmbeddingsIpc(ctx: IpcContext) {
       const w = getWindow();
       if (w && !w.isDestroyed()) {
         w.webContents.send('embeddings-cache-cleared');
+        // Also inform renderer of new cache size (should be zero)
+        w.webContents.send('embeddings-cache-size', { size: 0 });
       }
       return { success: true, data: { changes: info?.changes ?? 0 } };
     } catch (error: any) {
