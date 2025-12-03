@@ -34,24 +34,16 @@
               <th
                 v-for="(column, columnIndex) in tableColumnsWithRowNumber"
                 :key="column.prop"
+                :class="[
+                  column.prop === '_rowNumber' ? 'row-number-header' : '',
+                  dragOverIndex === columnIndex ? 'drag-over' : '',
+                ]"
                 :style="{
                   minWidth:
                     (getColumnWidth(column.prop) || column.width || 200) + 'px',
                   width:
-                    (getColumnWidth(column.prop) || column.width || 300) + 'px',
+                    (getColumnWidth(column.prop) || column.width || 200) + 'px',
                 }"
-                :class="[
-                  'sortable-header',
-                  column.prop !== '_actions' && columnIndex < props.fixedColumns
-                    ? 'fixed-column'
-                    : '',
-                  column.prop === '_rowNumber' &&
-                  column.prop !== '_actions' &&
-                  columnIndex < props.fixedColumns
-                    ? 'row-number-header'
-                    : '',
-                  dragOverIndex === columnIndex ? 'drag-over' : '',
-                ]"
                 :draggable="
                   columnIndex >= props.fixedColumns &&
                   column.prop !== '_rowNumber' &&
@@ -1518,7 +1510,7 @@ onMounted(async () => {
         }
 
         // После изменения pageSize нужно скорректировать start, если он стал слишком большим
-        const maxStart = Math.max(0, dataComp.value.length - pageSize.value);
+        const maxStart = Math.max(0, props.totalCount - pageSize.value);
         if (start.value > maxStart) {
           start.value = maxStart;
         }
@@ -1570,7 +1562,7 @@ onMounted(async () => {
           const newStartFromScroll = Math.floor(scrollTop.value / rowHeight);
           start.value = Math.min(
             start.value,
-            Math.max(0, dataComp.value.length - pageSize.value)
+            Math.max(0, props.totalCount - pageSize.value)
           );
           // Также убеждаемся, что start синхронизирован с scrollTop
           if (start.value !== newStartFromScroll) {
@@ -1631,7 +1623,7 @@ onMounted(async () => {
         htop.value = 0;
       } else {
         // Иначе корректируем позицию start
-        const maxStart = Math.max(0, dataComp.value.length - pageSize.value);
+        const maxStart = Math.max(0, props.totalCount - pageSize.value);
 
         if (start.value > maxStart) {
           start.value = maxStart;
@@ -1734,12 +1726,9 @@ watch(
       if (typeof newVal === "number") {
         windowStart.value = newVal;
         lastWindowStart.value = newVal;
-        // Recalculate handle position when window changes
-        // Align scrollTop to the new window start so visible rows match data
-        const newScrollTop = Math.max(0, newVal * rowHeight);
-        if (scrollTop.value !== newScrollTop) {
-          scrollTop.value = newScrollTop;
-          start.value = Math.floor(scrollTop.value / rowHeight);
+        if (newVal === 0 && scrollTop.value !== 0) {
+          scrollTop.value = 0;
+          start.value = 0;
         }
         nextTick(() => updateHandlePosition());
       }

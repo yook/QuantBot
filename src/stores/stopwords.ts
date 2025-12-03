@@ -112,11 +112,11 @@ export const useStopwordsStore = defineStore("stopwords", () => {
       loading.value = true;
       const result = await ipcClient.getStopwordsWindow(Number(projectId), skip, limit, sortOptions);
       if (result) {
-        setStopwords(result.data || []);
         setTotalCount(result.total || 0);
         setHasMore((result.data?.length || 0) >= limit);
         setCurrentSkip(skip);
         setWindowStart(skip); // Устанавливаем windowStart
+        setStopwords(result.data || []);
       } else {
         setStopwords([]);
         setTotalCount(0);

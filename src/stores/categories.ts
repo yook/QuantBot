@@ -124,11 +124,11 @@ export const useCategoriesStore = defineStore("categories", () => {
       loading.value = true;
       const result = await ipcClient.getCategoriesWindow(Number(projectId), skip, limit, sortOptions);
       if (result) {
-        setCategories(result.data || []);
         setTotalCount(result.total || 0);
         setHasMore((result.data?.length || 0) >= limit);
         setCurrentSkip(skip);
         setWindowStart(skip); // Устанавливаем windowStart
+        setCategories(result.data || []);
       } else {
         setCategories([]);
         setTotalCount(0);

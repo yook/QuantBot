@@ -3,6 +3,7 @@ import fs from 'fs';
 import os from 'os';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'url';
+import { once } from 'node:events';
 import type { ClusteringCtx } from './types.js';
 import { createRequire } from 'module';
 const require = createRequire(import.meta.url);
@@ -87,18 +88,25 @@ export async function startClusteringWorker(ctx: ClusteringCtx, projectId: numbe
     
     try {
       const writeStream = fs.createWriteStream(inputPath, { encoding: 'utf8' });
-      await new Promise<void>((resolve, reject) => {
-        writeStream.on('error', reject);
-        writeStream.on('finish', resolve);
+      const writeChunk = async (chunk: string) => {
+        if (!writeStream.write(chunk)) {
+          await once(writeStream, 'drain');
+        }
+      };
 
+      try {
         // Write keywords as JSONL: one JSON object per line. This avoids constructing
         // a very large single JSON string in memory when parsing on the worker side.
         for (let i = 0; i < keywords.length; i++) {
-          const line = JSON.stringify(keywords[i]) + '\n';
-          writeStream.write(line);
+          await writeChunk(JSON.stringify(keywords[i]) + '\n');
         }
         writeStream.end();
-      });
+        await once(writeStream, 'finish');
+      } catch (streamErr) {
+        writeStream.destroy();
+        throw streamErr;
+      }
+
       console.log(`[clustering] Successfully wrote input file (JSONL): ${inputPath}`);
     } catch (writeErr: any) {
       console.error('[clustering] Failed to write input file:', writeErr?.message || writeErr);

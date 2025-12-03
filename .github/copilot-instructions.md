@@ -85,4 +85,4 @@ These rules help AI agents be productive in this repo. Keep responses concise an
 3. Стадировать и при необходимости закоммитить изменения:
 4. Создать аннотированный тег о описанием изменений на русском
 5. Запушить ветку и тег
-6. Создать GitHub Release
+6. Создать GitHub Release для windows

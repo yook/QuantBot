@@ -2,6 +2,7 @@ import path from 'path';
 import fs from 'fs';
 import os from 'os';
 import { spawn } from 'node:child_process';
+import { once } from 'node:events';
 // fileURLToPath not required here
 import type { TypingCtx } from './types.js';
 
@@ -69,21 +70,29 @@ export async function startTypingWorker(ctx: TypingCtx, projectId: number) {
 
     try {
       const writeStream = fs.createWriteStream(inputPath, { encoding: 'utf8' });
-      await new Promise<void>((resolve, reject) => {
-        writeStream.on('error', reject);
-        writeStream.on('finish', resolve);
-
-        writeStream.write('{"typingSamples":');
-        writeStream.write(JSON.stringify(typingSamples || []));
-        writeStream.write(',"keywords":[');
-        for (let i = 0; i < (keywords || []).length; i++) {
-          if (i > 0) writeStream.write(',');
-          writeStream.write(JSON.stringify(keywords[i]));
+      const writeChunk = async (chunk: string) => {
+        if (!writeStream.write(chunk)) {
+          await once(writeStream, 'drain');
         }
-        writeStream.write(']');
-        writeStream.write('}');
+      };
+
+      try {
+        await writeChunk('{"typingSamples":');
+        await writeChunk(JSON.stringify(typingSamples || []));
+        await writeChunk(',"keywords":[');
+        for (let i = 0; i < (keywords || []).length; i++) {
+          if (i > 0) await writeChunk(',');
+          await writeChunk(JSON.stringify(keywords[i]));
+        }
+        await writeChunk(']');
+        await writeChunk('}');
         writeStream.end();
-      });
+        await once(writeStream, 'finish');
+      } catch (streamErr) {
+        writeStream.destroy();
+        throw streamErr;
+      }
+
       console.log(`[typing] Successfully wrote input file: ${inputPath}`);
     } catch (writeErr: any) {
       console.error('[typing] Failed to write input file:', writeErr?.message || writeErr);

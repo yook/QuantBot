@@ -3,6 +3,7 @@ import fs from 'fs';
 import os from 'os';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'url';
+import { once } from 'node:events';
 import type { CategorizationCtx } from './types.js';
 import { isRateLimitError } from './utils.js';
 import { createRequire } from 'module';
@@ -105,21 +106,29 @@ export async function startCategorizationWorker(ctx: CategorizationCtx, projectI
 
     try {
       const writeStream = fs.createWriteStream(inputPath, { encoding: 'utf8' });
-      await new Promise<void>((resolve, reject) => {
-        writeStream.on('error', reject);
-        writeStream.on('finish', resolve);
-
-        writeStream.write('{"categories":');
-        writeStream.write(JSON.stringify(categories || []));
-        writeStream.write(',"keywords":[');
-        for (let i = 0; i < keywords.length; i++) {
-          if (i > 0) writeStream.write(',');
-          writeStream.write(JSON.stringify(keywords[i]));
+      const writeChunk = async (chunk: string) => {
+        if (!writeStream.write(chunk)) {
+          await once(writeStream, 'drain');
         }
-        writeStream.write(']');
-        writeStream.write('}');
+      };
+
+      try {
+        await writeChunk('{"categories":');
+        await writeChunk(JSON.stringify(categories || []));
+        await writeChunk(',"keywords":[');
+        for (let i = 0; i < keywords.length; i++) {
+          if (i > 0) await writeChunk(',');
+          await writeChunk(JSON.stringify(keywords[i]));
+        }
+        await writeChunk(']');
+        await writeChunk('}');
         writeStream.end();
-      });
+        await once(writeStream, 'finish');
+      } catch (streamErr) {
+        writeStream.destroy();
+        throw streamErr;
+      }
+
       console.log(`[categorization] Successfully wrote input file: ${inputPath}`);
     } catch (writeErr: any) {
       console.error('[categorization] Failed to write input file:', writeErr?.message || writeErr);

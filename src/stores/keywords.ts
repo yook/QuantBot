@@ -712,11 +712,11 @@ export const useKeywordsStore = defineStore("keywords", () => {
       console.log(`Loaded window: ${result.keywords.length} keywords, total: ${result.total}`);
       
       // Обновляем данные окна
-      setKeywords(result.keywords);
       totalCount.value = result.total;
       windowStart.value = skip;
       currentSkip.value = skip;
       hasMore.value = (skip + result.keywords.length) < result.total;
+      setKeywords(result.keywords);
       
       console.log("Window state:", {
         windowStart: windowStart.value,
