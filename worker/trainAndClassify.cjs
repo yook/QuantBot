@@ -429,70 +429,119 @@ async function main() {
     } catch (e) {}
   }
 
-  // 4) Read input keywords list
+  // 4) Read input keywords list. Stream-parse to avoid huge JSON.parse
   let keywords = [];
   if (inputFile) {
+    async function streamReadArray(filePath, key) {
+      return new Promise((resolve, reject) => {
+        const rs = fs.createReadStream(filePath, { encoding: "utf8" });
+        let buf = "";
+        let state = "searching";
+        const out = [];
+        let depth = 0;
+        let objBuf = "";
+
+        rs.on("data", (chunk) => {
+          buf += chunk;
+          if (state === "searching") {
+            const idx = buf.indexOf('"' + key + '"');
+            if (idx === -1) {
+              if (buf.length > 1024 * 10) buf = buf.slice(-1024);
+              return;
+            }
+            const rest = buf.slice(idx + key.length + 2);
+            const arrIdx = rest.indexOf("[");
+            if (arrIdx === -1) return;
+            buf = rest.slice(arrIdx + 1);
+            state = "inarray";
+          }
+
+          if (state === "inarray") {
+            for (let i = 0; i < buf.length; i++) {
+              const ch = buf[i];
+              if (depth === 0) {
+                if (ch === "{") {
+                  depth = 1;
+                  objBuf = "{";
+                } else if (ch === "]") {
+                  rs.close();
+                  resolve(out);
+                  return;
+                } else {
+                  continue;
+                }
+              } else {
+                objBuf += ch;
+                if (ch === "{") depth++;
+                else if (ch === "}") {
+                  depth--;
+                  if (depth === 0) {
+                    try {
+                      out.push(JSON.parse(objBuf));
+                    } catch (err) {}
+                    objBuf = "";
+                  }
+                }
+              }
+            }
+            buf = "";
+          }
+        });
+        rs.on("end", () => resolve(out));
+        rs.on("error", (e) => reject(e));
+      });
+    }
+
     try {
-      const txt = fs.readFileSync(inputFile, "utf8");
-      const obj = JSON.parse(txt);
-      keywords = (obj && obj.keywords) || [];
+      keywords = await streamReadArray(inputFile, "keywords");
     } catch (e) {
       // fallback: query DB for unclassified target keywords
+      console.error(
+        "Failed to stream-parse input file:",
+        e && e.message ? e.message : e
+      );
     }
-    // If input contains keywords array, prefer filtering via DB: select those ids that are marked target_query=1.
-    try {
-      if (Array.isArray(keywords) && keywords.length > 0) {
-        const before = keywords.length;
-        const ids = keywords
-          .map((k) => (k && k.id ? Number(k.id) : null))
-          .filter((v) => Number.isFinite(v));
-        if (ids.length > 0) {
-          const placeholders = ids.map(() => "?").join(",");
-          const params = [projectId, ...ids];
-          console.error(
-            `[trainAndClassify DEBUG] Input keyword ids (${ids.length}):`,
-            ids.slice(0, 200)
-          );
-          const dbKeywords = await dbAll(
-            `SELECT id, keyword, target_query FROM keywords WHERE project_id = ? AND id IN (${placeholders}) ORDER BY id`,
-            params
-          );
-          console.error(
-            `[trainAndClassify DEBUG] DB returned ${
-              Array.isArray(dbKeywords) ? dbKeywords.length : 0
-            } matching ids (pre-filter).`
-          );
-          const filtered = (dbKeywords || []).filter(
-            (d) =>
-              d &&
-              (d.target_query === undefined ||
-                d.target_query === null ||
-                d.target_query === 1 ||
-                d.target_query === "1" ||
-                d.target_query === true)
-          );
-          console.error(
-            `[trainAndClassify DEBUG] DB filtered target_query===1 count: ${filtered.length}`
-          );
-          if (filtered.length > 0) {
-            keywords = filtered.map((d) => ({ id: d.id, keyword: d.keyword }));
-          } else {
-            console.error(
-              "[trainAndClassify DEBUG] No DB ids matched target_query=1, falling back to input-flag filtering"
-            );
-            keywords = keywords.filter(
-              (k) =>
-                k &&
-                (k.target_query === undefined ||
-                  k.target_query === null ||
-                  k.target_query === 1 ||
-                  k.target_query === true)
-            );
-          }
+  }
+  // If input contains keywords array, prefer filtering via DB: select those ids that are marked target_query=1.
+  try {
+    if (Array.isArray(keywords) && keywords.length > 0) {
+      const before = keywords.length;
+      const ids = keywords
+        .map((k) => (k && k.id ? Number(k.id) : null))
+        .filter((v) => Number.isFinite(v));
+      if (ids.length > 0) {
+        const placeholders = ids.map(() => "?").join(",");
+        const params = [projectId, ...ids];
+        console.error(
+          `[trainAndClassify DEBUG] Input keyword ids (${ids.length}):`,
+          ids.slice(0, 200)
+        );
+        const dbKeywords = await dbAll(
+          `SELECT id, keyword, target_query FROM keywords WHERE project_id = ? AND id IN (${placeholders}) ORDER BY id`,
+          params
+        );
+        console.error(
+          `[trainAndClassify DEBUG] DB returned ${
+            Array.isArray(dbKeywords) ? dbKeywords.length : 0
+          } matching ids (pre-filter).`
+        );
+        const filtered = (dbKeywords || []).filter(
+          (d) =>
+            d &&
+            (d.target_query === undefined ||
+              d.target_query === null ||
+              d.target_query === 1 ||
+              d.target_query === "1" ||
+              d.target_query === true)
+        );
+        console.error(
+          `[trainAndClassify DEBUG] DB filtered target_query===1 count: ${filtered.length}`
+        );
+        if (filtered.length > 0) {
+          keywords = filtered.map((d) => ({ id: d.id, keyword: d.keyword }));
         } else {
-          // No numeric ids present — fall back to input flags
           console.error(
-            "[trainAndClassify DEBUG] No numeric ids found in input; using input flags for filtering"
+            "[trainAndClassify DEBUG] No DB ids matched target_query=1, falling back to input-flag filtering"
           );
           keywords = keywords.filter(
             (k) =>
@@ -503,14 +552,28 @@ async function main() {
                 k.target_query === true)
           );
         }
+      } else {
+        // No numeric ids present — fall back to input flags
         console.error(
-          `[trainAndClassify] Filtered keywords by target_query: ${before} -> ${keywords.length}`
+          "[trainAndClassify DEBUG] No numeric ids found in input; using input flags for filtering"
+        );
+        keywords = keywords.filter(
+          (k) =>
+            k &&
+            (k.target_query === undefined ||
+              k.target_query === null ||
+              k.target_query === 1 ||
+              k.target_query === true)
         );
       }
-    } catch (e) {
-      // ignore filtering errors
+      console.error(
+        `[trainAndClassify] Filtered keywords by target_query: ${before} -> ${keywords.length}`
+      );
     }
+  } catch (e) {
+    // ignore filtering errors
   }
+
   if (!keywords || keywords.length === 0) {
     // Fallback: target keywords without category
     keywords = await dbAll(

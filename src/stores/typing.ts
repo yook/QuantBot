@@ -15,6 +15,9 @@ export const useTypingStore = defineStore("typing", () => {
   const windowSize = ref(300);
   const bufferSize = ref(50);
   const windowStart = ref(0);
+  // Queue for sequential delete operations to avoid flooding IPC and UI freezes
+  const deleteQueue = ref<Array<{ pid: number | string; id: number | string }>>([]);
+  const deletingInProgress = ref(false);
 
   function setCurrentProject(projectId: string | number) {
     currentProjectId.value = projectId;
@@ -130,15 +133,59 @@ export const useTypingStore = defineStore("typing", () => {
   }
 
   async function deleteSample(projectId: string | number | undefined, id: string | number) {
-    // Allow calling deleteSample(id) when currentProjectId is set in the store
+    // Enqueue deletes to avoid concurrent IPC bursts that freeze UI
     const pid = projectId || currentProjectId.value;
     if (!pid || !id) return;
-    
+
+    deleteQueue.value.push({ pid: Number(pid), id: Number(id) });
+    if (!deletingInProgress.value) {
+      processDeleteQueue();
+    }
+  }
+
+  // Delete all samples for a given label in a single DB operation
+  async function deleteSamplesByLabel(projectId: string | number | undefined, label: string | number) {
+    const pid = projectId || currentProjectId.value;
+    if (!pid || label == null) return;
     try {
-      await ipcClient.deleteTyping(Number(id));
+      loading.value = true;
+      await ipcClient.deleteTypingByLabel(Number(pid), String(label));
       await loadSamples(pid);
-    } catch (error) {
-      console.error("Error deleting typing sample:", error);
+    } catch (err) {
+      console.error('Error deleting typing samples by label:', err);
+    } finally {
+      loading.value = false;
+    }
+  }
+
+  async function processDeleteQueue() {
+    if (deletingInProgress.value) return;
+    deletingInProgress.value = true;
+    loading.value = true;
+    try {
+      while (deleteQueue.value.length > 0) {
+        const item = deleteQueue.value.shift();
+        if (!item) continue;
+        const { pid, id } = item;
+        try {
+          await ipcClient.deleteTyping(Number(id));
+        } catch (err: any) {
+          console.error('Error deleting typing sample (queued):', err);
+        }
+
+        // Refresh samples for the project so UI stays consistent
+        try {
+          if (pid) await loadSamples(pid);
+        } catch (e) {
+          console.warn('Failed to reload samples after delete', e);
+        }
+
+        // small yield to event loop
+        await new Promise((res) => setTimeout(res, 50));
+      }
+    } finally {
+      deletingInProgress.value = false;
+      loading.value = false;
     }
   }
 
@@ -181,6 +228,7 @@ export const useTypingStore = defineStore("typing", () => {
     updateSample,
     clearSamples,
     deleteSample,
+    deleteSamplesByLabel,
     loadingMore,
     currentProjectId,
     windowSize,

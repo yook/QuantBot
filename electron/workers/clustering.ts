@@ -90,18 +90,16 @@ export async function startClusteringWorker(ctx: ClusteringCtx, projectId: numbe
       await new Promise<void>((resolve, reject) => {
         writeStream.on('error', reject);
         writeStream.on('finish', resolve);
-        
-        writeStream.write('{"keywords":[');
+
+        // Write keywords as JSONL: one JSON object per line. This avoids constructing
+        // a very large single JSON string in memory when parsing on the worker side.
         for (let i = 0; i < keywords.length; i++) {
-          if (i > 0) writeStream.write(',');
-          writeStream.write(JSON.stringify(keywords[i]));
+          const line = JSON.stringify(keywords[i]) + '\n';
+          writeStream.write(line);
         }
-        writeStream.write(`],"algorithm":"${algorithm}","eps":${eps}`);
-        if (minPts !== undefined) writeStream.write(`,"minPts":${minPts}`);
-        writeStream.write('}');
         writeStream.end();
       });
-      console.log(`[clustering] Successfully wrote input file: ${inputPath}`);
+      console.log(`[clustering] Successfully wrote input file (JSONL): ${inputPath}`);
     } catch (writeErr: any) {
       console.error('[clustering] Failed to write input file:', writeErr?.message || writeErr);
       const w = getWindow();

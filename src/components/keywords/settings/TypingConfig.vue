@@ -455,12 +455,8 @@ export default defineComponent({
         }
       ).then(() => {
         const pid = project.currentProjectId;
-        const toDelete = (typingStore.samples || []).filter(
-          (s) => s && s.label === row.label
-        );
-        for (const rec of toDelete) {
-          if (rec && rec.id) typingStore.deleteSample(pid, rec.id);
-        }
+        // delete all samples for this label in one DB call to avoid many IPC requests
+        if (pid) typingStore.deleteSamplesByLabel(pid, row.label);
       });
     }
 

@@ -62,4 +62,13 @@ export function registerTypingIpc(ctx: IpcContext) {
       return { success: false, error: error.message };
     }
   });
+
+  ipcMain.handle('db:typing:deleteByLabel', async (_event, projectId, label) => {
+    try {
+      const result = db.prepare(`DELETE FROM typing_samples WHERE project_id = ? AND ${typingLabelColumn} = ?`).run(projectId, label);
+      return { success: true, data: result };
+    } catch (error: any) {
+      return { success: false, error: error.message };
+    }
+  });
 }

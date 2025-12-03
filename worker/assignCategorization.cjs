@@ -298,29 +298,92 @@ async function main() {
     `Assigning keywords for project ${projectId} using model ${MODEL}`
   );
 
-  // Support input via file or stdin. Expected shape: { categories: [{id, category_name}], keywords: [{id, keyword}] }
-  let input = null;
+  // Support input via file or stdin. Expected shape: { categories: [...], keywords: [...] }
+  let categories = [];
+  let keywords = [];
   if (args.inputFile) {
-    const fs = require("fs");
+    // stream-parse categories and keywords arrays separately to avoid large JSON.parse
+    async function streamReadArray(filePath, key) {
+      return new Promise((resolve, reject) => {
+        const rs = fs.createReadStream(filePath, { encoding: "utf8" });
+        let buf = "";
+        let state = "searching";
+        const out = [];
+        let depth = 0;
+        let objBuf = "";
+
+        rs.on("data", (chunk) => {
+          buf += chunk;
+          if (state === "searching") {
+            const idx = buf.indexOf('"' + key + '"');
+            if (idx === -1) {
+              if (buf.length > 1024 * 10) buf = buf.slice(-1024);
+              return;
+            }
+            const rest = buf.slice(idx + key.length + 2);
+            const arrIdx = rest.indexOf("[");
+            if (arrIdx === -1) return;
+            buf = rest.slice(arrIdx + 1);
+            state = "inarray";
+          }
+
+          if (state === "inarray") {
+            for (let i = 0; i < buf.length; i++) {
+              const ch = buf[i];
+              if (depth === 0) {
+                if (ch === "{") {
+                  depth = 1;
+                  objBuf = "{";
+                } else if (ch === "]") {
+                  rs.close();
+                  resolve(out);
+                  return;
+                } else {
+                  continue;
+                }
+              } else {
+                objBuf += ch;
+                if (ch === "{") depth++;
+                else if (ch === "}") {
+                  depth--;
+                  if (depth === 0) {
+                    try {
+                      out.push(JSON.parse(objBuf));
+                    } catch (err) {}
+                    objBuf = "";
+                  }
+                }
+              }
+            }
+            buf = "";
+          }
+        });
+        rs.on("end", () => resolve(out));
+        rs.on("error", (e) => reject(e));
+      });
+    }
+
     try {
-      const txt = await fs.promises.readFile(args.inputFile, "utf8");
-      input = JSON.parse(txt || "null");
+      categories = await streamReadArray(args.inputFile, "categories");
+      keywords = await streamReadArray(args.inputFile, "keywords");
     } catch (e) {
       console.error(
-        "Failed to read inputFile:",
+        "Failed to stream-parse input file:",
         e && e.message ? e.message : e
       );
       process.exit(1);
     }
   } else {
-    input = await readStdin();
+    const input = await readStdin();
+    if (input) {
+      categories = input.categories || [];
+      keywords = input.keywords || [];
+    }
   }
-  if (!input || !input.categories || !input.keywords) {
+  if (!Array.isArray(categories) || !Array.isArray(keywords)) {
     console.error("Invalid input. Expected JSON with {categories, keywords}");
     process.exit(1);
   }
-  const categories = input.categories;
-  let keywords = input.keywords;
   console.error(
     `assignCategorization: loaded ${categories.length} categories, ${keywords.length} keywords`
   );
@@ -391,7 +454,6 @@ async function main() {
   const categoryEmbeddings = await fetchEmbeddings(categoryTexts);
 
   // simple n^2 compare
-  const fs = require("fs");
   const out = [];
   for (let i = 0; i < keywords.length; i++) {
     const kw = keywords[i];

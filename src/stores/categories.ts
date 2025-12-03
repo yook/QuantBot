@@ -273,18 +273,51 @@ export const useCategoriesStore = defineStore("categories", () => {
       return;
     }
 
+    // Enqueue delete requests to avoid flooding the main process with
+    // concurrent synchronous DB operations which can block the app.
+    deleteQueue.value.push(Number(id));
+    // Start processing if not already running
+    if (!deleteProcessing.value) {
+      processDeleteQueue();
+    }
+  }
+
+  // Internal queue for serializing delete requests
+  const deleteQueue = ref<number[]>([]);
+  const deleteProcessing = ref(false);
+
+  async function processDeleteQueue() {
+    if (deleteProcessing.value) return;
+    deleteProcessing.value = true;
+    loading.value = true;
     try {
-      await ipcClient.deleteCategory(Number(id));
-      ElMessage.success("Категория удалена");
-      // Перезагружаем текущее окно
-      await loadCategories(currentProjectId.value, {
-        skip: windowStart.value,
-        limit: windowSize.value,
-        sort: sort.value,
-      });
-    } catch (error: any) {
-      console.error("Error deleting category:", error);
-      ElMessage.error(`Ошибка: ${error.message}`);
+      while (deleteQueue.value.length > 0) {
+        const id = deleteQueue.value.shift() as number;
+        try {
+          await ipcClient.deleteCategory(id);
+          ElMessage.success(`Категория ${id} удалена`);
+        } catch (err: any) {
+          console.error("Error deleting category (queued):", err);
+          ElMessage.error(`Ошибка при удалении категории ${id}: ${err?.message || String(err)}`);
+        }
+
+        // После каждой операции обновляем окно категорий, чтобы UI оставался консистентным
+        try {
+          await loadCategories(currentProjectId.value as number, {
+            skip: windowStart.value,
+            limit: windowSize.value,
+            sort: sort.value,
+          });
+        } catch (e) {
+          console.warn('Failed to reload categories after delete', e);
+        }
+
+        // Small delay to yield to the event loop and avoid tight CPU loop
+        await new Promise((res) => setTimeout(res, 50));
+      }
+    } finally {
+      deleteProcessing.value = false;
+      loading.value = false;
     }
   }
 

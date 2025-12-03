@@ -31,7 +31,7 @@
                 Фильтр по стоп-словам
               </el-dropdown-item>
               <el-dropdown-item @click="startTypingOnly">
-                Определение типа
+                Определение класса
               </el-dropdown-item>
               <el-dropdown-item @click="startClusteringOnly">
                 Разделение на кластеры

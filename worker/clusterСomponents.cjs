@@ -423,8 +423,53 @@ if (require.main === module) {
     }
 
     try {
-      const input = JSON.parse(fs.readFileSync(inputFile, "utf8"));
-      let keywords = input.keywords || [];
+      // Prefer JSONL (one JSON per line) to avoid loading a huge JSON string.
+      // Detect input type by peeking at the first non-whitespace character.
+      let keywords = [];
+      try {
+        const fd = fs.openSync(inputFile, "r");
+        const buf = Buffer.alloc(1024);
+        const read = fs.readSync(fd, buf, 0, 1024, 0);
+        fs.closeSync(fd);
+        const head = buf.slice(0, read).toString("utf8").trimStart();
+        if (head.startsWith("{") || head.startsWith("[")) {
+          // Likely full JSON object/array — try parsing normally
+          try {
+            const input = JSON.parse(fs.readFileSync(inputFile, "utf8"));
+            keywords = input.keywords || [];
+          } catch (e) {
+            // Fallback: try line-by-line parse
+            const rl = require("readline").createInterface({
+              input: fs.createReadStream(inputFile, { encoding: "utf8" }),
+            });
+            for await (const line of rl) {
+              if (!line || !line.trim()) continue;
+              try {
+                const obj = JSON.parse(line);
+                keywords.push(obj);
+              } catch (err) {}
+            }
+          }
+        } else {
+          // JSONL: parse line-by-line
+          const rl = require("readline").createInterface({
+            input: fs.createReadStream(inputFile, { encoding: "utf8" }),
+          });
+          for await (const line of rl) {
+            if (!line || !line.trim()) continue;
+            try {
+              const obj = JSON.parse(line);
+              keywords.push(obj);
+            } catch (err) {}
+          }
+        }
+      } catch (e) {
+        console.error(
+          "Failed to read/parse input file:",
+          e && e.message ? e.message : e
+        );
+        process.exit(1);
+      }
       // If input provides keywords list, prefer filtering via DB: select ids present in input that are marked target_query=1.
       try {
         if (Array.isArray(keywords) && keywords.length > 0) {

@@ -146,6 +146,11 @@ class IPCClient {
     return result.success ? result.data : null;
   }
 
+  async deleteTypingByLabel(projectId: number, label: string) {
+    const result = await this.ipc.invoke('db:typing:deleteByLabel', projectId, label);
+    return result.success ? result.data : null;
+  }
+
   async getStopwordsAll(projectId: number) {
     const result = await this.ipc.invoke('db:stopwords:getAll', projectId);
     return result.success ? result.data : [];
