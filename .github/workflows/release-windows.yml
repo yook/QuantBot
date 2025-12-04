@@ -3,6 +3,10 @@ name: 🪟 Build and Release QuantBot (Windows)
 on:
   release:
     types: [published]
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
 
 permissions:
   contents: write # нужно для загрузки файлов в релиз
