@@ -6,9 +6,37 @@ import { fileURLToPath } from 'url';
 import { once } from 'node:events';
 import type { ClusteringCtx } from './types.js';
 import { createRequire } from 'module';
+import type { ChildProcess } from 'node:child_process';
 const require = createRequire(import.meta.url);
 
+type ActiveJob = {
+  child?: ChildProcess;
+  abortController: AbortController;
+  manuallyStopped?: boolean;
+};
+
+const activeJobs = new Map<number, ActiveJob>();
+
+export function stopClusteringWorker(projectId: number) {
+  const job = activeJobs.get(projectId);
+  if (job) {
+    console.log(`Stopping clustering worker for project ${projectId}`);
+    job.manuallyStopped = true;
+    job.abortController.abort();
+    if (job.child) {
+      job.child.kill();
+    }
+  }
+}
+
 export async function startClusteringWorker(ctx: ClusteringCtx, projectId: number, algorithm: string, eps: number, minPts?: number) {
+  if (activeJobs.has(projectId)) {
+    console.warn(`Clustering worker for project ${projectId} is already running.`);
+    return;
+  }
+  const abortController = new AbortController();
+  activeJobs.set(projectId, { abortController, manuallyStopped: false });
+
   const { db, getWindow, resolvedDbPath } = ctx;
   const devCandidate = path.join(process.cwd(), 'worker', 'clusterСomponents.cjs');
   const packagedCandidate = process.resourcesPath
@@ -18,6 +46,22 @@ export async function startClusteringWorker(ctx: ClusteringCtx, projectId: numbe
     ? devCandidate
     : (packagedCandidate && fs.existsSync(packagedCandidate) ? packagedCandidate : devCandidate);
   const win = getWindow();
+  const sendStoppedEvent = () => {
+    const w = getWindow();
+    if (w && !w.isDestroyed()) {
+      w.webContents.send('keywords:clustering-stopped', { projectId });
+    }
+  };
+  const emitProgress = (stage: string, payload: Record<string, any>) => {
+    const w = getWindow();
+    if (w && !w.isDestroyed()) {
+      w.webContents.send('keywords:clustering-progress', {
+        projectId,
+        stage,
+        ...payload,
+      });
+    }
+  };
 
   const logDetails =
     algorithm === 'components'
@@ -39,93 +83,179 @@ export async function startClusteringWorker(ctx: ClusteringCtx, projectId: numbe
       console.warn('[clustering] Failed to clear previous clustering results:', (clearErr as any)?.message || clearErr);
     }
 
-    const keywords = db.prepare('SELECT * FROM keywords WHERE project_id = ? AND (target_query IS NULL OR target_query = 1)').all(projectId) as any[];
-    if (!keywords || keywords.length === 0) {
+    const keywordCountRow = db
+      .prepare('SELECT COUNT(*) as cnt FROM keywords WHERE project_id = ? AND (target_query IS NULL OR target_query = 1)')
+      .get(projectId) as { cnt?: number } | undefined;
+    let keywordsTotal = Number(keywordCountRow?.cnt ?? 0);
+
+    if (!keywordsTotal) {
       console.warn(`Не найдены целевые ключевые слова для проекта ${projectId}`);
       if (win && !win.isDestroyed()) {
           win.webContents.send('keywords:clustering-error', { projectId, messageKey: 'keywords.noTargetKeywords', message: 'Не найдены целевые ключевые слова для проекта' });
         }
+      activeJobs.delete(projectId);
       return;
     }
-
-  console.log(`[clustering] Attaching embeddings to ${keywords.length} keywords...`);
+  console.log(`[clustering] Preparing embeddings for ${keywordsTotal} keywords...`);
   const base = process.env.APP_ROOT || path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
   const embeddings = require(path.join(base, 'electron', 'db', 'embeddings.cjs'));
   const attachEmbeddingsToKeywords = embeddings.attachEmbeddingsToKeywords;
-    try {
-      const embeddingStats = await attachEmbeddingsToKeywords(keywords, { chunkSize: 10 });
-      console.log('[clustering] Embedding stats:', embeddingStats);
-      if (!embeddingStats.embedded) {
-        const w = getWindow();
-        if (w && !w.isDestroyed()) {
-          w.webContents.send('keywords:clustering-error', { projectId, message: 'Не удалось подготовить эмбеддинги для кластеризации.' });
-        }
-        return;
-      }
-    } catch (embErr: any) {
-      console.error('[clustering] Failed to prepare embeddings:', embErr?.message || embErr);
-      const w = getWindow();
-      if (w && !w.isDestroyed()) {
-        const rateLimited = /429/.test(String(embErr?.message)) || /rate limit/i.test(String(embErr?.message));
-        w.webContents.send('keywords:clustering-error', {
-          projectId,
-          status: rateLimited ? 429 : undefined,
-          message: rateLimited ? 'Request failed with status code 429' : 'Не удалось получить эмбеддинги для кластеризации. Проверьте OpenAI ключ.',
-        });
-      }
-      return;
-    }
+    const readChunkEnv = Number(process.env.CLUSTERING_KEYWORD_CHUNK || 1000);
+    const keywordReadChunk = Number.isFinite(readChunkEnv) && readChunkEnv > 0 ? Math.max(1, Math.floor(readChunkEnv)) : 1000;
+    const keywordsStmt = db.prepare('SELECT * FROM keywords WHERE project_id = ? AND (target_query IS NULL OR target_query = 1) AND id > ? ORDER BY id LIMIT ?');
 
-    const tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'clustering-'));
-    const inputPath = path.join(tmpDir, `input-${Date.now()}.json`);
-    
-    // Use streaming write to avoid "Invalid string length" error for large datasets
-    // Calculate approximate size before writing
-    const keywordCount = keywords.length;
-    const avgEmbeddingSize = keywords[0]?.embedding?.length || 1536;
-    const estimatedSizeMB = Math.round((keywordCount * avgEmbeddingSize * 8) / (1024 * 1024));
-    console.log(`[clustering] Writing ${keywordCount} keywords (~${estimatedSizeMB} MB estimated) to temp file...`);
-    
+    let tmpDir: string | null = null;
+    let inputPath: string | null = null;
+    let writeStream: ReturnType<typeof fs.createWriteStream> | null = null;
+    const estimatedSizeMB = Math.round((keywordsTotal * 1536 * 8) / (1024 * 1024));
+
     try {
-      const writeStream = fs.createWriteStream(inputPath, { encoding: 'utf8' });
+      tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'clustering-'));
+      inputPath = path.join(tmpDir, `input-${Date.now()}.json`);
+      console.log(`[clustering] Writing ${keywordsTotal} keywords (~${estimatedSizeMB} MB estimated) to temp JSONL file...`);
+
+      writeStream = fs.createWriteStream(inputPath, { encoding: 'utf8' });
       const writeChunk = async (chunk: string) => {
+        if (!writeStream) throw new Error('Write stream is not initialized');
         if (!writeStream.write(chunk)) {
           await once(writeStream, 'drain');
         }
       };
 
-      try {
-        // Write keywords as JSONL: one JSON object per line. This avoids constructing
-        // a very large single JSON string in memory when parsing on the worker side.
-        for (let i = 0; i < keywords.length; i++) {
-          await writeChunk(JSON.stringify(keywords[i]) + '\n');
+      emitProgress('embeddings', {
+        fetched: 0,
+        total: keywordsTotal,
+        percent: keywordsTotal ? 0 : 100,
+      });
+
+      let processedKeywords = 0;
+      let lastKeywordId = 0;
+      let embeddedTotal = 0;
+      while (processedKeywords < keywordsTotal) {
+        const chunk = keywordsStmt.all(projectId, lastKeywordId, keywordReadChunk) as any[];
+        if (!chunk.length) {
+          break;
         }
+
+        const chunkBaseProgress = processedKeywords;
+        const chunkStats = await attachEmbeddingsToKeywords(chunk, { 
+          chunkSize: 10,
+          abortSignal: abortController.signal,
+          onProgress: (p: any) => {
+            const chunkProgress = Math.min(p.fetched || 0, chunk.length);
+            const globalFetched = Math.min(chunkBaseProgress + chunkProgress, keywordsTotal);
+            const percent = keywordsTotal ? Math.round((globalFetched / keywordsTotal) * 100) : 100;
+            emitProgress('embeddings', {
+              fetched: globalFetched,
+              total: keywordsTotal,
+              percent,
+            });
+          }
+        });
+        embeddedTotal += chunkStats?.embedded || 0;
+
+        try {
+          for (const keyword of chunk) {
+            await writeChunk(JSON.stringify(keyword) + '\n');
+          }
+        } catch (streamErr) {
+          (streamErr as any).__writeError = true;
+          throw streamErr;
+        }
+
+        processedKeywords += chunk.length;
+        const tail = chunk[chunk.length - 1] as any;
+        if (tail && typeof tail.id === 'number') {
+          lastKeywordId = tail.id;
+        }
+        const percent = keywordsTotal ? Math.round((processedKeywords / keywordsTotal) * 100) : 100;
+        emitProgress('embeddings', {
+          fetched: processedKeywords,
+          total: keywordsTotal,
+          percent,
+        });
+      }
+
+      if (processedKeywords < keywordsTotal) {
+        console.warn(`[clustering] Keyword count changed during processing. Expected ${keywordsTotal}, processed ${processedKeywords}.`);
+        keywordsTotal = processedKeywords;
+      }
+
+      if (!embeddedTotal) {
+        throw new Error('No embeddings prepared for clustering');
+      }
+
+      try {
         writeStream.end();
         await once(writeStream, 'finish');
+        writeStream = null;
       } catch (streamErr) {
-        writeStream.destroy();
+        (streamErr as any).__writeError = true;
         throw streamErr;
       }
 
+      emitProgress('embeddings', {
+        fetched: keywordsTotal,
+        total: keywordsTotal,
+        percent: keywordsTotal ? 100 : 0,
+      });
+
       console.log(`[clustering] Successfully wrote input file (JSONL): ${inputPath}`);
-    } catch (writeErr: any) {
-      console.error('[clustering] Failed to write input file:', writeErr?.message || writeErr);
-      const w = getWindow();
-      if (w && !w.isDestroyed()) {
-        w.webContents.send('keywords:clustering-error', {
-          projectId,
-          message: `Не удалось подготовить данные для кластеризации (размер: ~${estimatedSizeMB} MB). ${writeErr?.message || 'Unknown error'}`,
-          status: 'WRITE_ERROR',
-          debug: { keywordCount, estimatedSizeMB, error: writeErr?.message }
-        });
+    } catch (embErr: any) {
+      const job = activeJobs.get(projectId);
+      if (writeStream) {
+        try { writeStream.destroy(); } catch (_) {}
       }
-      try { await fs.promises.rm(tmpDir, { recursive: true, force: true }); } catch {}
+      if (tmpDir) {
+        try { await fs.promises.rm(tmpDir, { recursive: true, force: true }); } catch (_) {}
+      }
+      if (embErr?.message === 'Aborted' && job?.manuallyStopped) {
+        activeJobs.delete(projectId);
+        sendStoppedEvent();
+        return;
+      }
+      if (embErr?.__writeError) {
+        console.error('[clustering] Failed to write input file:', embErr?.message || embErr);
+        const w = getWindow();
+        if (w && !w.isDestroyed()) {
+          w.webContents.send('keywords:clustering-error', {
+            projectId,
+            message: `Не удалось подготовить данные для кластеризации (размер: ~${estimatedSizeMB} MB). ${embErr?.message || 'Unknown error'}`,
+            status: 'WRITE_ERROR',
+            debug: { keywordCount: keywordsTotal, estimatedSizeMB, error: embErr?.message }
+          });
+        }
+      } else {
+        console.error('[clustering] Failed to prepare embeddings:', embErr?.message || embErr);
+        const w = getWindow();
+        if (w && !w.isDestroyed()) {
+          const rateLimited = /429/.test(String(embErr?.message)) || /rate limit/i.test(String(embErr?.message));
+          w.webContents.send('keywords:clustering-error', {
+            projectId,
+            status: rateLimited ? 429 : undefined,
+            message: rateLimited ? 'Request failed with status code 429' : 'Не удалось получить эмбеддинги для кластеризации. Проверьте OpenAI ключ.',
+          });
+        }
+      }
+      activeJobs.delete(projectId);
       return;
     }
 
+    if (!tmpDir || !inputPath) {
+      console.error('[clustering] Temporary input file missing after embedding stage.');
+      if (tmpDir) {
+        try { await fs.promises.rm(tmpDir, { recursive: true, force: true }); } catch (_) {}
+      }
+      activeJobs.delete(projectId);
+      return;
+    }
+
+    const tmpDirResolved = tmpDir;
+    const inputPathResolved = inputPath;
+
     // For 'components' algorithm the worker expects a similarity `threshold` (not `eps`),
     // for 'dbscan' the worker expects `eps` (cosine distance). Map accordingly.
-    const args = [workerPath, `--projectId=${projectId}`, `--inputFile=${inputPath}`, `--algorithm=${algorithm}`];
+    const args = [workerPath, `--projectId=${projectId}`, `--inputFile=${inputPathResolved}`, `--algorithm=${algorithm}`];
     if (algorithm === 'components') {
       args.push(`--threshold=${eps}`);
     } else {
@@ -142,6 +272,9 @@ export async function startClusteringWorker(ctx: ClusteringCtx, projectId: numbe
       env,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
+
+    const job = activeJobs.get(projectId);
+    if (job) job.child = child;
 
     let processed = 0;
     child.stdout?.setEncoding('utf8');
@@ -171,11 +304,13 @@ export async function startClusteringWorker(ctx: ClusteringCtx, projectId: numbe
               console.warn('[Main] Failed to notify renderer about keywords:updated for clustering', e);
             }
           }
-          const progress = Math.round((processed / keywords.length) * 100);
-          const w = getWindow();
-          if (w && !w.isDestroyed()) {
-            w.webContents.send('keywords:clustering-progress', { projectId, progress });
-          }
+          const progress = keywordsTotal ? Math.round((processed / keywordsTotal) * 100) : 100;
+          emitProgress('clustering', {
+            progress,
+            percent: progress,
+            processed,
+            total: keywordsTotal,
+          });
         } catch (e) {
           if (line.includes('progress:')) {
             const match = line.match(/progress: (\d+)/);
@@ -193,11 +328,18 @@ export async function startClusteringWorker(ctx: ClusteringCtx, projectId: numbe
       console.error(`[Clustering Worker ${projectId} ERROR]`, data.toString().trim());
     });
 
-    child.on('exit', async (code) => {
-      console.log(`Clustering worker exited with code ${code}`);
-      try { await fs.promises.rm(tmpDir, { recursive: true, force: true }); } catch {}
+    child.on('exit', async (code, signal) => {
+      const jobState = activeJobs.get(projectId);
+      const manuallyStopped = jobState?.manuallyStopped;
+      activeJobs.delete(projectId);
+      console.log(`Clustering worker exited with code ${code}, signal ${signal}`);
+      try { await fs.promises.rm(tmpDirResolved, { recursive: true, force: true }); } catch {}
       const w = getWindow();
       if (w && !w.isDestroyed()) {
+        if (manuallyStopped) {
+          sendStoppedEvent();
+          return;
+        }
         if (code === 0) {
           w.webContents.send('keywords:clustering-finished', { projectId });
         } else {
@@ -206,6 +348,17 @@ export async function startClusteringWorker(ctx: ClusteringCtx, projectId: numbe
       }
     });
   } catch (error: any) {
+    const jobState = activeJobs.get(projectId);
+    const manuallyStopped = jobState?.manuallyStopped;
+    activeJobs.delete(projectId);
+    if (error.message === 'Aborted') {
+      console.log(`Clustering for project ${projectId} aborted.`);
+      if (manuallyStopped) {
+        sendStoppedEvent();
+        return;
+      }
+      return;
+    }
     console.error('Failed to start clustering worker:', error);
     const w = getWindow();
     if (w && !w.isDestroyed()) {

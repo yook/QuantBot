@@ -265,12 +265,9 @@ async function main() {
 
   // 3) Decide whether to train or reuse
   // Pipeline stage ranges (overall percentages)
-  const STAGE = {
-    fetchTrainEmb: [5, 45],
-    training: [45, 80],
-    fetchKeywordsEmb: [80, 90],
-    classification: [90, 100],
-  };
+  // STAGE 1: Embeddings (0-100%) - includes fetchTrainEmb and fetchKeywordsEmb
+  // STAGE 2: Classification (0-100%) - includes training and classification
+
   let modelObj = null;
   if (missing.length === 0 && existingModelValid) {
     // Reuse stored model; skip training
@@ -280,7 +277,7 @@ async function main() {
     modelObj = existingModelRow.payload;
     // mark training stage as completed (we're reusing model)
     try {
-      process.stdout.write(`progress: ${STAGE.training[1]}\n`);
+      // process.stdout.write(`progress: ${STAGE.training[1]}\n`);
     } catch (e) {}
   } else {
     // Fetch embeddings for missing samples and save to DB
@@ -299,14 +296,16 @@ async function main() {
             const processedTotal =
               cachedCountForSamples + processedMissingCount;
             const stagePct = Math.round((processedTotal / samplesTotal) * 100);
-            const start = STAGE.fetchTrainEmb[0];
-            const end = STAGE.fetchTrainEmb[1];
-            const overallPct = Math.min(
-              100,
-              Math.max(0, Math.round(start + (end - start) * (stagePct / 100)))
-            );
             try {
-              process.stdout.write(`progress: ${overallPct}\n`);
+              process.stdout.write(
+                JSON.stringify({
+                  type: "progress",
+                  stage: "embeddings",
+                  percent: stagePct,
+                  processed: processedTotal,
+                  total: samplesTotal,
+                }) + "\n"
+              );
             } catch (e) {}
           } catch (e) {}
         },
@@ -346,14 +345,16 @@ async function main() {
             const cachedForThis = texts.length - totalMissing;
             const processedTotal = cachedForThis + processedMissingCount;
             const stagePct = Math.round((processedTotal / texts.length) * 100);
-            const start = STAGE.fetchTrainEmb[0];
-            const end = STAGE.fetchTrainEmb[1];
-            const overallPct = Math.min(
-              100,
-              Math.max(0, Math.round(start + (end - start) * (stagePct / 100)))
-            );
             try {
-              process.stdout.write(`progress: ${overallPct}\n`);
+              process.stdout.write(
+                JSON.stringify({
+                  type: "progress",
+                  stage: "embeddings",
+                  percent: stagePct,
+                  processed: processedTotal,
+                  total: texts.length,
+                }) + "\n"
+              );
             } catch (e) {}
           } catch (e) {}
         },
@@ -406,16 +407,21 @@ async function main() {
     modelObj = await cls.trainClassifier(trainSet, {
       onTrainProgress: (epochIdx, epochs, epochPct) => {
         try {
-          const start = STAGE.training[0];
-          const end = STAGE.training[1];
-          const overallPct = Math.min(
-            100,
-            Math.max(0, Math.round(start + (end - start) * (epochPct / 100)))
-          );
+          // Training is part of classification stage (0-50% of classification stage roughly, or just show as classification)
+          // Let's map training to 0-20% of classification stage
+          const overallPct = Math.round(epochPct * 0.2);
           if (overallPct !== lastTrainPct) {
             lastTrainPct = overallPct;
             try {
-              process.stdout.write(`progress: ${overallPct}\n`);
+              process.stdout.write(
+                JSON.stringify({
+                  type: "progress",
+                  stage: "classification",
+                  percent: overallPct,
+                  processed: epochIdx,
+                  total: epochs,
+                }) + "\n"
+              );
             } catch (e) {}
           }
         } catch (e) {}
@@ -425,7 +431,7 @@ async function main() {
     console.error("[trainAndClassify] Model saved.");
     // ensure training stage fully reported
     try {
-      process.stdout.write(`progress: ${STAGE.training[1]}\n`);
+      // process.stdout.write(`progress: ${STAGE.training[1]}\n`);
     } catch (e) {}
   }
 
@@ -605,24 +611,23 @@ async function main() {
         const stagePct = textsLength
           ? Math.round((processedTotal / textsLength) * 100)
           : 0;
-        const start = STAGE.fetchKeywordsEmb[0];
-        const end = STAGE.fetchKeywordsEmb[1];
-        const overallPct = Math.min(
-          100,
-          Math.max(0, Math.round(start + (end - start) * (stagePct / 100)))
-        );
-        if (overallPct !== lastKwFetchPct) {
-          lastKwFetchPct = overallPct;
-          try {
-            process.stdout.write(`progress: ${overallPct}\n`);
-          } catch (e) {}
-        }
+        try {
+          process.stdout.write(
+            JSON.stringify({
+              type: "progress",
+              stage: "embeddings",
+              percent: stagePct,
+              processed: processedTotal,
+              total: textsLength,
+            }) + "\n"
+          );
+        } catch (e) {}
       } catch (e) {}
     },
   });
   // ensure keyword-embeddings fetch stage reached end
   try {
-    process.stdout.write(`progress: ${STAGE.fetchKeywordsEmb[1]}\n`);
+    // process.stdout.write(`progress: ${STAGE.fetchKeywordsEmb[1]}\n`);
   } catch (e) {}
   let processedCount = 0;
   let skippedEmbCount = 0;
@@ -663,16 +668,20 @@ async function main() {
     // report classification progress mapped to classification stage
     try {
       const classPct = Math.round((processedCount / keywords.length) * 100);
-      const start = STAGE.classification[0];
-      const end = STAGE.classification[1];
-      const overallPct = Math.min(
-        100,
-        Math.max(0, Math.round(start + (end - start) * (classPct / 100)))
-      );
-      if (overallPct !== lastClassPct) {
-        lastClassPct = overallPct;
+      // Map classification to 20-100% of classification stage (since 0-20% was training)
+      // Actually, let's just show 0-100% for classification part as well, user won't notice the jump from training
+      if (classPct !== lastClassPct) {
+        lastClassPct = classPct;
         try {
-          process.stdout.write(`progress: ${overallPct}\n`);
+          process.stdout.write(
+            JSON.stringify({
+              type: "progress",
+              stage: "classification",
+              percent: classPct,
+              processed: processedCount,
+              total: keywords.length,
+            }) + "\n"
+          );
         } catch (e) {}
       }
     } catch (e) {}
@@ -682,7 +691,7 @@ async function main() {
   );
   // classification done -> 100%
   try {
-    process.stdout.write(`progress: 100\n`);
+    // process.stdout.write(`progress: 100\n`);
   } catch (e) {}
 }
 

@@ -3,6 +3,9 @@ import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { ipcMain } from 'electron';
 import type { IpcContext } from './types';
+import { stopCategorizationWorker } from '../workers/categorization.js';
+import { stopTypingWorker } from '../workers/typing.js';
+import { stopClusteringWorker } from '../workers/clustering.js';
 import { createRequire } from 'module';
 const require = createRequire(import.meta.url);
 
@@ -327,6 +330,23 @@ export function registerKeywordsIpc(ctx: IpcContext) {
       const result = db.prepare('DELETE FROM keywords WHERE project_id = ?').run(projectId);
       return { success: true, data: result };
     } catch (error: any) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('keywords:stop-process', async (_event, projectId, processType) => {
+    try {
+      console.log(`[IPC] Stopping process ${processType} for project ${projectId}`);
+      if (processType === 'categorization') {
+        stopCategorizationWorker(projectId);
+      } else if (processType === 'typing') {
+        stopTypingWorker(projectId);
+      } else if (processType === 'clustering') {
+        stopClusteringWorker(projectId);
+      }
+      return { success: true };
+    } catch (error: any) {
+      console.error(`[IPC] Failed to stop process ${processType}:`, error);
       return { success: false, error: error.message };
     }
   });

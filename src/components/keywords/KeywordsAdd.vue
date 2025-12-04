@@ -11,10 +11,18 @@
         >Добавить ключевые запросы
       </el-button>
       <div class="flex items-center">
+        <div
+          v-if="keywordsStore.running"
+          class="flex flex-col items-end mr-3 text-sm text-gray-600 dark:text-gray-400 leading-tight"
+          style="min-width: 140px"
+        >
+          <span class="font-medium">{{ processLabel }}</span>
+          <span v-if="processedText" class="text-xs">{{ processedText }}</span>
+        </div>
         <el-progress
           :text-inside="true"
           :stroke-width="40"
-          :percentage="keywordsStore.percentage"
+          :percentage="currentProgress"
           class="ml-3"
           striped
           :striped-flow="keywordsStore.running"
@@ -34,7 +42,7 @@
                 Определение класса
               </el-dropdown-item>
               <el-dropdown-item @click="startClusteringOnly">
-                Разделение на кластеры
+                Распределение на кластеры
               </el-dropdown-item>
               <el-dropdown-item @click="startCategorizationOnly">
                 Присвоение категории
@@ -107,7 +115,7 @@
 </template>
 
 <script setup>
-import { ref, watch, onUnmounted } from "vue";
+import { ref, watch, onUnmounted, computed } from "vue";
 import validator from "validator";
 import { ElMessage } from "element-plus";
 import { useI18n } from "vue-i18n";
@@ -122,6 +130,32 @@ const { t } = useI18n();
 const dialogVisible = ref(false);
 const keywords = ref("");
 const isMounted = ref(true);
+
+const currentProgress = computed(() => {
+  if (keywordsStore.categorizationRunning)
+    return keywordsStore.categorizationPercent;
+  if (keywordsStore.typingRunning) return keywordsStore.typingPercent;
+  if (keywordsStore.clusteringRunning) return keywordsStore.clusteringPercent;
+  if (keywordsStore.stopwordsRunning) return keywordsStore.stopwordsPercent;
+  return keywordsStore.percentage;
+});
+
+const processLabel = computed(() => {
+  if (keywordsStore.currentProcessLabel)
+    return keywordsStore.currentProcessLabel;
+  if (keywordsStore.categorizationRunning) return "Категоризация";
+  if (keywordsStore.typingRunning) return "Определение класса";
+  if (keywordsStore.clusteringRunning) return "Кластеризация";
+  if (keywordsStore.stopwordsRunning) return "Стоп-слова";
+  return "";
+});
+
+const processedText = computed(() => {
+  if (keywordsStore.currentTotal > 0) {
+    return `${keywordsStore.currentProcessed} из ${keywordsStore.currentTotal}`;
+  }
+  return "";
+});
 
 onUnmounted(() => {
   isMounted.value = false;
@@ -148,7 +182,7 @@ function submitSite() {
 }
 
 function freezeQueue() {
-  project.stopCrawlerIPC();
+  keywordsStore.stopCurrentProcess();
 }
 
 async function addKeywords() {

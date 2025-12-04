@@ -58,6 +58,11 @@ export const useKeywordsStore = defineStore("keywords", () => {
   const typingPercent = ref(0);
   const clusteringPercent = ref(0);
 
+  // UI helpers for detailed progress
+  const currentProcessLabel = ref("");
+  const currentProcessed = ref(0);
+  const currentTotal = ref(0);
+
   // Целевые флаги: какие процессы пользователь намерен запускать (используются для прогресса/сброса)
   const targetCategorization = ref(false);
   const targetTyping = ref(false);
@@ -427,6 +432,9 @@ export const useKeywordsStore = defineStore("keywords", () => {
     stopwordsFinished.value = false;
     stopwordsPercent.value = 0;
     targetStopwords.value = false;
+    currentProcessLabel.value = "";
+    currentProcessed.value = 0;
+    currentTotal.value = 0;
   }
 
   // Запуск всех процессов последовательно (сохранено для удобства)
@@ -1284,7 +1292,33 @@ export const useKeywordsStore = defineStore("keywords", () => {
       console.log('[Keywords Store] Received categorization-progress:', data);
       if (String(data.projectId) === String(currentProjectId.value)) {
         categorizationRunning.value = true;
-        categorizationPercent.value = Math.max(0, Math.min(100, data.progress || 0));
+        
+        // Update label and counts based on stage
+        if (data.stage === 'embeddings') {
+          currentProcessLabel.value = "Собираю эмбендинги";
+          currentProcessed.value = data.fetched || 0;
+          currentTotal.value = data.total || 0;
+        } else if (data.stage === 'categorization') {
+          if ((data.processed || 0) === 0) {
+            return;
+          }
+          currentProcessLabel.value = "Присваиваю категорию";
+          currentProcessed.value = data.processed || 0;
+          currentTotal.value = data.total || 0;
+          } else {
+            if ((data.processed || 0) === 0) {
+             return;
+            }
+            // Fallback
+            currentProcessLabel.value = "Категоризация";
+            currentProcessed.value = data.processed || 0;
+            currentTotal.value = data.total || 0;
+          }
+
+        // Prefer explicit `percent` from workers (fetched/total), fall back to `progress`.
+        const raw = typeof data.percent !== 'undefined' ? data.percent : data.progress;
+        const val = Number(raw || 0);
+        categorizationPercent.value = Math.max(0, Math.min(100, Math.round(val)));
         checkBothProcessesFinished();
       }
     });
@@ -1295,6 +1329,11 @@ export const useKeywordsStore = defineStore("keywords", () => {
         categorizationRunning.value = false;
         categorizationFinished.value = true;
         categorizationPercent.value = 100;
+        // Clear detailed progress fields so UI can switch to next process or default state
+        currentProcessLabel.value = "";
+        currentProcessed.value = 0;
+        currentTotal.value = 0;
+        
         checkBothProcessesFinished();
         // Reload keywords to show updated categories (сохраняем окно и сортировку)
         if (currentProjectId.value) {
@@ -1313,6 +1352,9 @@ export const useKeywordsStore = defineStore("keywords", () => {
         categorizationFinished.value = true;
         targetCategorization.value = false;
         categorizationPercent.value = 0;
+        currentProcessLabel.value = "";
+        currentProcessed.value = 0;
+        currentTotal.value = 0;
         updateOverallProgress();
         // Log detailed payload to renderer console for diagnostics (status/debug)
         try {
@@ -1321,11 +1363,43 @@ export const useKeywordsStore = defineStore("keywords", () => {
         ElMessage.error(mapErrorMessage(data));
     });
 
+    ipcClient.on('keywords:categorization-stopped', (data: any) => {
+      if (!data || String(data.projectId) !== String(currentProjectId.value)) return;
+      categorizationRunning.value = false;
+      targetCategorization.value = false;
+      categorizationPercent.value = 0;
+      currentProcessLabel.value = 'Остановлено';
+      currentProcessed.value = 0;
+      currentTotal.value = 0;
+      updateOverallProgress();
+      ElMessage.info('Категоризация остановлена');
+    });
+
     // Typing events
     ipcClient.on('keywords:typing-progress', (data: any) => {
       if (String(data.projectId) === String(currentProjectId.value)) {
         typingRunning.value = true;
-        typingPercent.value = Math.max(0, Math.min(100, data.progress || 0));
+        
+        // Update label and counts based on stage
+        if (data.stage === 'embeddings' || data.stage === 'embeddings-categories') {
+          currentProcessLabel.value = "Собираю эмбендинги";
+          currentProcessed.value = data.fetched || data.processed || 0;
+          currentTotal.value = data.total || 0;
+        } else if (data.stage === 'classification') {
+          currentProcessLabel.value = "Присваиваю класс";
+          currentProcessed.value = data.processed || 0;
+          currentTotal.value = data.total || 0;
+        } else {
+           // Fallback
+           currentProcessLabel.value = "Определение класса";
+           currentProcessed.value = data.processed || 0;
+           currentTotal.value = data.total || 0;
+        }
+
+        // Prefer explicit `percent` from workers, fall back to `progress`.
+        const raw = typeof data.percent !== 'undefined' ? data.percent : data.progress;
+        const val = Number(raw || 0);
+        typingPercent.value = Math.max(0, Math.min(100, Math.round(val)));
         checkBothProcessesFinished();
       }
     });
@@ -1335,6 +1409,11 @@ export const useKeywordsStore = defineStore("keywords", () => {
         typingRunning.value = false;
         typingFinished.value = true;
         typingPercent.value = 100;
+        // Clear detailed progress fields
+        currentProcessLabel.value = "";
+        currentProcessed.value = 0;
+        currentTotal.value = 0;
+        
         checkBothProcessesFinished();
         // После завершения типизации перезагрузим текущее окно, чтобы гарантированно увидеть class_name
         if (currentProjectId.value) {
@@ -1353,11 +1432,26 @@ export const useKeywordsStore = defineStore("keywords", () => {
         typingFinished.value = true;
         targetTyping.value = false;
         typingPercent.value = 0;
+        currentProcessLabel.value = "";
+        currentProcessed.value = 0;
+        currentTotal.value = 0;
         updateOverallProgress();
         try {
           console.error('[Worker Error] keywords:typing-error', data, 'status=', data?.status, 'debug=', data?.debug || data?.error || null);
         } catch (e) {}
         ElMessage.error(mapErrorMessage(data));
+    });
+
+    ipcClient.on('keywords:typing-stopped', (data: any) => {
+      if (!data || String(data.projectId) !== String(currentProjectId.value)) return;
+      typingRunning.value = false;
+      targetTyping.value = false;
+      typingPercent.value = 0;
+      currentProcessLabel.value = 'Остановлено';
+      currentProcessed.value = 0;
+      currentTotal.value = 0;
+      updateOverallProgress();
+      ElMessage.info('Определение класса остановлено');
     });
 
     // Stop-words apply events (worker streams apply-progress)
@@ -1428,7 +1522,27 @@ export const useKeywordsStore = defineStore("keywords", () => {
     ipcClient.on('keywords:clustering-progress', (data: any) => {
       if (String(data.projectId) === String(currentProjectId.value)) {
         clusteringRunning.value = true;
-        clusteringPercent.value = Math.max(0, Math.min(100, data.progress || 0));
+        
+        // Update label and counts based on stage
+        if (data.stage === 'embeddings') {
+          currentProcessLabel.value = "Собираю эмбендинги";
+          currentProcessed.value = data.fetched || 0;
+          currentTotal.value = data.total || 0;
+        } else if (data.stage === 'clustering') {
+          currentProcessLabel.value = "Кластеризация";
+          currentProcessed.value = data.processed || 0;
+          currentTotal.value = data.total || 0;
+        } else {
+           // Fallback
+           currentProcessLabel.value = "Кластеризация";
+           currentProcessed.value = data.processed || 0;
+           currentTotal.value = data.total || 0;
+        }
+
+        // Prefer explicit `percent` from workers, fall back to `progress`.
+        const raw = typeof data.percent !== 'undefined' ? data.percent : data.progress;
+        const val = Number(raw || 0);
+        clusteringPercent.value = Math.max(0, Math.min(100, Math.round(val)));
         checkBothProcessesFinished();
       }
     });
@@ -1438,6 +1552,11 @@ export const useKeywordsStore = defineStore("keywords", () => {
         clusteringRunning.value = false;
         clusteringFinished.value = true;
         clusteringPercent.value = 100;
+        // Clear detailed progress fields
+        currentProcessLabel.value = "";
+        currentProcessed.value = 0;
+        currentTotal.value = 0;
+        
         checkBothProcessesFinished();
         // Перезагружаем окно, чтобы отобразить изменения кластеров
         if (currentProjectId.value) {
@@ -1456,12 +1575,27 @@ export const useKeywordsStore = defineStore("keywords", () => {
         clusteringFinished.value = true;
         targetClustering.value = false;
         clusteringPercent.value = 0;
+        currentProcessLabel.value = "";
+        currentProcessed.value = 0;
+        currentTotal.value = 0;
         updateOverallProgress();
         try {
           console.error('[Worker Error] keywords:clustering-error', data, 'status=', data?.status, 'debug=', data?.debug || data?.error || null);
         } catch (e) {}
         ElMessage.error(mapErrorMessage(data) || "Ошибка кластеризации");
       }
+    });
+
+    ipcClient.on('keywords:clustering-stopped', (data: any) => {
+      if (!data || String(data.projectId) !== String(currentProjectId.value)) return;
+      clusteringRunning.value = false;
+      targetClustering.value = false;
+      clusteringPercent.value = 0;
+      currentProcessLabel.value = 'Остановлено';
+      currentProcessed.value = 0;
+      currentTotal.value = 0;
+      updateOverallProgress();
+      ElMessage.info('Кластеризация остановлена');
     });
 
     // Progress events from db-worker for bulk import
@@ -1505,6 +1639,27 @@ export const useKeywordsStore = defineStore("keywords", () => {
 
   // Initialize IPC listeners
   setupIpcListeners();
+
+  async function stopCurrentProcess() {
+    if (!currentProjectId.value) return;
+    const pid = Number(currentProjectId.value);
+
+    if (categorizationRunning.value) {
+      await ipcClient.invoke('keywords:stop-process', pid, 'categorization');
+      categorizationRunning.value = false;
+    }
+    if (typingRunning.value) {
+      await ipcClient.invoke('keywords:stop-process', pid, 'typing');
+      typingRunning.value = false;
+    }
+    if (clusteringRunning.value) {
+      await ipcClient.invoke('keywords:stop-process', pid, 'clustering');
+      clusteringRunning.value = false;
+    }
+    
+    running.value = false;
+    currentProcessLabel.value = "Остановлено";
+  }
 
   return {
     // State
@@ -1553,10 +1708,14 @@ export const useKeywordsStore = defineStore("keywords", () => {
   startTypingOnly,
   startStopwordsOnly,
   startClusteringOnly,
+  stopCurrentProcess,
     // New actions/flags
     // startCategorization, // TODO: IPC migration
     // Background process flags
     running,
     percentage,
+    currentProcessLabel,
+    currentProcessed,
+    currentTotal,
   };
 });

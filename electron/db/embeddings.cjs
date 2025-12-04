@@ -171,7 +171,12 @@ async function attachEmbeddingsToKeywords(keywords, opts = {}) {
   const textToIndices = new Map();
   for (let i = 0; i < keywords.length; i++) {
     const kw = keywords[i];
-    const text = typeof kw.keyword === "string" ? kw.keyword.trim() : "";
+    let text = "";
+    if (typeof kw.keyword === "string") text = kw.keyword.trim();
+    else if (typeof kw.text === "string") text = kw.text.trim();
+    else if (typeof kw.category_name === "string")
+      text = kw.category_name.trim();
+
     keywords[i].embedding = null;
     keywords[i].embeddingSource = "unknown";
     if (!text) continue;
@@ -199,7 +204,11 @@ async function attachEmbeddingsToKeywords(keywords, opts = {}) {
   }
 
   let fetched = 0;
-  for (let start = 0; start < toFetch.length; start += chunkSize) {
+  const totalToFetch = toFetch.length;
+  for (let start = 0; start < totalToFetch; start += chunkSize) {
+    if (opts.abortSignal && opts.abortSignal.aborted) {
+      throw new Error("Aborted");
+    }
     const chunk = toFetch.slice(start, start + chunkSize);
     const fetchOpts = Object.assign({}, fetchOptions, { model: modelUsed });
     if (effectiveProjectId) fetchOpts.projectId = effectiveProjectId;
@@ -218,6 +227,15 @@ async function attachEmbeddingsToKeywords(keywords, opts = {}) {
           await embeddingsCachePut(text, vec, modelUsed);
         } catch (_) {}
       }
+    }
+    if (opts.onProgress && typeof opts.onProgress === "function") {
+      const currentFetched = Math.min(start + chunkSize, totalToFetch);
+      const percent = Math.round((currentFetched / totalToFetch) * 100);
+      opts.onProgress({
+        fetched: currentFetched,
+        total: totalToFetch,
+        percent,
+      });
     }
   }
 

@@ -3,10 +3,41 @@ import fs from 'fs';
 import os from 'os';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
-// fileURLToPath not required here
+import { fileURLToPath } from 'url';
+import { createRequire } from 'module';
 import type { TypingCtx } from './types.js';
+import type { ChildProcess } from 'node:child_process';
+
+const require = createRequire(import.meta.url);
+
+type ActiveJob = {
+  child?: ChildProcess;
+  abortController: AbortController;
+  manuallyStopped?: boolean;
+};
+
+const activeJobs = new Map<number, ActiveJob>();
+
+export function stopTypingWorker(projectId: number) {
+  const job = activeJobs.get(projectId);
+  if (job) {
+    console.log(`Stopping typing worker for project ${projectId}`);
+    job.manuallyStopped = true;
+    job.abortController.abort();
+    if (job.child) {
+      job.child.kill();
+    }
+  }
+}
 
 export async function startTypingWorker(ctx: TypingCtx, projectId: number) {
+  if (activeJobs.has(projectId)) {
+    console.warn(`Typing worker for project ${projectId} is already running.`);
+    return;
+  }
+  const abortController = new AbortController();
+  activeJobs.set(projectId, { abortController, manuallyStopped: false });
+
   const { db, getWindow, resolvedDbPath, typingLabelColumn, typingTextColumn, typingDateColumn } = ctx;
   const devCandidate = path.join(process.cwd(), 'worker', 'trainAndClassify.cjs');
   const packagedCandidate = process.resourcesPath
@@ -16,13 +47,32 @@ export async function startTypingWorker(ctx: TypingCtx, projectId: number) {
     ? devCandidate
     : (packagedCandidate && fs.existsSync(packagedCandidate) ? packagedCandidate : devCandidate);
   const win = getWindow();
+  const sendStoppedEvent = () => {
+    const w = getWindow();
+    if (w && !w.isDestroyed()) {
+      w.webContents.send('keywords:typing-stopped', { projectId });
+    }
+  };
+  const emitProgress = (stage: string, payload: Record<string, any>) => {
+    const w = getWindow();
+    if (w && !w.isDestroyed()) {
+      w.webContents.send('keywords:typing-progress', {
+        projectId,
+        stage,
+        ...payload,
+      });
+    }
+  };
 
   console.log(`Starting typing worker for project ${projectId}`);
 
   try {
     const dateAlias = typingDateColumn ? `${typingDateColumn} AS date,` : '';
     const typingSamples = db.prepare(`SELECT id, project_id, ${typingLabelColumn} AS label, ${typingTextColumn} AS text, ${dateAlias} created_at FROM typing_samples WHERE project_id = ?`).all(projectId);
-    const keywords = db.prepare('SELECT * FROM keywords WHERE project_id = ? AND (target_query IS NULL OR target_query = 1)').all(projectId) as any[];
+    const keywordCountRow = db
+      .prepare('SELECT COUNT(*) as cnt FROM keywords WHERE project_id = ? AND (target_query IS NULL OR target_query = 1)')
+      .get(projectId) as { cnt?: number } | undefined;
+    let keywordsTotal = Number(keywordCountRow?.cnt ?? 0);
 
     // Проверяем, задано ли достаточное количество классов в `typing_samples`
     try {
@@ -38,17 +88,19 @@ export async function startTypingWorker(ctx: TypingCtx, projectId: number) {
             labelsSample: labels.slice(0, 10),
           });
         }
+        activeJobs.delete(projectId);
         return;
       }
     } catch (e) {
       console.warn('[Typing] Failed to check typing_samples labels count', e);
     }
 
-    if (!keywords || keywords.length === 0) {
+    if (!keywordsTotal) {
       console.warn(`Не найдены целевые ключевые слова для проекта ${projectId}`);
       if (win && !win.isDestroyed()) {
         win.webContents.send('keywords:typing-error', { projectId, messageKey: 'keywords.noTargetKeywords', message: 'Не найдены целевые ключевые слова для проекта' });
         }
+      activeJobs.delete(projectId);
       return;
     }
 
@@ -59,18 +111,38 @@ export async function startTypingWorker(ctx: TypingCtx, projectId: number) {
       console.warn('[Typing] Failed to clear previous class values', e);
     }
 
-    const tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'typing-'));
-    const inputPath = path.join(tmpDir, `input-${Date.now()}.json`);
+    // Attach embeddings (from new DB facade module)
+    console.log(`Preparing embeddings for ${keywordsTotal} keywords and ${typingSamples.length} samples...`);
+    const base = process.env.APP_ROOT || path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
+    const embeddings = require(path.join(base, 'electron', 'db', 'embeddings.cjs'));
+    const attachEmbeddingsToKeywords = embeddings.attachEmbeddingsToKeywords;
+    const readChunkEnv = Number(process.env.TYPING_KEYWORD_CHUNK || 1000);
+    const keywordReadChunk = Number.isFinite(readChunkEnv) && readChunkEnv > 0 ? Math.max(1, Math.floor(readChunkEnv)) : 1000;
+    const keywordsStmt = db.prepare('SELECT * FROM keywords WHERE project_id = ? AND (target_query IS NULL OR target_query = 1) AND id > ? ORDER BY id LIMIT ?');
 
-    // Stream the input to avoid creating a huge string in memory
-    const keywordCount = (keywords || []).length;
-    const avgEmbeddingSize = (keywords && keywords[0]?.embedding?.length) || 1536;
-    const estimatedSizeMB = Math.round((keywordCount * avgEmbeddingSize * 8) / (1024 * 1024));
-    console.log(`[typing] Writing ${keywordCount} keywords (~${estimatedSizeMB} MB estimated) to temp file...`);
+    let tmpDir: string | null = null;
+    let inputPath: string | null = null;
+    let writeStream: ReturnType<typeof fs.createWriteStream> | null = null;
+    const estimatedSizeMB = Math.round((keywordsTotal * 1536 * 8) / (1024 * 1024));
 
     try {
-      const writeStream = fs.createWriteStream(inputPath, { encoding: 'utf8' });
+      // 1. Embed typing samples (classes)
+      await attachEmbeddingsToKeywords(typingSamples, {
+        chunkSize: 10,
+        abortSignal: abortController.signal,
+        onProgress: (p: any) => {
+           console.log(`[Typing] Embedding samples: ${p.percent}%`);
+        }
+      });
+
+      // 2. Embed keywords + stream to temp file
+      tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'typing-'));
+      inputPath = path.join(tmpDir, `input-${Date.now()}.json`);
+      console.log(`[typing] Writing ${keywordsTotal} keywords (~${estimatedSizeMB} MB estimated) to temp file...`);
+
+      writeStream = fs.createWriteStream(inputPath, { encoding: 'utf8' });
       const writeChunk = async (chunk: string) => {
+        if (!writeStream) throw new Error('Write stream is not initialized');
         if (!writeStream.write(chunk)) {
           await once(writeStream, 'drain');
         }
@@ -80,33 +152,136 @@ export async function startTypingWorker(ctx: TypingCtx, projectId: number) {
         await writeChunk('{"typingSamples":');
         await writeChunk(JSON.stringify(typingSamples || []));
         await writeChunk(',"keywords":[');
-        for (let i = 0; i < (keywords || []).length; i++) {
-          if (i > 0) await writeChunk(',');
-          await writeChunk(JSON.stringify(keywords[i]));
+      } catch (streamErr) {
+        (streamErr as any).__writeError = true;
+        throw streamErr;
+      }
+
+      emitProgress('embeddings', {
+        fetched: 0,
+        total: keywordsTotal,
+        percent: keywordsTotal ? 0 : 100,
+      });
+
+      let processedKeywords = 0;
+      let wroteAnyKeyword = false;
+      let lastKeywordId = 0;
+      while (processedKeywords < keywordsTotal) {
+        const chunk = keywordsStmt.all(projectId, lastKeywordId, keywordReadChunk) as any[];
+        if (!chunk.length) {
+          break;
         }
+
+        const chunkBaseProgress = processedKeywords;
+        await attachEmbeddingsToKeywords(chunk, { 
+          chunkSize: 10,
+          abortSignal: abortController.signal,
+          onProgress: (p: any) => {
+            const chunkProgress = Math.min(p.fetched || 0, chunk.length);
+            const globalFetched = Math.min(chunkBaseProgress + chunkProgress, keywordsTotal);
+            const percent = keywordsTotal ? Math.round((globalFetched / keywordsTotal) * 100) : 100;
+            emitProgress('embeddings', {
+              fetched: globalFetched,
+              total: keywordsTotal,
+              percent,
+            });
+          }
+        });
+
+        try {
+          for (const keyword of chunk) {
+            if (wroteAnyKeyword) await writeChunk(',');
+            await writeChunk(JSON.stringify(keyword));
+            wroteAnyKeyword = true;
+          }
+        } catch (streamErr) {
+          (streamErr as any).__writeError = true;
+          throw streamErr;
+        }
+
+        processedKeywords += chunk.length;
+        const tail = chunk[chunk.length - 1] as any;
+        if (tail && typeof tail.id === 'number') {
+          lastKeywordId = tail.id;
+        }
+        const percent = keywordsTotal ? Math.round((processedKeywords / keywordsTotal) * 100) : 100;
+        emitProgress('embeddings', {
+          fetched: processedKeywords,
+          total: keywordsTotal,
+          percent,
+        });
+      }
+
+      if (processedKeywords < keywordsTotal) {
+        console.warn(`[Typing] Keyword count changed during processing. Expected ${keywordsTotal}, processed ${processedKeywords}.`);
+        keywordsTotal = processedKeywords;
+      }
+
+      try {
         await writeChunk(']');
         await writeChunk('}');
         writeStream.end();
         await once(writeStream, 'finish');
+        writeStream = null;
       } catch (streamErr) {
-        writeStream.destroy();
+        (streamErr as any).__writeError = true;
         throw streamErr;
       }
 
+      emitProgress('embeddings', {
+        fetched: keywordsTotal,
+        total: keywordsTotal,
+        percent: keywordsTotal ? 100 : 0,
+      });
+
       console.log(`[typing] Successfully wrote input file: ${inputPath}`);
-    } catch (writeErr: any) {
-      console.error('[typing] Failed to write input file:', writeErr?.message || writeErr);
-      if (win && !win.isDestroyed()) {
-        win.webContents.send('keywords:typing-error', {
-          projectId,
-          message: `Не удалось подготовить данные для классификации (примерный размер: ~${estimatedSizeMB} MB). ${writeErr?.message || 'Unknown error'}`,
-          status: 'WRITE_ERROR',
-          debug: { keywordCount, estimatedSizeMB, error: writeErr?.message }
-        });
+    } catch (embErr: any) {
+      const job = activeJobs.get(projectId);
+      if (writeStream) {
+        try { writeStream.destroy(); } catch (_) {}
       }
-      try { await fs.promises.rm(tmpDir, { recursive: true, force: true }); } catch {}
+      if (tmpDir) {
+        try { await fs.promises.rm(tmpDir, { recursive: true, force: true }); } catch (_) {}
+      }
+      if (embErr?.message === 'Aborted' && job?.manuallyStopped) {
+        activeJobs.delete(projectId);
+        sendStoppedEvent();
+        return;
+      }
+      if (embErr?.__writeError) {
+        console.error('[typing] Failed to write input file:', embErr?.message || embErr);
+        if (win && !win.isDestroyed()) {
+          win.webContents.send('keywords:typing-error', {
+            projectId,
+            message: `Не удалось подготовить данные для классификации (примерный размер: ~${estimatedSizeMB} MB). ${embErr?.message || 'Unknown error'}`,
+            status: 'WRITE_ERROR',
+            debug: { keywordCount: keywordsTotal, estimatedSizeMB, error: embErr?.message }
+          });
+        }
+      } else {
+        console.error('[typing] Failed to prepare embeddings:', embErr?.message || embErr);
+        if (win && !win.isDestroyed()) {
+          win.webContents.send('keywords:typing-error', {
+            projectId,
+            message: 'Не удалось получить эмбеддинги для классификации. Проверьте OpenAI ключ.',
+          });
+        }
+      }
+      activeJobs.delete(projectId);
       return;
     }
+
+    if (!tmpDir || !inputPath) {
+      console.error('[typing] Temporary input file missing after embedding stage.');
+      if (tmpDir) {
+        try { await fs.promises.rm(tmpDir, { recursive: true, force: true }); } catch (_) {}
+      }
+      activeJobs.delete(projectId);
+      return;
+    }
+
+    const tmpDirResolved = tmpDir;
+    const inputPathResolved = inputPath;
 
     console.log(`[Typing] workerPath: ${workerPath}, resolvedDbPath: ${resolvedDbPath}`);
     try {
@@ -117,6 +292,7 @@ export async function startTypingWorker(ctx: TypingCtx, projectId: number) {
         if (w && !w.isDestroyed()) {
           w.webContents.send('keywords:typing-error', { projectId, message: `Worker файл не найден: ${workerPath}` });
         }
+        activeJobs.delete(projectId);
         return;
       }
     } catch (e) {
@@ -128,10 +304,13 @@ export async function startTypingWorker(ctx: TypingCtx, projectId: number) {
       QUANTBOT_DB_DIR: resolvedDbPath ? path.dirname(resolvedDbPath) : undefined,
     });
 
-    const child = spawn(process.execPath, [workerPath, `--projectId=${projectId}`, `--inputFile=${inputPath}`], {
+    const child = spawn(process.execPath, [workerPath, `--projectId=${projectId}`, `--inputFile=${inputPathResolved}`], {
       env,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
+
+    const job = activeJobs.get(projectId);
+    if (job) job.child = child;
 
     let processed = 0;
     child.stdout?.setEncoding('utf8');
@@ -147,6 +326,14 @@ export async function startTypingWorker(ctx: TypingCtx, projectId: number) {
         console.log(`[Typing Worker ${projectId}]`, line);
         try {
           const obj = JSON.parse(line);
+          // If worker emitted a progress update, forward it to UI
+          if (obj && obj.type === 'progress') {
+            const w = getWindow();
+            if (w && !w.isDestroyed()) {
+              w.webContents.send('keywords:typing-progress', Object.assign({ projectId }, obj));
+            }
+            continue;
+          }
           processed++;
           const cname = obj.bestCategoryName ?? obj.className ?? null;
           if (obj.id && cname !== null) {
@@ -180,12 +367,14 @@ export async function startTypingWorker(ctx: TypingCtx, projectId: number) {
               console.warn('[Main] Failed to notify renderer about keywords:updated for typing', e);
             }
           }
-          if (keywords && keywords.length > 0) {
-            const progress = Math.round((processed / keywords.length) * 100);
-            const w = getWindow();
-            if (w && !w.isDestroyed()) {
-              w.webContents.send('keywords:typing-progress', { projectId, progress });
-            }
+          if (keywordsTotal > 0) {
+            const progress = Math.round((processed / keywordsTotal) * 100);
+            emitProgress('classification', {
+              progress,
+              percent: progress,
+              processed,
+              total: keywordsTotal,
+            });
           }
         } catch (e) {
           if (line.includes('progress:')) {
@@ -213,10 +402,17 @@ export async function startTypingWorker(ctx: TypingCtx, projectId: number) {
     });
 
     child.on('exit', async (code, signal) => {
+      const jobState = activeJobs.get(projectId);
+      const manuallyStopped = jobState?.manuallyStopped;
+      activeJobs.delete(projectId);
       console.log(`Typing worker exited with code ${code}, signal ${signal}`);
-      try { await fs.promises.rm(tmpDir, { recursive: true, force: true }); } catch {}
+      try { await fs.promises.rm(tmpDirResolved, { recursive: true, force: true }); } catch {}
       const w = getWindow();
       if (w && !w.isDestroyed()) {
+        if (manuallyStopped) {
+          sendStoppedEvent();
+          return;
+        }
         if (code === 0) {
           w.webContents.send('keywords:typing-finished', { projectId });
         } else {
@@ -239,6 +435,17 @@ export async function startTypingWorker(ctx: TypingCtx, projectId: number) {
       }
     });
   } catch (error: any) {
+    const jobState = activeJobs.get(projectId);
+    const manuallyStopped = jobState?.manuallyStopped;
+    activeJobs.delete(projectId);
+    if (error.message === 'Aborted') {
+      console.log(`Typing for project ${projectId} aborted.`);
+      if (manuallyStopped) {
+        sendStoppedEvent();
+        return;
+      }
+      return;
+    }
     console.error('Failed to start typing worker:', error);
     const w = getWindow();
     if (w && !w.isDestroyed()) {

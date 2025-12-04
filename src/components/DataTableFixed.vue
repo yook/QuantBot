@@ -506,13 +506,7 @@ const visiblePage = computed(() => {
           _rowNumber: startRow + index + 1, // Глобальный номер строки на основе scrollTop
         }));
 
-      console.log("visiblePage: Showing rows", {
-        startRow,
-        endRow,
-        resultLength: result.length,
-        windowStart: windowStartRow,
-        sort: props.sort,
-      });
+      // Debug log removed to reduce client console noise
 
       return result;
     }
@@ -538,11 +532,7 @@ const visiblePage = computed(() => {
               _rowNumber: overlapStart + index + 1,
             }));
 
-          console.log("visiblePage: Showing partial overlap", {
-            overlapStart,
-            overlapEnd,
-            resultLength: result.length,
-          });
+          // Partial-overlap debug log removed to reduce client console noise
 
           return result;
         }
@@ -964,7 +954,7 @@ function changeCurrentPage(val) {
 }
 
 function handleTableChange(selectedDb) {
-  console.log("Changing table to:", selectedDb);
+  // debug: Changing table to: (removed console.log to reduce client noise)
   // Устанавливаем новую базу данных
   project.currentDb = selectedDb;
 
@@ -1020,9 +1010,7 @@ function getsortedDb(sort) {
 function loadMoreData() {
   // Эта функция отключена, так как загрузка данных теперь управляется
   // напрямую из функции mousewheel для лучшей синхронизации
-  console.log(
-    "loadMoreData called but skipped - using mousewheel logic instead"
-  );
+  // debug: loadMoreData called but skipped - using mousewheel logic instead
   return;
 }
 
@@ -1031,7 +1019,7 @@ watch(
   () => props.loadingMore,
   (newVal) => {
     if (!newVal) {
-      console.log("loadingMore reset to false"); // Debugging log
+      // debug: loadingMore reset to false (removed console.log)
     }
   }
 );
@@ -1740,9 +1728,7 @@ watch(
 watch(
   [scrollTop, () => windowStart.value],
   ([newScrollTop, newWindowStart]) => {
-    console.log(
-      `Debug: scrollTop=${newScrollTop}, windowStart=${windowStart.value}, newWindowStart=${newWindowStart}`
-    );
+    // debug: scrollTop/windowStart change (console.log removed)
   }
 );
 
@@ -1781,25 +1767,14 @@ function mousewheel(e) {
   const maxStart = Math.max(0, props.totalCount - pageSize.value);
   if (start.value > maxStart) start.value = maxStart;
 
-  console.log("ScrollTop updated:", {
-    oldScrollTop,
-    newScrollTop: scrollTop.value,
-    maxScrollTop,
-    currentRow: start.value,
-  });
+  // debug: ScrollTop updated (console.log removed)
 
   // Автоматическая загрузка нового окна данных при приближении к границам
   const threshold = 20; // Загружать, когда остается меньше 20 элементов от границы окна
   const currentRow = Math.floor(scrollTop.value / rowHeight);
   const currentWindowEnd = windowStart.value + (props.data?.length || 0);
 
-  console.log("Load condition check:", {
-    currentRow,
-    currentWindowEnd,
-    threshold,
-    windowStart: windowStart.value,
-    dataLength: props.data?.length,
-  });
+  // debug: Load condition check (console.log removed)
 
   // Проверяем, нужно ли загружать новое окно
   const newWindowStart = Math.max(0, currentRow - bufferSize);
@@ -1810,16 +1785,7 @@ function mousewheel(e) {
     currentRow >= currentWindowEnd; // вышли за пределы текущего окна
 
   if (shouldLoadNewWindow && newWindowStart !== lastWindowStart.value) {
-    console.log("Triggering new window load:", {
-      newWindowStart,
-      currentWindowStart: windowStart.value,
-      reason:
-        currentRow < windowStart.value
-          ? "before window"
-          : currentRow >= currentWindowEnd
-          ? "after window"
-          : "near boundary",
-    });
+    // debug: Triggering new window load (console.log removed)
 
     // Отмечаем последний запрошенный windowStart, чтобы избежать повторов
     lastWindowStart.value = newWindowStart;

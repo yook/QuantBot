@@ -13,6 +13,13 @@ class IPCClient {
     }
   }
 
+  async invoke(channel: string, ...args: any[]) {
+    if (!this.ipc || typeof this.ipc.invoke !== 'function') {
+      throw new Error('[IPC Client] ipcRenderer.invoke is not available');
+    }
+    return this.ipc.invoke(channel, ...args);
+  }
+
   // Direct DB calls via IPC
   async getProjectsAll() {
     const result = await this.ipc.invoke('db:projects:getAll');
