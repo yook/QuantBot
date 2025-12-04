@@ -1294,26 +1294,22 @@ export const useKeywordsStore = defineStore("keywords", () => {
         categorizationRunning.value = true;
         
         // Update label and counts based on stage
-        if (data.stage === 'embeddings') {
+        if (data.stage === 'embeddings' || data.stage === 'embeddings-categories') {
+          // Show embedding collection stage even when 0 fetched
           currentProcessLabel.value = "Собираю эмбендинги";
-          currentProcessed.value = data.fetched || 0;
+          currentProcessed.value = data.fetched || data.processed || 0;
           currentTotal.value = data.total || 0;
         } else if (data.stage === 'categorization') {
-          if ((data.processed || 0) === 0) {
-            return;
-          }
+          // Show categorization stage (allow 0 processed to be visible)
           currentProcessLabel.value = "Присваиваю категорию";
-          currentProcessed.value = data.processed || 0;
+          currentProcessed.value = data.processed || data.fetched || 0;
           currentTotal.value = data.total || 0;
-          } else {
-            if ((data.processed || 0) === 0) {
-             return;
-            }
-            // Fallback
-            currentProcessLabel.value = "Категоризация";
-            currentProcessed.value = data.processed || 0;
-            currentTotal.value = data.total || 0;
-          }
+        } else {
+          // Fallback
+          currentProcessLabel.value = "Категоризация";
+          currentProcessed.value = data.processed || data.fetched || 0;
+          currentTotal.value = data.total || 0;
+        }
 
         // Prefer explicit `percent` from workers (fetched/total), fall back to `progress`.
         const raw = typeof data.percent !== 'undefined' ? data.percent : data.progress;
