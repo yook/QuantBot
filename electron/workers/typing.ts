@@ -127,12 +127,26 @@ export async function startTypingWorker(ctx: TypingCtx, projectId: number) {
 
     try {
       // 1. Embed typing samples (classes)
+      emitProgress('embeddings-categories', {
+        fetched: 0,
+        total: typingSamples.length,
+        percent: typingSamples.length ? 0 : 100,
+      });
       await attachEmbeddingsToKeywords(typingSamples, {
-        chunkSize: 10,
+        chunkSize: 64,
         abortSignal: abortController.signal,
         onProgress: (p: any) => {
-           console.log(`[Typing] Embedding samples: ${p.percent}%`);
+          emitProgress('embeddings-categories', {
+            fetched: p.fetched,
+            total: typeof p.total !== 'undefined' ? p.total : typingSamples.length,
+            percent: p.percent,
+          });
         }
+      });
+      emitProgress('embeddings-categories', {
+        fetched: typingSamples.length,
+        total: typingSamples.length,
+        percent: typingSamples.length ? 100 : 0,
       });
 
       // 2. Embed keywords + stream to temp file
@@ -174,7 +188,7 @@ export async function startTypingWorker(ctx: TypingCtx, projectId: number) {
 
         const chunkBaseProgress = processedKeywords;
         await attachEmbeddingsToKeywords(chunk, { 
-          chunkSize: 10,
+          chunkSize: 64,
           abortSignal: abortController.signal,
           onProgress: (p: any) => {
             const chunkProgress = Math.min(p.fetched || 0, chunk.length);

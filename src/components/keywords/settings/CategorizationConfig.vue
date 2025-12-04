@@ -175,7 +175,6 @@ function deleteCategory(row) {
     }
   )
     .then(() => {
-      console.log("Delete category:", row.id);
       // Делегируем удаление в стор (он вызовет socket.emit и проверит соединение)
       categoriesStore.deleteCategory(row.id);
     })
@@ -203,7 +202,6 @@ function deleteAllCategories() {
     }
   )
     .then(() => {
-      console.log("Delete all categories");
       // Предполагаем, что в categoriesStore есть метод deleteAllCategories
       categoriesStore.deleteAllCategories();
     })
@@ -214,7 +212,6 @@ function deleteAllCategories() {
 
 // Данные для таблицы
 const categoriesData = computed(() => {
-  console.log("Categories data:", categoriesStore.categories);
   return categoriesStore.categories;
 });
 // Функции для таблицы
@@ -226,14 +223,11 @@ const loadData = (projectId, options) =>
 
 // Установить текущий проект ID при монтировании
 onMounted(() => {
-  console.log("Project data on mount:", project.data);
-  console.log("Current project ID:", project.currentProjectId);
   if (project.currentProjectId) {
     categoriesStore.setCurrentProjectId(project.currentProjectId);
     // Загрузить категории для проекта
     categoriesStore.loadCategories(project.currentProjectId);
   }
-  console.log("Categories Store Data:", categoriesStore.categories);
 });
 
 // Слушаем изменения currentProjectId и загружаем категории для нового проекта

@@ -146,10 +146,7 @@ async function fetchEmbeddings(texts, opts = {}) {
   // texts: array of strings
   if (!Array.isArray(texts) || texts.length === 0) return [];
   const model = opts.model || DEFAULT_MODEL;
-  const batchSize = Math.max(
-    1,
-    Number(opts.batchSize || opts.chunkSize || 100)
-  );
+  const batchSize = Math.max(1, Number(opts.batchSize || opts.chunkSize || 64));
 
   // Prepare result array and determine which inputs are missing from cache
   const results = new Array(texts.length).fill(null);

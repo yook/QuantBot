@@ -139,7 +139,7 @@ export async function startClusteringWorker(ctx: ClusteringCtx, projectId: numbe
 
         const chunkBaseProgress = processedKeywords;
         const chunkStats = await attachEmbeddingsToKeywords(chunk, { 
-          chunkSize: 10,
+          chunkSize: 64,
           abortSignal: abortController.signal,
           onProgress: (p: any) => {
             const chunkProgress = Math.min(p.fetched || 0, chunk.length);

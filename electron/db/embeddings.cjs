@@ -150,7 +150,11 @@ module.exports = {
 // Attach OpenAI embeddings to provided keywords in-place, using cache when possible
 async function attachEmbeddingsToKeywords(keywords, opts = {}) {
   const { fetchEmbeddings } = requireEmbeddingsFetcher();
-  const chunkSize = opts.chunkSize || 50;
+  const requestedChunkSize = Number(opts.chunkSize);
+  const chunkSize =
+    Number.isFinite(requestedChunkSize) && requestedChunkSize > 0
+      ? Math.floor(requestedChunkSize)
+      : 64;
   const fetchOptions = opts.fetchOptions || {};
   // Determine projectId for proxy resolution: prefer explicit opt, fallback to keywords array
   const projectIdFromOpts = opts.projectId ? Number(opts.projectId) : null;
