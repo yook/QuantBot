@@ -137,18 +137,6 @@ async function deleteSecret(keyName) {
   }
 }
 
-async function migrateFromKeytar(keytar, service, account) {
-  try {
-    const secret = await keytar.getPassword(service, account);
-    if (!secret) return { migrated: false, reason: "no-key" };
-    await saveSecret(account, secret);
-    await keytar.deletePassword(service, account);
-    return { migrated: true };
-  } catch (e) {
-    return { migrated: false, error: e && e.message ? e.message : String(e) };
-  }
-}
-
 module.exports = {
   MK_PATH,
   ensureMasterKeyExists,
@@ -158,5 +146,4 @@ module.exports = {
   saveSecret,
   getSecret,
   deleteSecret,
-  migrateFromKeytar,
 };

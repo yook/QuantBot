@@ -154,13 +154,6 @@ function initializeSchema() {
   ).run();
   try {
     const cols = db.prepare("PRAGMA table_info(keywords)").all();
-    const hasIsStop = cols.some((c) => c && c.name === "is_stop");
-    if (!hasIsStop) {
-      console.error("[DB Worker] Adding missing column is_stop to keywords");
-      db.prepare(
-        "ALTER TABLE keywords ADD COLUMN is_stop INTEGER DEFAULT 0"
-      ).run();
-    }
     const hasTargetQuery = cols.some((c) => c && c.name === "target_query");
     if (!hasTargetQuery) {
       console.error(
@@ -434,8 +427,8 @@ function handleRequest(req) {
         }
 
         // Strategy: use a temporary table to import keywords in batches,
-        // then perform a single INSERT OR IGNORE FROM temp table and a single UPDATE JOIN
-        // to mark `is_stop` based on `stop_words` (substring match).
+        // then perform a single INSERT OR IGNORE FROM temp table. Stop-word
+        // handling is performed separately via `stop_words` table.
 
         try {
           db.prepare(

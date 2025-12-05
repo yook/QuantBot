@@ -1289,14 +1289,13 @@ export const useKeywordsStore = defineStore("keywords", () => {
     
     // Categorization events
     ipcClient.on('keywords:categorization-progress', (data: any) => {
-      console.log('[Keywords Store] Received categorization-progress:', data);
       if (String(data.projectId) === String(currentProjectId.value)) {
         categorizationRunning.value = true;
         
         // Update label and counts based on stage
         if (data.stage === 'embeddings' || data.stage === 'embeddings-categories') {
           // Show embedding collection stage even when 0 fetched
-          currentProcessLabel.value = "Собираю эмбендинги";
+          currentProcessLabel.value = "Собираю эмбенддинги";
           currentProcessed.value = data.fetched || data.processed || 0;
           currentTotal.value = data.total || 0;
         } else if (data.stage === 'categorization') {
@@ -1378,7 +1377,7 @@ export const useKeywordsStore = defineStore("keywords", () => {
         
         // Update label and counts based on stage
         if (data.stage === 'embeddings' || data.stage === 'embeddings-categories') {
-          currentProcessLabel.value = "Собираю эмбендинги";
+          currentProcessLabel.value = "Собираю эмбенддинги";
           currentProcessed.value = data.fetched || data.processed || 0;
           currentTotal.value = data.total || 0;
         } else if (data.stage === 'classification') {
@@ -1521,7 +1520,7 @@ export const useKeywordsStore = defineStore("keywords", () => {
         
         // Update label and counts based on stage
         if (data.stage === 'embeddings') {
-          currentProcessLabel.value = "Собираю эмбендинги";
+          currentProcessLabel.value = "Собираю эмбенддинги";
           currentProcessed.value = data.fetched || 0;
           currentTotal.value = data.total || 0;
         } else if (data.stage === 'clustering') {

@@ -152,7 +152,6 @@
     // Native modules
     "node_modules/better-sqlite3/**",
     "node_modules/bindings/**",
-    "node_modules/keytar/**",
     // HTTP client used by worker scripts (and its deps)
     "node_modules/axios/**",
     "node_modules/form-data/**",

@@ -207,6 +207,11 @@ async function attachEmbeddingsToKeywords(keywords, opts = {}) {
     toFetch.push(text);
   }
 
+  // Debug: report how many unique texts will be fetched from OpenAI
+  try {
+    console.error(`[embeddings] toFetch unique texts: ${toFetch.length}, total keywords chunk: ${keywords.length}, chunkSize: ${chunkSize}, model: ${modelUsed}`);
+  } catch (_) {}
+
   let fetched = 0;
   const totalToFetch = toFetch.length;
   for (let start = 0; start < totalToFetch; start += chunkSize) {
@@ -216,7 +221,9 @@ async function attachEmbeddingsToKeywords(keywords, opts = {}) {
     const chunk = toFetch.slice(start, start + chunkSize);
     const fetchOpts = Object.assign({}, fetchOptions, { model: modelUsed });
     if (effectiveProjectId) fetchOpts.projectId = effectiveProjectId;
+    console.error(`[embeddings] requesting embeddings for chunk ${start}-${start + chunk.length - 1} (size ${chunk.length})`);
     const vectors = await fetchEmbeddings(chunk, fetchOpts);
+    console.error(`[embeddings] received embeddings for chunk ${start}-${start + chunk.length - 1}: vectors.length=${Array.isArray(vectors)?vectors.length:0}`);
     for (let i = 0; i < chunk.length; i++) {
       const vec = vectors[i];
       const text = chunk[i];

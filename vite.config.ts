@@ -22,7 +22,6 @@ export default defineConfig({
                 'better-sqlite3',
                 'bindings',
                 'file-uri-to-path',
-                'keytar',
               ],
             },
           },

@@ -86,7 +86,28 @@ export async function startCategorizationWorker(ctx: CategorizationCtx, projectI
       console.warn('[Categorization] Failed to check categories count', e);
     }
 
-    const categories = db.prepare(`SELECT id, project_id, ${categoriesNameColumn} AS category_name, created_at FROM categories WHERE project_id = ?`).all(projectId);
+    let categories = db.prepare(`SELECT id, project_id, ${categoriesNameColumn} AS category_name, created_at FROM categories WHERE project_id = ?`).all(projectId);
+
+    // Deduplicate and cap categories to avoid OOM on huge lists
+    const dedupMap = new Map<string, boolean>();
+    const deduped: any[] = [];
+    for (const c of categories) {
+      const key = (c as any)?.category_name ? String((c as any).category_name).trim().toLowerCase() : '';
+      if (!key) continue;
+      if (dedupMap.has(key)) continue;
+      dedupMap.set(key, true);
+      deduped.push(c);
+    }
+    if (deduped.length !== categories.length) {
+      console.warn(`[Categorization] Deduped categories: ${categories.length} -> ${deduped.length}`);
+    }
+
+    const CATEGORY_LIMIT = Number(process.env.CATEGORY_LIMIT || 0);
+    if (CATEGORY_LIMIT > 0 && deduped.length > CATEGORY_LIMIT) {
+      console.warn(`[Categorization] Categories exceed limit ${CATEGORY_LIMIT}: ${deduped.length}. Proceeding with batching may be slow/huge.`);
+    }
+
+    categories = deduped;
     // Clear previous categorization results for the project to avoid stale values
     try {
       db.prepare('UPDATE keywords SET category_name = NULL, category_similarity = NULL WHERE project_id = ?').run(projectId);
@@ -128,23 +149,7 @@ export async function startCategorizationWorker(ctx: CategorizationCtx, projectI
     const estimatedSizeMB = Math.round((keywordsTotal * avgEmbeddingSize * 8) / (1024 * 1024));
 
     try {
-      // 1. Embed categories
-      emitProgress('embeddings-categories', {
-        fetched: 0,
-        total: categories.length,
-        percent: categories.length ? 0 : 100,
-      });
-      await attachEmbeddingsToKeywords(categories, {
-        chunkSize: 10,
-        abortSignal: abortController.signal,
-        onProgress: (p: any) => {
-          emitProgress('embeddings-categories', {
-            fetched: p.fetched,
-            total: typeof p.total !== 'undefined' ? p.total : categories.length,
-            percent: p.percent,
-          });
-        }
-      });
+      // 1. Skip pre-embedding categories here; worker will batch embeddings per category chunk
       emitProgress('embeddings-categories', {
         fetched: categories.length,
         total: categories.length,
@@ -188,11 +193,17 @@ export async function startCategorizationWorker(ctx: CategorizationCtx, projectI
 
         const chunkBaseProgress = processedKeywords;
         const chunkStats = await attachEmbeddingsToKeywords(chunk, {
-          chunkSize: 10,
+          chunkSize: 64,
           abortSignal: abortController.signal,
           onProgress: (p: any) => {
-            const chunkProgress = Math.min(p.fetched || 0, chunk.length);
-            const globalFetched = Math.min(chunkBaseProgress + chunkProgress, keywordsTotal);
+            const chunkProgress = Math.min(
+              p.fetched || 0,
+              p.total || chunk.length
+            );
+            const globalFetched = Math.min(
+              chunkBaseProgress + chunkProgress,
+              keywordsTotal
+            );
             const percent = keywordsTotal ? Math.round((globalFetched / keywordsTotal) * 100) : 100;
             emitProgress('embeddings', {
               fetched: globalFetched,
@@ -280,12 +291,16 @@ export async function startCategorizationWorker(ctx: CategorizationCtx, projectI
         }
       } else {
         console.error('[categorization] Failed to prepare embeddings:', embErr?.message || embErr);
+        if (embErr?.stack) console.error('[categorization] stack:', embErr.stack);
         if (win && !win.isDestroyed()) {
           const rateLimited = isRateLimitError(embErr);
           win.webContents.send('keywords:categorization-error', {
             projectId,
             status: rateLimited ? 429 : undefined,
-            message: rateLimited ? 'Request failed with status code 429' : 'Не удалось получить эмбеддинги для классификации. Проверьте OpenAI ключ.',
+            message: rateLimited
+              ? 'Request failed with status code 429'
+              : `Не удалось получить эмбеддинги для классификации. Проверьте OpenAI ключ. ${embErr?.message || ''}`,
+            debug: embErr ? { message: embErr?.message, code: embErr?.code, name: embErr?.name } : undefined,
           });
         }
       }
@@ -319,22 +334,35 @@ export async function startCategorizationWorker(ctx: CategorizationCtx, projectI
     let env = Object.assign({}, process.env, {
       ELECTRON_RUN_AS_NODE: '1',
       QUANTBOT_DB_DIR: resolvedDbPath ? path.dirname(resolvedDbPath) : undefined,
+      NODE_OPTIONS: '--max-old-space-size=4096',
     });
 
-    const child = spawn(process.execPath, [workerPath, `--projectId=${projectId}`, `--inputFile=${inputPathResolved}`], {
+    const child: ChildProcess = spawn(process.execPath, [workerPath, `--projectId=${projectId}`, `--inputFile=${inputPathResolved}`], {
       env,
-      stdio: ['ignore', 'pipe', 'pipe'],
+      stdio: 'pipe',
     });
 
     const job = activeJobs.get(projectId);
     if (job) job.child = child;
 
+    // Сразу переключаем UI на этап категоризации, чтобы не зависать на лейбле эмбеддингов
+    const wStart = getWindow();
+    if (wStart && !wStart.isDestroyed()) {
+      wStart.webContents.send('keywords:categorization-progress', {
+        projectId,
+        stage: 'categorization',
+        processed: 0,
+        total: keywordsTotal,
+        percent: 0,
+      });
+    }
+
     let processed = 0;
     child.stdout?.setEncoding('utf8');
     let stdoutBuffer = '';
 
-    child.stdout?.on('data', (data) => {
-      stdoutBuffer += data;
+    child.stdout?.on('data', (data: string | Buffer) => {
+      stdoutBuffer += data.toString();
       const lines = stdoutBuffer.split('\n');
       stdoutBuffer = lines.pop() || '';
 
@@ -410,15 +438,23 @@ export async function startCategorizationWorker(ctx: CategorizationCtx, projectI
     });
 
     child.stderr?.setEncoding('utf8');
-    child.stderr?.on('data', (data) => {
+    child.stderr?.on('data', (data: string | Buffer) => {
       console.error(`[Categorization Worker ${projectId} ERROR]`, data.toString().trim());
     });
 
-    child.on('exit', async (code, signal) => {
+    child.on('exit', async (code: number | null, signal: NodeJS.Signals | null) => {
       const jobState = activeJobs.get(projectId);
       const manuallyStopped = jobState?.manuallyStopped;
       activeJobs.delete(projectId);
-      console.log(`Categorization worker exited with code ${code}, signal ${signal}`);
+      
+      // Enhanced logging for debugging production crashes
+      if (code === null) {
+        console.error(`[Categorization] Worker exited with code=null, signal=${signal}. Likely killed by OS (OOM) or unhandled exception.`);
+        console.error(`[Categorization] Last processed: ${processed}/${keywordsTotal} keywords (${Math.round(processed/keywordsTotal*100)}%)`);
+      } else {
+        console.log(`Categorization worker exited with code ${code}, signal ${signal}`);
+      }
+      
       try { await fs.promises.rm(tmpDirResolved, { recursive: true, force: true }); } catch {}
       const w = getWindow();
       if (w && !w.isDestroyed()) {

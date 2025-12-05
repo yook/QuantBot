@@ -4,7 +4,7 @@
   "description": "QuantBot — инструмент для краулинга и анализа сайтов",
   "author": "Yook",
   "private": true,
-  "version": "1.2.3",
+  "version": "1.2.5",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -37,7 +37,6 @@
     "express": "^5.1.0",
     "file-uri-to-path": "^2.0.0",
     "http": "^0.0.1-security",
-    "keytar": "^7.9.0",
     "moment": "^2.30.1",
     "pinia": "^3.0.3",
     "simplecrawler": "^1.1.9",

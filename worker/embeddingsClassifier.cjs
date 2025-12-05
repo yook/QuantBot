@@ -108,20 +108,12 @@ async function getApiKey() {
         const fromStore = await ss.getSecret("openai");
         if (fromStore) return fromStore;
       } catch (e) {
-        // fallback silently to keytar/env
         console.warn(
           "[embeddingsClassifier] secret-store getSecret error",
           e && e.message ? e.message : e
         );
       }
     }
-
-    // Next try keytar
-    try {
-      const keytar = require("keytar");
-      const key = await keytar.getPassword("site-analyzer", "openai");
-      if (key) return key;
-    } catch (_) {}
 
     // Fallback: check environment variable (useful in packaged apps or CI)
     const envKey = process.env.OPENAI_API_KEY || process.env.OPENAI_KEY || null;
@@ -135,7 +127,7 @@ async function getApiKey() {
     }
 
     throw new Error(
-      "Failed to read OpenAI key from secret-store/keytar and no OPENAI_API_KEY env var present"
+      "Failed to read OpenAI key from secret-store and no OPENAI_API_KEY env var present"
     );
   } catch (err) {
     throw err;
@@ -146,12 +138,21 @@ async function fetchEmbeddings(texts, opts = {}) {
   // texts: array of strings
   if (!Array.isArray(texts) || texts.length === 0) return [];
   const model = opts.model || DEFAULT_MODEL;
-  const batchSize = Math.max(1, Number(opts.batchSize || opts.chunkSize || 64));
+  const batchSize = Math.max(
+    1,
+    Number(
+      opts.batchSize || opts.chunkSize || process.env.EMBEDDING_BATCH_SIZE || 64
+    )
+  );
+  const chunkDelayMs = Number(
+    opts.chunkDelayMs || process.env.EMBEDDING_CHUNK_DELAY_MS || 50
+  );
 
   // Prepare result array and determine which inputs are missing from cache
   const results = new Array(texts.length).fill(null);
   const missingEntries = [];
 
+  // Check cache for each text and build list of missing entries
   for (let i = 0; i < texts.length; i++) {
     const text = texts[i];
     try {
@@ -161,7 +162,7 @@ async function fetchEmbeddings(texts, opts = {}) {
         continue;
       }
     } catch (_) {
-      // ignore cache read errors
+      // ignore cache errors
     }
     missingEntries.push({ idx: i, text });
   }
@@ -229,11 +230,20 @@ async function fetchEmbeddings(texts, opts = {}) {
       processedMissing += chunkEntries.length;
       try {
         if (opts && typeof opts.onProgress === "function") {
-          try {
-            opts.onProgress(processedMissing, missingEntries.length);
-          } catch (_e) {}
+          opts.onProgress({
+            fetched: Math.min(processedMissing, missingEntries.length),
+            total: missingEntries.length,
+            percent: Math.round(
+              (Math.min(processedMissing, missingEntries.length) /
+                (missingEntries.length || 1)) *
+                100
+            ),
+          });
         }
       } catch (_e) {}
+      if (start + batchSize < missingEntries.length && chunkDelayMs > 0) {
+        await new Promise((r) => setTimeout(r, chunkDelayMs));
+      }
     }
   }
 
@@ -328,6 +338,11 @@ async function trainClassifier(samples, opts = {}) {
         throw new Error(
           `Invalid embedding value at sample ${i} dim ${j}: ${String(v)}`
         );
+      }
+
+      // throttle between batches to reduce rate-limit chances
+      if (start + batchSize < missingEntries.length && chunkDelayMs > 0) {
+        await new Promise((r) => setTimeout(r, chunkDelayMs));
       }
     }
   }

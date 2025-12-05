@@ -15,6 +15,27 @@
 
 */
 
+// Global error handlers for unhandled exceptions/rejections
+process.on("uncaughtException", (err) => {
+  console.error("[FATAL] Uncaught exception:", err);
+  process.exit(1);
+});
+
+process.on("unhandledRejection", (reason, promise) => {
+  console.error("[FATAL] Unhandled promise rejection:", reason);
+  process.exit(1);
+});
+
+process.on("SIGTERM", () => {
+  console.error("[WORKER] Received SIGTERM, exiting");
+  process.exit(143);
+});
+
+process.on("SIGINT", () => {
+  console.error("[WORKER] Received SIGINT, exiting");
+  process.exit(130);
+});
+
 // (Proxy support removed)
 const axios = require("axios");
 const path = require("path");
@@ -100,7 +121,7 @@ function cosineSimilarity(a, b) {
   return dot / (Math.sqrt(na) * Math.sqrt(nb));
 }
 
-async function fetchEmbeddings(texts) {
+async function fetchEmbeddings(texts, stageLabel = "embeddings") {
   // texts: array of strings
   if (!Array.isArray(texts) || texts.length === 0) return [];
 
@@ -123,10 +144,9 @@ async function fetchEmbeddings(texts) {
   // Fetch missing embeddings from OpenAI
   if (toFetch.length > 0) {
     try {
-      // Resolve API key dynamically per project from DB
+      // Resolve API key dynamically per project from DB via secret-store
       const args = parseArgs();
       const projectId = args.projectId ? Number(args.projectId) : null;
-      // Resolve API key: try machine-bound secret-store, then keytar, then exit with error.
       let key = null;
       try {
         const path = require("path");
@@ -171,14 +191,8 @@ async function fetchEmbeddings(texts) {
         }
       } catch (_) {}
       if (!key) {
-        try {
-          const keytar = require("keytar");
-          key = await keytar.getPassword("site-analyzer", "openai");
-        } catch (e) {}
-      }
-      if (!key) {
         console.error(
-          "OpenAI API key not found in secret-store or system keychain (keytar). Please save the key under service 'site-analyzer' account 'openai'."
+          "OpenAI API key not found in secret-store. Please save the key via Integrations UI."
         );
         process.exit(1);
       }
@@ -238,7 +252,7 @@ async function fetchEmbeddings(texts) {
           );
           emitProgress({
             type: "progress",
-            stage: "embeddings",
+            stage: stageLabel,
             fetched: fetchedSoFar,
             total: toFetch.length,
           });
@@ -253,7 +267,7 @@ async function fetchEmbeddings(texts) {
       try {
         emitProgress({
           type: "progress",
-          stage: "embeddings",
+          stage: stageLabel,
           fetched: toFetch.length,
           total: toFetch.length,
         });
@@ -267,7 +281,7 @@ async function fetchEmbeddings(texts) {
         const status = err && err.response && err.response.status;
         if (code === "invalid_api_key" || status === 401) {
           console.error(
-            "\nОшибка: неверный или недействительный OpenAI API ключ.\nКлюч должен храниться в системном хранилище (keytar) под service 'site-analyzer', account 'openai'.\nСсылка: https://platform.openai.com/account/api-keys\n"
+            "\nОшибка: неверный или недействительный OpenAI API ключ.\nСохраните ключ через UI Интеграций или задайте переменную окружения OPENAI_API_KEY.\nСсылка: https://platform.openai.com/account/api-keys\n"
           );
         }
       } catch (e) {
@@ -301,8 +315,9 @@ async function main() {
   // Support input via file or stdin. Expected shape: { categories: [...], keywords: [...] }
   let categories = [];
   let keywords = [];
+  let keywordStreamIteratorFactory = null;
   if (args.inputFile) {
-    // stream-parse categories and keywords arrays separately to avoid large JSON.parse
+    // Stream-parse categories fully (they are small) and keywords lazily to avoid OOM
     async function streamReadArray(filePath, key) {
       return new Promise((resolve, reject) => {
         const rs = fs.createReadStream(filePath, { encoding: "utf8" });
@@ -363,9 +378,62 @@ async function main() {
       });
     }
 
+    async function* streamReadArrayIterator(filePath, key) {
+      const rs = fs.createReadStream(filePath, { encoding: "utf8" });
+      let buf = "";
+      let state = "searching";
+      let depth = 0;
+      let objBuf = "";
+      for await (const chunk of rs) {
+        buf += chunk;
+        if (state === "searching") {
+          const idx = buf.indexOf('"' + key + '"');
+          if (idx === -1) {
+            if (buf.length > 1024 * 10) buf = buf.slice(-1024);
+            continue;
+          }
+          const rest = buf.slice(idx + key.length + 2);
+          const arrIdx = rest.indexOf("[");
+          if (arrIdx === -1) continue;
+          buf = rest.slice(arrIdx + 1);
+          state = "inarray";
+        }
+
+        if (state === "inarray") {
+          for (let i = 0; i < buf.length; i++) {
+            const ch = buf[i];
+            if (depth === 0) {
+              if (ch === "{") {
+                depth = 1;
+                objBuf = "{";
+              } else if (ch === "]") {
+                return;
+              } else {
+                continue;
+              }
+            } else {
+              objBuf += ch;
+              if (ch === "{") depth++;
+              else if (ch === "}") {
+                depth--;
+                if (depth === 0) {
+                  try {
+                    yield JSON.parse(objBuf);
+                  } catch (_) {}
+                  objBuf = "";
+                }
+              }
+            }
+          }
+          buf = "";
+        }
+      }
+    }
+
     try {
       categories = await streamReadArray(args.inputFile, "categories");
-      keywords = await streamReadArray(args.inputFile, "keywords");
+      keywordStreamIteratorFactory = () =>
+        streamReadArrayIterator(args.inputFile, "keywords");
     } catch (e) {
       console.error(
         "Failed to stream-parse input file:",
@@ -384,9 +452,48 @@ async function main() {
     console.error("Invalid input. Expected JSON with {categories, keywords}");
     process.exit(1);
   }
+
+  // Flag that keywords are provided as a stream to avoid eager materialization
+  const keywordStreamIterator = Boolean(keywordStreamIteratorFactory);
+  const estimatedKeywords = keywordStreamIterator
+    ? "stream"
+    : String(keywords.length);
   console.error(
-    `assignCategorization: loaded ${categories.length} categories, ${keywords.length} keywords`
+    `assignCategorization: loaded ${categories.length} categories, ${estimatedKeywords} keywords`
   );
+
+  // Deduplicate categories by name to avoid exploding memory on huge category sets
+  const dedupMap = new Map();
+  const dedupedCategories = [];
+  for (const c of categories) {
+    const key = (c && c.category_name ? String(c.category_name) : "")
+      .trim()
+      .toLowerCase();
+    if (!key) continue;
+    if (dedupMap.has(key)) continue;
+    dedupMap.set(key, true);
+    dedupedCategories.push(c);
+  }
+  if (dedupedCategories.length !== categories.length) {
+    console.error(
+      `[assignCategorization] Deduped categories: ${categories.length} -> ${dedupedCategories.length}`
+    );
+  }
+
+  categories = dedupedCategories;
+
+  // Log memory usage to track potential leaks
+  const formatMemMB = (bytes) => (bytes / 1024 / 1024).toFixed(2);
+  const logMemory = (label) => {
+    const mem = process.memoryUsage();
+    console.error(
+      `[MEMORY ${label}] RSS: ${formatMemMB(mem.rss)} MB, Heap: ${formatMemMB(
+        mem.heapUsed
+      )}/${formatMemMB(mem.heapTotal)} MB`
+    );
+  };
+  logMemory("after input load");
+
   // If input provides keywords list, prefer filtering via DB: select ids present in input that are marked target_query=1.
   try {
     if (Array.isArray(keywords) && keywords.length > 0) {
@@ -447,41 +554,94 @@ async function main() {
   } catch (e) {
     // ignore
   }
-  const categoryTexts = categories.map((c) => c.category_name || "");
+  const CATEGORY_BATCH_SIZE = Number(process.env.CATEGORY_BATCH_SIZE || 500);
+  const totalKeywords = keywordStreamIterator ? null : keywords.length;
   console.error(
-    `Computing embeddings for ${categoryTexts.length} categories...`
+    `Computing similarity for ${
+      keywordStreamIterator ? "streamed" : totalKeywords
+    } keywords in category batches of ${CATEGORY_BATCH_SIZE}...`
   );
-  const categoryEmbeddings = await fetchEmbeddings(categoryTexts);
 
-  // simple n^2 compare
-  const out = [];
-  for (let i = 0; i < keywords.length; i++) {
-    const kw = keywords[i];
-    const kwText = kw.keyword || "";
-    const kwEmb = kw.embedding || null;
-    let bestSim = -1;
-    let bestCat = null;
-    for (let j = 0; j < categories.length; j++) {
-      const cat = categories[j];
-      const catEmb = categoryEmbeddings[j];
-      if (!Array.isArray(kwEmb) || !Array.isArray(catEmb)) continue;
-      const sim = cosineSimilarity(kwEmb, catEmb);
-      if (sim > bestSim) {
-        bestSim = sim;
-        bestCat = cat;
-      }
-    }
-    out.push({
-      id: kw.id,
-      bestCategoryId: bestCat ? bestCat.id : null,
-      bestCategoryName: bestCat ? bestCat.category_name : null,
-      similarity: bestSim,
-      embeddingSource: kw.embeddingSource || "unknown",
-    });
+  const bestMap = new Map(); // id -> { bestSim, bestCat, embeddingSource }
+
+  async function getKeywordIterator() {
+    if (keywordStreamIterator) return keywordStreamIteratorFactory();
+    return keywords[Symbol.iterator]();
   }
 
-  // Print JSONL results to stdout (one result per line)
-  for (const r of out) process.stdout.write(JSON.stringify(r) + "\n");
+  async function processBatch(catBatch, catEmbeddings, batchIndex) {
+    let idx = 0;
+    const iter = await getKeywordIterator();
+    for await (const kw of iter) {
+      idx += 1;
+      const kwText = kw.keyword || "";
+      let kwEmb = Array.isArray(kw.embedding) ? kw.embedding : null;
+      if (!kwEmb && kwText) {
+        try {
+          const cached = await embeddingsCacheGet(kwText, MODEL);
+          if (cached && Array.isArray(cached.embedding))
+            kwEmb = cached.embedding;
+        } catch (_) {}
+      }
+      let bestSim = -1;
+      let bestCat = null;
+      if (Array.isArray(kwEmb)) {
+        for (let j = 0; j < catBatch.length; j++) {
+          const catEmb = catEmbeddings[j];
+          if (!Array.isArray(catEmb)) continue;
+          const sim = cosineSimilarity(kwEmb, catEmb);
+          if (sim > bestSim) {
+            bestSim = sim;
+            bestCat = catBatch[j];
+          }
+        }
+      }
+      const prev = bestMap.get(kw.id);
+      if (!prev || bestSim > prev.bestSim) {
+        bestMap.set(kw.id, {
+          bestSim,
+          bestCat,
+          embeddingSource: kw.embeddingSource || "unknown",
+        });
+      }
+      if (idx % 20000 === 0) {
+        logMemory(
+          `batch ${batchIndex} after ${idx}${
+            totalKeywords ? "/" + totalKeywords : ""
+          } keywords`
+        );
+      }
+    }
+    logMemory(`batch ${batchIndex} completed`);
+  }
+
+  let batchIndex = 0;
+  for (let start = 0; start < categories.length; start += CATEGORY_BATCH_SIZE) {
+    batchIndex += 1;
+    const catBatch = categories.slice(start, start + CATEGORY_BATCH_SIZE);
+    const catTexts = catBatch.map((c) => c.category_name || "");
+    console.error(
+      `Batch ${batchIndex}: embeddings for ${catBatch.length} categories...`
+    );
+    logMemory(`before category batch ${batchIndex}`);
+    const catEmbeddings = await fetchEmbeddings(catTexts);
+    logMemory(`after category batch ${batchIndex}`);
+    await processBatch(catBatch, catEmbeddings, batchIndex);
+  }
+
+  // Emit final results
+  logMemory("before writing results");
+  for (const [id, state] of bestMap.entries()) {
+    const result = {
+      id,
+      bestCategoryId: state.bestCat ? state.bestCat.id : null,
+      bestCategoryName: state.bestCat ? state.bestCat.category_name : null,
+      similarity: state.bestSim,
+      embeddingSource: state.embeddingSource,
+    };
+    process.stdout.write(JSON.stringify(result) + "\n");
+  }
+  logMemory("after writing results");
 }
 
 if (require.main === module) {

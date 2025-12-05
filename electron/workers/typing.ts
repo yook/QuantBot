@@ -191,8 +191,14 @@ export async function startTypingWorker(ctx: TypingCtx, projectId: number) {
           chunkSize: 64,
           abortSignal: abortController.signal,
           onProgress: (p: any) => {
-            const chunkProgress = Math.min(p.fetched || 0, chunk.length);
-            const globalFetched = Math.min(chunkBaseProgress + chunkProgress, keywordsTotal);
+            const chunkProgress = Math.min(
+              p.fetched || 0,
+              p.total || chunk.length
+            );
+            const globalFetched = Math.min(
+              chunkBaseProgress + chunkProgress,
+              keywordsTotal
+            );
             const percent = keywordsTotal ? Math.round((globalFetched / keywordsTotal) * 100) : 100;
             emitProgress('embeddings', {
               fetched: globalFetched,
