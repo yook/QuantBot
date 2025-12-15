@@ -5,16 +5,16 @@ on:
     types: [published]
   push:
     tags:
-      - 'v*'
+      - "v*"
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Tag to release (e.g. v1.2.3). If omitted, uses current git tag when triggered by tag.'
+        description: "Tag to release (e.g. v1.2.3). If omitted, uses current git tag when triggered by tag."
         required: false
       create_tag:
-        description: 'If true and tag provided, create and push tag from current commit.'
+        description: "If true and tag provided, create and push tag from current commit."
         required: false
-        default: 'false'
+        default: "false"
 
 permissions:
   contents: write # нужно для загрузки файлов в релиз
