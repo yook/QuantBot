@@ -8,10 +8,10 @@ import { registerUrlsIpc } from './urls.js';
 import { registerEmbeddingsIpc } from './embeddings.js';
 import { registerIntegrationsIpc } from './integrations.js';
 import { ipcMain } from 'electron';
-import { startCategorizationWorker } from '../workers/categorization.js';
-import { startTypingWorker } from '../workers/typing.js';
-import { startClusteringWorker } from '../workers/clustering.js';
-import { startCrawlerWorker, stopCrawlerWorker } from '../workers/crawler.js';
+import { startCategorizationWorker } from '../managers/categorization.js';
+import { startTypingWorker } from '../managers/typing.js';
+import { startClusteringWorker } from '../managers/clustering.js';
+import { startCrawlerWorker, stopCrawlerWorker } from '../managers/crawler.js';
 
 export function registerAllIpc(ctx: IpcContext) {
   registerProjectsIpc(ctx);
@@ -30,7 +30,6 @@ export function registerAllIpc(ctx: IpcContext) {
         db: ctx.db,
         getWindow: ctx.getWindow,
         resolvedDbPath: ctx.resolvedDbPath,
-        categoriesNameColumn: ctx.categoriesNameColumn,
       }, projectId);
       return { success: true };
     } catch (error: any) {

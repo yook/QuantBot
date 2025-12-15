@@ -80,6 +80,13 @@
         </template>
         <CategorizationConfig />
       </el-tab-pane>
+
+      <el-tab-pane name="morphology">
+        <template #label>
+          <span>{{ t("keywords.morphology") }}</span>
+        </template>
+        <MorphologyConfig @close-dialog="project.crawlerConfigDialog = false" />
+      </el-tab-pane>
     </el-tabs>
   </el-dialog>
 </template>
@@ -95,6 +102,7 @@ import StopWords from "./settings/StopWords.vue";
 import CategorizationConfig from "./settings/CategorizationConfig.vue";
 import ClusteringConfig from "./settings/ClusteringConfig.vue";
 import TypingConfig from "./settings/TypingConfig.vue";
+import MorphologyConfig from "./settings/MorphologyConfig.vue";
 
 const { t } = useI18n();
 const project = useProjectStore();

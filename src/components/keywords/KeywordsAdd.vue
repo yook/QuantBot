@@ -12,12 +12,12 @@
       </el-button>
       <div class="flex items-center">
         <div
-          v-if="keywordsStore.running"
+          v-if="showProcessInfo"
           class="flex flex-col items-end mr-3 text-sm text-gray-600 dark:text-gray-400 leading-tight"
           style="min-width: 140px"
         >
           <span class="font-medium">{{ processLabel }}</span>
-          <span v-if="processedText" class="text-xs">{{ processedText }}</span>
+          <span class="text-xs">{{ processedText || "\u00A0" }}</span>
         </div>
         <el-progress
           :text-inside="true"
@@ -28,7 +28,10 @@
           :striped-flow="keywordsStore.running"
           :duration="7"
         />
-        <el-dropdown v-if="!keywordsStore.running" class="ml-3">
+        <el-dropdown
+          v-if="!keywordsStore.running && !keywordsStore.stopwordsRunning"
+          class="ml-3"
+        >
           <el-button type="primary" size="large">
             <el-icon class="text-2xl pr-2"><VideoPlay /> </el-icon>
             <span class="el-icon--right ml-2">▾</span>
@@ -47,12 +50,25 @@
               <el-dropdown-item @click="startCategorizationOnly">
                 Присвоение категории
               </el-dropdown-item>
+              <el-dropdown-item @click="startMorphologyCheckOnly">
+                Проверка согласованности
+              </el-dropdown-item>
             </el-dropdown-menu>
           </template>
         </el-dropdown>
 
         <el-button
-          v-if="keywordsStore.running"
+          v-if="keywordsStore.stopwordsRunning"
+          class="ml-3"
+          size="large"
+          type="primary"
+          disabled
+        >
+          <el-icon class="text-2xl"><VideoPause /></el-icon>
+        </el-button>
+
+        <el-button
+          v-if="keywordsStore.running && !keywordsStore.stopwordsRunning"
           class="ml-3"
           size="large"
           type="primary"
@@ -137,6 +153,9 @@ const currentProgress = computed(() => {
   if (keywordsStore.typingRunning) return keywordsStore.typingPercent;
   if (keywordsStore.clusteringRunning) return keywordsStore.clusteringPercent;
   if (keywordsStore.stopwordsRunning) return keywordsStore.stopwordsPercent;
+  if (keywordsStore.morphologyRunning) return keywordsStore.morphologyPercent;
+  if (keywordsStore.morphologyCheckRunning)
+    return keywordsStore.morphologyCheckPercent;
   return keywordsStore.percentage;
 });
 
@@ -146,15 +165,34 @@ const processLabel = computed(() => {
   if (keywordsStore.categorizationRunning) return "Категоризация";
   if (keywordsStore.typingRunning) return "Определение класса";
   if (keywordsStore.clusteringRunning) return "Кластеризация";
-  if (keywordsStore.stopwordsRunning) return "Стоп-слова";
+  if (keywordsStore.stopwordsRunning) return "Фильтрую по стоп-словам";
+  if (keywordsStore.morphologyRunning) return "Лемматизация";
+  if (keywordsStore.morphologyCheckRunning) return "Проверка согласованности";
   return "";
 });
 
 const processedText = computed(() => {
+  if (!showProcessInfo.value) return "";
   if (keywordsStore.currentTotal > 0) {
     return `${keywordsStore.currentProcessed} из ${keywordsStore.currentTotal}`;
   }
+  // Fallback: when total isn't reported yet, show percent as pseudo-count out of 100
+  if (keywordsStore.stopwordsRunning && keywordsStore.stopwordsPercent >= 0) {
+    const pct = Math.round(keywordsStore.stopwordsPercent);
+    return `${pct} из 100`;
+  }
   return "";
+});
+
+const showProcessInfo = computed(() => {
+  return (
+    keywordsStore.stopwordsRunning ||
+    keywordsStore.morphologyRunning ||
+    keywordsStore.morphologyCheckRunning ||
+    keywordsStore.categorizationRunning ||
+    keywordsStore.typingRunning ||
+    keywordsStore.clusteringRunning
+  );
 });
 
 onUnmounted(() => {
@@ -231,10 +269,39 @@ function startTypingOnly() {
   keywordsStore.startTypingOnly();
 }
 function startStopWordsOnly() {
+  console.log("KeywordsAdd: startStopWordsOnly clicked");
   keywordsStore.startStopwordsOnly();
 }
 function startClusteringOnly() {
   keywordsStore.startClusteringOnly();
+}
+async function startMorphologyOnly() {
+  if (!keywordsStore.keywordCount) {
+    ElMessage.warning("Нет ключевых слов для обработки");
+    return;
+  }
+  try {
+    keywordsStore.targetMorphology = true;
+    await keywordsStore.startMorphology();
+  } catch (e) {
+    console.error("[KeywordsAdd] Error starting morphology:", e);
+    ElMessage.error("Ошибка запуска лемматизации");
+    keywordsStore.targetMorphology = false;
+  }
+}
+async function startMorphologyCheckOnly() {
+  if (!keywordsStore.keywordCount) {
+    ElMessage.warning("Нет ключевых слов для обработки");
+    return;
+  }
+  try {
+    keywordsStore.targetMorphologyCheck = true;
+    await keywordsStore.startMorphologyCheck();
+  } catch (e) {
+    console.error("[KeywordsAdd] Error starting morphology check:", e);
+    ElMessage.error("Ошибка запуска проверки заголовков");
+    keywordsStore.targetMorphologyCheck = false;
+  }
 }
 
 // TODO: IPC migration - socket listeners removed, using async/await now

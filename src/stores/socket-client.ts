@@ -228,6 +228,26 @@ class IPCClient {
     return result.success ? result.data : null;
   }
 
+  async startMorphology(projectId: number) {
+    const result = await this.ipc.invoke('keywords:startMorphology', projectId);
+    return result.success ? result.data : null;
+  }
+
+  async stopMorphology(projectId: number) {
+    const result = await this.ipc.invoke('keywords:stopMorphology', projectId);
+    return result.success ? result.data : null;
+  }
+
+  async startMorphologyCheck(projectId: number) {
+    const result = await this.ipc.invoke('keywords:startMorphologyCheck', projectId);
+    return result.success ? result.data : null;
+  }
+
+  async stopMorphologyCheck(projectId: number) {
+    const result = await this.ipc.invoke('keywords:stopMorphologyCheck', projectId);
+    return result.success ? result.data : null;
+  }
+
   // IPC event listeners (for worker progress updates)
   on(channel: string, callback: (data: any) => void) {
     if (this.ipc) {

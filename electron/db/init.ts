@@ -7,7 +7,6 @@ import { initSchema } from './schema.js';
 export type DbInitResult = {
   db: Database.Database;
   dbPath: string;
-  categoriesNameColumn: string;
   typingLabelColumn: string;
   typingTextColumn: string;
   typingDateColumn: string | null;
@@ -51,7 +50,6 @@ export function createDatabase(opts: { isDev: boolean }): DbInitResult {
 
   // Initialize schema and capture detected compatibility columns
   const {
-    categoriesNameColumn,
     typingLabelColumn,
     typingTextColumn,
     typingDateColumn,
@@ -60,7 +58,6 @@ export function createDatabase(opts: { isDev: boolean }): DbInitResult {
   return {
     db,
     dbPath,
-    categoriesNameColumn,
     typingLabelColumn,
     typingTextColumn,
     typingDateColumn,

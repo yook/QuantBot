@@ -16,38 +16,155 @@
               <strong>Цель:</strong><br />
               Автоматическое исключение нерелевантных ключевых слов из списка
               целевых запросов.
-              <br /><br />
+            </div>
+
+            <div class="mb-2">
               <strong>Описание:</strong><br />
               Стоп-слово — это слово или шаблон, при совпадении которого
-              ключевая фраза перестаёт считаться целевой. Существуют два
-              варианта записи:
-              <br />• Обычное слово — сравнивается как подстрока без учёта
-              регистра (все символы приводятся к нижнему регистру). <br />•
-              Регулярное выражение в формате <code>/pattern/flags</code> — даёт
-              гибкие правила (якоря, группы, альтернативы и т.п.).
+              ключевая фраза перестаёт считаться целевой.<br />
+              Есть два варианта записи:
+              <ul class="list-disc">
+                <li>
+                  Обычное слово — сравнивается как подстрока без учёта регистра
+                  (все символы приводятся к нижнему регистру).
+                </li>
+                <li>
+                  Регулярное выражение в формате <code>/pattern/flags</code> —
+                  даёт гибкие правила.
+                </li>
+              </ul>
             </div>
+
             <div>
-              <strong>Алгоритм:</strong><br />
-              • Берём ключевые слова и список стоп-слов. <br />• Для каждого
-              обычного стоп-слова ищем его как подстроку в нижнем регистре.
-              <br />• Для каждого шаблона /.../ создаём JavaScript RegExp и
-              проверяем совпадение. <br />• При совпадении устанавливаем
-              <code><strong>Целевой запрос</strong> = 0</code> и записываем в
-              <strong>Правило исключения</strong> само стоп-слово или паттерн.
-            </div>
-            <div class="mt-2">
-              <strong>Примеры:</strong><br />
-              • <code>free</code> — отключит ключи, содержащие "free". <br />•
-              <code>/^test/i</code> — отключит ключи, начинающиеся с "test" (без
-              учёта регистра). <br />• <code>/\d{3,}/</code> — отключит ключи,
-              содержащие длинные числа (3+ цифры).
-            </div>
-            <div class="mt-2">
-              <strong>Подсказки:</strong><br />
-              • Сначала добавляйте простые слова — это быстрее и безопаснее.
-              <br />• Используйте RegExp, когда нужна точная фильтрация (якоря ^
-              $, группы, классы). <br />• Избегайте слишком общих паттернов
-              (например, <code>/.+/</code>) — они отключат почти всё.
+              <div class="mt-2">
+                <strong>Что можно использовать в <code>pattern</code></strong>
+                <ul class="list-disc">
+                  <li>
+                    <strong>Символьные классы</strong> описывают набор символов
+                    в одной позиции:
+                    <ul class="list-disc">
+                      <li><code>\d</code> — любая цифра (0-9).</li>
+                      <li>
+                        <code>\w</code> — буква/цифра/подчёркивание (эквивалент
+                        <code>[A-Za-z0-9_]</code>, в Unicode-режиме включает
+                        кириллицу).
+                      </li>
+                      <li>
+                        <code>\s</code> — пробельный символ (пробел, таб,
+                        перевод строки).
+                      </li>
+                      <li>
+                        Отрицания <code>\D</code>, <code>\W</code>,
+                        <code>\S</code> означают «не цифра», «не
+                        буква/цифра/подчёркивание», «не пробел».
+                      </li>
+                    </ul>
+                  </li>
+                  <li>
+                    <strong>Специальные символы:</strong>
+                    <ul class="list-disc">
+                      <li>
+                        <code>.</code> — любой символ, кроме перевода строки.
+                      </li>
+                    </ul>
+                  </li>
+                  <li>
+                    <strong>Диапазоны и наборы:</strong>
+                    <ul class="list-disc">
+                      <li>
+                        <code>[abc]</code> — любой из символов a, b или c.
+                      </li>
+                      <li>
+                        <code>[а-яё]</code> — любая буква кириллицы от а до я,
+                        включая ё.
+                      </li>
+                    </ul>
+                  </li>
+                  <li>
+                    <strong>Квантификаторы</strong> задают количество
+                    повторений:
+                    <ul class="list-disc">
+                      <li><code>?</code> — 0 или 1 раз (опционально).</li>
+                      <li><code>*</code> — 0 и более раз (жадно).</li>
+                      <li><code>+</code> — 1 и более раз.</li>
+                      <li><code>{n}</code> — ровно n повторений.</li>
+                      <li><code>{n,}</code> — n и больше.</li>
+                      <li><code>{n,m}</code> — от n до m включительно.</li>
+                    </ul>
+                  </li>
+                  <li>
+                    <strong>Якоря</strong> для точного позиционирования:
+                    <ul class="list-disc">
+                      <li><code>^</code> — начало строки.</li>
+                      <li><code>$</code> — конец строки.</li>
+                    </ul>
+                  </li>
+                  <li>
+                    <strong>Группы и альтернативы:</strong>
+                    <ul class="list-disc">
+                      <li><code>(...)</code> — группировка.</li>
+                      <li><code>a|b</code> — альтернатива (либо a, либо b).</li>
+                    </ul>
+                  </li>
+                  <li>
+                    <strong>Экранирование спецсимволов:</strong>
+                    <ul class="list-disc">
+                      <li>
+                        <code>\.</code>, <code>\*</code>, <code>\+</code>,
+                        <code>\?</code>, <code>\(</code>, <code>\)</code>,
+                        <code>\[</code>, <code>\]</code>, <code>\/</code> и т.д.
+                      </li>
+                    </ul>
+                  </li>
+                </ul>
+              </div>
+
+              <div class="mt-2">
+                <strong>flags</strong>
+                <ul class="list-disc">
+                  <li>
+                    <code>i</code> — регистронезависимый поиск (рекомендуется).
+                  </li>
+                  <li>
+                    <code>u</code> — Unicode-режим (рекомендуется для
+                    кириллицы).
+                  </li>
+                  <li>
+                    Дополнительно поддерживаются: <code>g</code>,
+                    <code>m</code>, <code>s</code>, <code>y</code>.
+                  </li>
+                </ul>
+              </div>
+
+              <div class="mt-2">
+                <strong>Примеры использования</strong>
+                <ul class="list-disc">
+                  <li>
+                    <code>/^test/i</code> — отключит ключи, начинающиеся с
+                    «test» (без учёта регистра).
+                  </li>
+                  <li>
+                    <code>/\d{3,}/</code> — отключит ключи, содержащие числа из
+                    3 и более цифр.
+                  </li>
+                  <li>
+                    <code>/\bfree\b/i</code> — отключит ключи, где «free» стоит
+                    отдельным словом.
+                  </li>
+                  <li>
+                    <code>/[А-Яа-яЁё]{1,2}\\s+оптом/iu</code> — отключит ключи
+                    вида «мясо оптом», «сахар оптом» и т.п.
+                  </li>
+                  <li>
+                    <code>/\\s+бесплатно$/iu</code> — отключит ключи, которые
+                    заканчиваются словом «бесплатно».
+                  </li>
+                  <li>
+                    <code>/\\.(ru|com|net)\\b/i</code> — отключит ключи,
+                    содержащие домены .ru, .com, .net.
+                  </li>
+                </ul>
+              </div>
             </div>
           </div>
         </el-collapse-item>
@@ -66,17 +183,16 @@
         Вы можете добавлять обычные слова или регулярные выражения в формате
         <code>/pattern/flags</code> (например <code>/^sale/i</code>).
         <span v-if="regexLines.length">
-          Найдено регулярных: {{ regexLines.length }}.</span
-        >
+          Найдено регулярных: {{ regexLines.length }}.
+        </span>
       </div>
       <div v-if="invalidRegexLines.length" class="mt-2 text-sm text-red-600">
         Неверные регулярные выражения:
-        <ul class="ml-4 list-disc">
+        <ul class="list-disc">
           <li v-for="(r, idx) in invalidRegexLines" :key="idx">{{ r }}</li>
         </ul>
       </div>
       <div class="flex items-center justify-between mt-4">
-        <!-- Progress UI removed: worker progress events are no longer forwarded -->
         <div class="ml-auto">
           <el-button
             v-if="!isAddingWithProgress"
@@ -155,13 +271,16 @@ const inputLines = computed(() => {
 });
 
 const regexLines = computed(() => {
-  return inputLines.value.filter((l) => /^\/.+\/[gimsuy]*$/.test(l));
+  // match strings that look like /pattern/flags, allow escaped \\/ inside pattern
+  return inputLines.value.filter((l) =>
+    /^\/(?:\\.|[^\\\/])+\/[gimsuy]*$/.test(l)
+  );
 });
 
 const invalidRegexLines = computed(() => {
   return regexLines.value.filter((l) => {
     try {
-      const m = l.match(/^\/(.+)\/([gimsuy]*)$/);
+      const m = l.match(/^\/((?:\\.|[^\\\/])+)\/([gimsuy]*)$/);
       if (!m) return true;
       new RegExp(m[1], m[2] || "");
       return false;
@@ -263,7 +382,8 @@ async function addStopWords() {
     // Normalize stop-words: lowercase plain words, preserve regex lines (/pattern/flags)
     const normalized = items.map((it) => {
       const trimmed = String(it).trim();
-      if (/^\/.*\/[gimsuy]*$/.test(trimmed)) return trimmed; // regex - keep as is
+      // detect regex-like lines (support escaped slashes in pattern)
+      if (/^\/(?:\\.|[^\\\/])+\/[gimsuy]*$/.test(trimmed)) return trimmed; // regex - keep as is
       return trimmed.toLowerCase();
     });
 

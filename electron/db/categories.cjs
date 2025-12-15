@@ -1,26 +1,21 @@
-const { dbRun, dbAll, dbGet } = require("./adapter.cjs");
-
-async function resolveCategoryNameColumn() {
-  try {
-    const rows = await dbAll("PRAGMA table_info('categories')");
-    const names = (rows || []).map((r) => r && r.name);
-    if (names.includes("name")) return "name";
-    if (names.includes("category_name")) return "category_name";
-  } catch (_) {}
-  return "category_name";
-}
+const { dbRun } = require("./adapter.cjs");
 
 async function categoriesInsertBatch(projectId, names) {
-  const col = await resolveCategoryNameColumn();
+  if (!projectId) return { inserted: 0 };
+  if (!Array.isArray(names) || names.length === 0) return { inserted: 0 };
+  const insert = dbRun.bind(
+    null,
+    "INSERT OR IGNORE INTO keywords (keyword, project_id, is_category, is_keyword, has_embedding) VALUES (?, ?, 1, 0, 0)"
+  );
   let inserted = 0;
-  for (const n of names || []) {
-    if (!n) continue;
+  for (const name of names) {
+    if (!name) continue;
+    const trimmed = typeof name === "string" ? name.trim() : String(name);
+    const normalized = trimmed.toLowerCase();
+    if (!normalized) continue;
     try {
-      const res = await dbRun(
-        `INSERT OR IGNORE INTO categories (${col}, project_id) VALUES (?, ?)`,
-        [String(n), projectId]
-      );
-      if (res && res.changes > 0) inserted += 1;
+      const result = await insert(normalized, projectId);
+      if (result && result.changes > 0) inserted += 1;
     } catch (_) {}
   }
   return { inserted };

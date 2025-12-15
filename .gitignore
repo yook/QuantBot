@@ -36,3 +36,6 @@ dist-electron/
 
 # Ignore only root-level db folder. Allow nested electron/db to be tracked.
 /db/
+
+# Local test scripts and temporary test artifacts
+test/

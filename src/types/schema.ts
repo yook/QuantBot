@@ -174,6 +174,8 @@ export interface Category {
 export interface Keyword {
   id?: number | string;
   keyword: string;
+  is_valid_headline?: number | null;
+  validation_reason?: string | null;
   [key: string]: any;
 }
 

@@ -142,6 +142,9 @@ function initializeSchema() {
       category_id INTEGER,
       color TEXT,
       disabled INTEGER DEFAULT 0,
+      is_category INTEGER DEFAULT 0,
+      is_keyword INTEGER DEFAULT 0,
+      has_embedding INTEGER DEFAULT 0,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY(project_id) REFERENCES projects(id)
     )`
@@ -163,30 +166,37 @@ function initializeSchema() {
         "ALTER TABLE keywords ADD COLUMN target_query INTEGER DEFAULT NULL"
       ).run();
     }
+    const hasIsCategory = cols.some((c) => c && c.name === "is_category");
+    if (!hasIsCategory) {
+      console.error(
+        "[DB Worker] Adding missing column is_category to keywords"
+      );
+      db.prepare(
+        "ALTER TABLE keywords ADD COLUMN is_category INTEGER DEFAULT 0"
+      ).run();
+    }
+    const hasIsKeyword = cols.some((c) => c && c.name === "is_keyword");
+    if (!hasIsKeyword) {
+      console.error("[DB Worker] Adding missing column is_keyword to keywords");
+      db.prepare(
+        "ALTER TABLE keywords ADD COLUMN is_keyword INTEGER DEFAULT 0"
+      ).run();
+    }
+    const hasHasEmbedding = cols.some((c) => c && c.name === "has_embedding");
+    if (!hasHasEmbedding) {
+      console.error(
+        "[DB Worker] Adding missing column has_embedding to keywords"
+      );
+      db.prepare(
+        "ALTER TABLE keywords ADD COLUMN has_embedding INTEGER DEFAULT 0"
+      ).run();
+    }
   } catch (e) {
     console.error(
       "[DB Worker] Failed to ensure columns:",
       e && e.message ? e.message : e
     );
   }
-
-  // Categories table
-  db.prepare(
-    `CREATE TABLE IF NOT EXISTS categories (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      project_id INTEGER NOT NULL,
-      name TEXT NOT NULL,
-      color TEXT,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY(project_id) REFERENCES projects(id)
-    )`
-  ).run();
-  db.prepare(
-    "CREATE INDEX IF NOT EXISTS idx_categories_project ON categories(project_id);"
-  ).run();
-  db.prepare(
-    "CREATE UNIQUE INDEX IF NOT EXISTS idx_categories_project_name ON categories(project_id, name);"
-  ).run();
 
   // Typing samples table
   db.prepare(
@@ -339,7 +349,9 @@ function handleRequest(req) {
       // Keywords
       case "keywords:getAll":
         result = db
-          .prepare("SELECT * FROM keywords WHERE project_id = ?")
+          .prepare(
+            "SELECT * FROM keywords WHERE project_id = ? AND is_keyword = 1"
+          )
           .all(params[0]);
         break;
       case "keywords:getWindow": {
@@ -350,7 +362,8 @@ function handleRequest(req) {
         const sort = params[3] || {}; // {field: 1 or -1}
         const searchQuery = params[4] || "";
 
-        let sql = "SELECT * FROM keywords WHERE project_id = ?";
+        let sql =
+          "SELECT * FROM keywords WHERE project_id = ? AND is_keyword = 1";
         const queryParams = [projectId];
 
         // Add search filter
@@ -377,7 +390,7 @@ function handleRequest(req) {
 
         // Get total count for this query
         let countSql =
-          "SELECT COUNT(*) as total FROM keywords WHERE project_id = ?";
+          "SELECT COUNT(*) as total FROM keywords WHERE project_id = ? AND is_keyword = 1";
         const countParams = [projectId];
         if (searchQuery) {
           countSql += " AND keyword LIKE ?";
@@ -394,11 +407,31 @@ function handleRequest(req) {
         break;
       }
       case "keywords:insert":
-        result = db
-          .prepare(
-            "INSERT INTO keywords (keyword, project_id, category_id, color, disabled) VALUES (?, ?, ?, ?, ?)"
-          )
-          .run(params[0], params[1], params[2], params[3], params[4]);
+        // params: [keyword, projectId, categoryId, color, disabled, is_keyword?]
+        try {
+          const isKeywordFlag =
+            typeof params[5] !== "undefined" ? params[5] : 1;
+          result = db
+            .prepare(
+              "INSERT INTO keywords (keyword, project_id, category_id, color, disabled, is_keyword, has_embedding) VALUES (?, ?, ?, ?, ?, ?, ?)"
+            )
+            .run(
+              params[0],
+              params[1],
+              params[2],
+              params[3],
+              params[4],
+              isKeywordFlag,
+              0
+            );
+        } catch (err) {
+          // Fallback to original insert if something goes wrong
+          result = db
+            .prepare(
+              "INSERT INTO keywords (keyword, project_id, category_id, color, disabled, has_embedding) VALUES (?, ?, ?, ?, ?, ?)"
+            )
+            .run(params[0], params[1], params[2], params[3], params[4], 0);
+        }
         break;
       case "keywords:update":
         result = db
@@ -472,7 +505,7 @@ function handleRequest(req) {
 
           // Bulk insert from temp table into keywords
           const insertFromTemp = db.prepare(
-            "INSERT OR IGNORE INTO keywords (keyword, project_id, target_query) SELECT keyword, ?, NULL FROM _import_keywords"
+            "INSERT OR IGNORE INTO keywords (keyword, project_id, target_query, is_keyword, has_embedding) SELECT keyword, ?, NULL, 1, 0 FROM _import_keywords"
           );
           const beforeChanges = db
             .prepare("SELECT COUNT(*) AS c FROM keywords WHERE project_id = ?")
@@ -537,27 +570,38 @@ function handleRequest(req) {
           .run(params[1], params[0]);
         break;
 
-      // Categories
+      // Categories rows stored in keywords table via is_category flag
       case "categories:getAll":
         result = db
-          .prepare("SELECT * FROM categories WHERE project_id = ?")
+          .prepare(
+            "SELECT id, project_id, keyword AS category_name, color, disabled, has_embedding, created_at FROM keywords WHERE project_id = ? AND is_category = 1 ORDER BY id"
+          )
           .all(params[0]);
         break;
       case "categories:insert":
         result = db
           .prepare(
-            "INSERT INTO categories (name, project_id, color) VALUES (?, ?, ?)"
+            "INSERT INTO keywords (keyword, project_id, is_category, color, has_embedding, is_keyword) VALUES (?, ?, 1, ?, 0, 0)"
           )
-          .run(params[0], params[1], params[2]);
+          .run(params[0], params[1], params[2] || null);
         break;
       case "categories:update":
         result = db
-          .prepare("UPDATE categories SET name = ?, color = ? WHERE id = ?")
-          .run(params[0], params[1], params[2]);
+          .prepare(
+            "UPDATE keywords SET keyword = ?, color = ? WHERE id = ? AND is_category = 1"
+          )
+          .run(params[0], params[1] || null, params[2]);
         break;
       case "categories:delete":
         result = db
-          .prepare("DELETE FROM categories WHERE id = ?")
+          .prepare("DELETE FROM keywords WHERE id = ? AND is_category = 1")
+          .run(params[0]);
+        break;
+      case "categories:deleteByProject":
+        result = db
+          .prepare(
+            "DELETE FROM keywords WHERE project_id = ? AND is_category = 1"
+          )
           .run(params[0]);
         break;
 

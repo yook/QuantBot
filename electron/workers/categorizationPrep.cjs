@@ -72,7 +72,7 @@ async function main() {
   try {
     const categories = db
       .prepare(
-        `SELECT id, project_id, ${categoriesColumn} AS category_name, created_at FROM categories WHERE project_id = ? ORDER BY id`
+        "SELECT id, project_id, keyword AS category_name, created_at FROM keywords WHERE project_id = ? AND is_category = 1 ORDER BY id"
       )
       .all(projectId);
     if (!categories || categories.length < 2) {
@@ -81,7 +81,7 @@ async function main() {
 
     const keywordCountRow = db
       .prepare(
-        "SELECT COUNT(*) as cnt FROM keywords WHERE project_id = ? AND (target_query IS NULL OR target_query = 1)"
+        "SELECT COUNT(*) as cnt FROM keywords WHERE project_id = ? AND (target_query IS NULL OR target_query = 1) AND is_keyword = 1"
       )
       .get(projectId);
     const expectedKeywords = Number(keywordCountRow?.cnt || 0);
@@ -135,7 +135,7 @@ async function main() {
     });
 
     const keywordsStmt = db.prepare(
-      "SELECT * FROM keywords WHERE project_id = ? AND (target_query IS NULL OR target_query = 1) AND id > ? ORDER BY id LIMIT ?"
+      "SELECT * FROM keywords WHERE project_id = ? AND (target_query IS NULL OR target_query = 1) AND is_keyword = 1 AND id > ? ORDER BY id LIMIT ?"
     );
 
     let processedKeywords = 0;
