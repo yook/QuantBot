@@ -15,6 +15,7 @@ function generateClusterId() {
 
 const fs = require("fs");
 const path = require("path");
+const readline = require("readline");
 
 // DB helper for filtering input keywords by target_query
 function resolveDbFacade() {
@@ -52,6 +53,23 @@ function resolveDbFacade() {
 }
 
 const { dbAll } = resolveDbFacade();
+
+async function loadJsonlFile(filePath) {
+  const items = [];
+  const rl = readline.createInterface({
+    input: fs.createReadStream(filePath, { encoding: "utf8" }),
+    crlfDelay: Infinity,
+  });
+  for await (const line of rl) {
+    if (!line) continue;
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    try {
+      items.push(JSON.parse(trimmed));
+    } catch (_) {}
+  }
+  return items;
+}
 
 /* ---------------- math helpers ---------------- */
 function cosineSimilarity(a, b) {
@@ -432,36 +450,34 @@ if (require.main === module) {
         const read = fs.readSync(fd, buf, 0, 1024, 0);
         fs.closeSync(fd);
         const head = buf.slice(0, read).toString("utf8").trimStart();
-        if (head.startsWith("{") || head.startsWith("[")) {
-          // Likely full JSON object/array — try parsing normally
+        const looksLikeArray = head.startsWith("[");
+        const looksLikeWrappedObject =
+          head.startsWith("{") && /"keywords"\s*:/i.test(head);
+        const treatAsJsonPayload = looksLikeArray || looksLikeWrappedObject;
+
+        if (treatAsJsonPayload) {
           try {
-            const input = JSON.parse(fs.readFileSync(inputFile, "utf8"));
-            keywords = input.keywords || [];
-          } catch (e) {
-            // Fallback: try line-by-line parse
-            const rl = require("readline").createInterface({
-              input: fs.createReadStream(inputFile, { encoding: "utf8" }),
-            });
-            for await (const line of rl) {
-              if (!line || !line.trim()) continue;
-              try {
-                const obj = JSON.parse(line);
-                keywords.push(obj);
-              } catch (err) {}
+            const raw = await fs.promises.readFile(inputFile, "utf8");
+            const parsed = JSON.parse(raw);
+            if (Array.isArray(parsed)) {
+              keywords = parsed;
+            } else if (parsed && Array.isArray(parsed.keywords)) {
+              keywords = parsed.keywords;
+            } else {
+              console.warn(
+                "[clustering worker] JSON input missing keywords array, falling back to JSONL"
+              );
+              keywords = await loadJsonlFile(inputFile);
             }
+          } catch (e) {
+            console.warn(
+              "[clustering worker] Failed to parse JSON input, falling back to JSONL:",
+              e && e.message ? e.message : e
+            );
+            keywords = await loadJsonlFile(inputFile);
           }
         } else {
-          // JSONL: parse line-by-line
-          const rl = require("readline").createInterface({
-            input: fs.createReadStream(inputFile, { encoding: "utf8" }),
-          });
-          for await (const line of rl) {
-            if (!line || !line.trim()) continue;
-            try {
-              const obj = JSON.parse(line);
-              keywords.push(obj);
-            } catch (err) {}
-          }
+          keywords = await loadJsonlFile(inputFile);
         }
       } catch (e) {
         console.error(

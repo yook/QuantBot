@@ -10,6 +10,7 @@
 
 const fs = require("fs");
 const path = require("path");
+const readline = require("readline");
 function resolveDbFacade() {
   const candidates = [];
   try {
@@ -79,6 +80,145 @@ function parseArgs(argv) {
     if (m) out[m[1]] = m[2];
   }
   return out;
+}
+
+async function streamJsonArray(filePath, key) {
+  return new Promise((resolve, reject) => {
+    const rs = fs.createReadStream(filePath, { encoding: "utf8" });
+    let buf = "";
+    let state = "searching";
+    const out = [];
+    let depth = 0;
+    let objBuf = "";
+
+    rs.on("data", (chunk) => {
+      buf += chunk;
+      if (state === "searching") {
+        const idx = buf.indexOf('"' + key + '"');
+        if (idx === -1) {
+          if (buf.length > 1024 * 10) buf = buf.slice(-1024);
+          return;
+        }
+        const rest = buf.slice(idx + key.length + 2);
+        const arrIdx = rest.indexOf("[");
+        if (arrIdx === -1) return;
+        buf = rest.slice(arrIdx + 1);
+        state = "inarray";
+      }
+
+      if (state === "inarray") {
+        for (let i = 0; i < buf.length; i++) {
+          const ch = buf[i];
+          if (depth === 0) {
+            if (ch === "{") {
+              depth = 1;
+              objBuf = "{";
+            } else if (ch === "]") {
+              rs.close();
+              resolve(out);
+              return;
+            } else {
+              continue;
+            }
+          } else {
+            objBuf += ch;
+            if (ch === "{") depth++;
+            else if (ch === "}") {
+              depth--;
+              if (depth === 0) {
+                try {
+                  out.push(JSON.parse(objBuf));
+                } catch (_) {}
+                objBuf = "";
+              }
+            }
+          }
+        }
+        buf = "";
+      }
+    });
+    rs.on("end", () => resolve(out));
+    rs.on("error", (e) => reject(e));
+  });
+}
+
+async function readJsonlKeywords(filePath) {
+  const result = [];
+  const rl = readline.createInterface({
+    input: fs.createReadStream(filePath, { encoding: "utf8" }),
+    crlfDelay: Infinity,
+  });
+  for await (const line of rl) {
+    if (!line) continue;
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    try {
+      const obj = JSON.parse(trimmed);
+      if (!obj) continue;
+      if (Array.isArray(obj)) {
+        for (const item of obj) {
+          if (item && typeof item === "object") result.push(item);
+        }
+        continue;
+      }
+      if (Array.isArray(obj.keywords)) {
+        for (const item of obj.keywords) {
+          if (item && typeof item === "object") result.push(item);
+        }
+        continue;
+      }
+      if (obj && typeof obj === "object") {
+        result.push(obj);
+      }
+    } catch (_) {}
+  }
+  return result;
+}
+
+async function loadKeywordsFromInputFile(filePath) {
+  try {
+    const fd = fs.openSync(filePath, "r");
+    const buf = Buffer.alloc(1024);
+    const read = fs.readSync(fd, buf, 0, 1024, 0);
+    fs.closeSync(fd);
+    const head = buf.slice(0, read).toString("utf8").trimStart();
+    const looksLikeArray = head.startsWith("[");
+    const looksLikeWrappedObject =
+      head.startsWith("{") && /"keywords"\s*:/i.test(head);
+
+    if (looksLikeArray) {
+      try {
+        const raw = await fs.promises.readFile(filePath, "utf8");
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) return parsed;
+        if (parsed && Array.isArray(parsed.keywords)) return parsed.keywords;
+      } catch (err) {
+        console.error(
+          "[trainAndClassify] Failed to parse JSON keywords array, falling back to JSONL:",
+          err && err.message ? err.message : err
+        );
+      }
+    }
+
+    if (looksLikeWrappedObject) {
+      try {
+        return await streamJsonArray(filePath, "keywords");
+      } catch (err) {
+        console.error(
+          "[trainAndClassify] Failed to stream keywords array, falling back to JSONL:",
+          err && err.message ? err.message : err
+        );
+      }
+    }
+
+    return await readJsonlKeywords(filePath);
+  } catch (err) {
+    console.error(
+      "[trainAndClassify] Failed to detect input format, falling back to JSONL:",
+      err && err.message ? err.message : err
+    );
+    return await readJsonlKeywords(filePath);
+  }
 }
 
 async function fetchWithCache(texts, model, opts = {}) {
@@ -438,72 +578,11 @@ async function main() {
   // 4) Read input keywords list. Stream-parse to avoid huge JSON.parse
   let keywords = [];
   if (inputFile) {
-    async function streamReadArray(filePath, key) {
-      return new Promise((resolve, reject) => {
-        const rs = fs.createReadStream(filePath, { encoding: "utf8" });
-        let buf = "";
-        let state = "searching";
-        const out = [];
-        let depth = 0;
-        let objBuf = "";
-
-        rs.on("data", (chunk) => {
-          buf += chunk;
-          if (state === "searching") {
-            const idx = buf.indexOf('"' + key + '"');
-            if (idx === -1) {
-              if (buf.length > 1024 * 10) buf = buf.slice(-1024);
-              return;
-            }
-            const rest = buf.slice(idx + key.length + 2);
-            const arrIdx = rest.indexOf("[");
-            if (arrIdx === -1) return;
-            buf = rest.slice(arrIdx + 1);
-            state = "inarray";
-          }
-
-          if (state === "inarray") {
-            for (let i = 0; i < buf.length; i++) {
-              const ch = buf[i];
-              if (depth === 0) {
-                if (ch === "{") {
-                  depth = 1;
-                  objBuf = "{";
-                } else if (ch === "]") {
-                  rs.close();
-                  resolve(out);
-                  return;
-                } else {
-                  continue;
-                }
-              } else {
-                objBuf += ch;
-                if (ch === "{") depth++;
-                else if (ch === "}") {
-                  depth--;
-                  if (depth === 0) {
-                    try {
-                      out.push(JSON.parse(objBuf));
-                    } catch (err) {}
-                    objBuf = "";
-                  }
-                }
-              }
-            }
-            buf = "";
-          }
-        });
-        rs.on("end", () => resolve(out));
-        rs.on("error", (e) => reject(e));
-      });
-    }
-
     try {
-      keywords = await streamReadArray(inputFile, "keywords");
+      keywords = await loadKeywordsFromInputFile(inputFile);
     } catch (e) {
-      // fallback: query DB for unclassified target keywords
       console.error(
-        "Failed to stream-parse input file:",
+        "Failed to load keywords from input file:",
         e && e.message ? e.message : e
       );
     }

@@ -26,8 +26,14 @@
       '--second-column-left': secondColumnLeft,
     }"
   >
-    <div class="table-container" v-loading="loading || loadingMore">
-      <div class="virtual-scroll-container" @wheel.prevent="mousewheel">
+    <div class="table-container">
+      <div
+        class="virtual-scroll-container"
+        @wheel.prevent="mousewheel"
+        @dragover.prevent="handleBodyDragOver"
+        @drop.prevent="handleBodyDrop"
+        @dragleave.prevent="handleBodyDragLeave"
+      >
         <table class="custom-table">
           <thead>
             <tr>
@@ -37,6 +43,8 @@
                 :class="[
                   column.prop === '_rowNumber' ? 'row-number-header' : '',
                   dragOverIndex === columnIndex ? 'drag-over' : '',
+                  // Mark header cell as fixed when it belongs to fixedColumns
+                  columnIndex < props.fixedColumns ? 'fixed-column' : '',
                 ]"
                 :style="{
                   minWidth:
@@ -111,10 +119,7 @@
               </th>
             </tr>
           </thead>
-          <tbody
-            v-loading="showLoadingMore"
-            element-loading-background="transparent"
-          >
+          <tbody>
             <tr
               v-for="(row, index) in visiblePage"
               :key="row.id || start + index"
@@ -230,6 +235,29 @@
                       <Close />
                     </el-icon>
                     <span v-else>{{ row.target_query }}</span>
+                  </template>
+                  <template v-else-if="column.prop === 'is_valid_headline'">
+                    <div class="cell-center">
+                      <el-icon
+                        v-if="
+                          row.is_valid_headline === 1 ||
+                          row.is_valid_headline === true
+                        "
+                        style="color: var(--el-color-success); font-size: 18px"
+                      >
+                        <Check />
+                      </el-icon>
+                      <el-icon
+                        v-else-if="
+                          row.is_valid_headline === 0 ||
+                          row.is_valid_headline === false
+                        "
+                        style="color: var(--el-color-danger); font-size: 18px"
+                      >
+                        <Close />
+                      </el-icon>
+                      <span v-else>{{ row.is_valid_headline }}</span>
+                    </div>
                   </template>
                   <template v-else>
                     {{ formatCellValue(row[column.prop], column.prop) }}
@@ -372,6 +400,7 @@ function getDbKey() {
 // Локальные переменные для виртуальной прокрутки
 const windowStart = ref(0);
 const bufferSize = 50;
+const prefetchThreshold = 2 / 3; // Предзагрузка при прокрутке на 2/3 окна
 
 const resizing = ref(false);
 const currentColumn = ref(null);
@@ -396,6 +425,7 @@ const rowHeight = 35; // Высота строки в пикселях
 const lastScrollTime = ref(0); // Для throttling скролла
 const lastLoadTime = ref(0); // Для throttling загрузки данных
 const lastWindowStart = ref(null); // Track the last window start value
+const isPreloading = ref(false); // Флаг асинхронной предзагрузки данных
 
 // Set cursor style for the entire document during resizing
 const documentStyle = computed(() => {
@@ -435,10 +465,10 @@ const dataComp = computed(() => {
 // Computed property для видимой страницы виртуальной прокрутки
 const visiblePage = computed(() => {
   try {
-    // Если данные еще загружаются, возвращаем пустой массив
-    if (props.loading || props.loadingMore) {
-      return [];
-    }
+    // Не очищаем таблицу при загрузке - показываем текущие данные
+    // if (props.loading || props.loadingMore) {
+    //   return [];
+    // }
 
     // Если массив данных пустой, но загрузка завершена, возвращаем пустой массив
     if ((!props.data || props.data.length === 0) && !props.loading) {
@@ -468,9 +498,9 @@ const visiblePage = computed(() => {
     const windowEndRow = windowStartRow + (props.data?.length || 0);
 
     // Если данные еще загружаются для этой позиции, показываем лоудер
-    if (props.loadingMore) {
-      return [];
-    }
+    // if (props.loadingMore) {
+    //   return [];
+    // }
 
     // Если видимая область находится в текущем окне
     if (
@@ -545,14 +575,36 @@ const visiblePage = computed(() => {
     if (
       newWindowStart !== windowStart.value &&
       newWindowStart !== lastWindowStart.value && // Prevent duplicate calls
-      !props.loadingMore
+      !props.loadingMore &&
+      !isPreloading.value
     ) {
       lastWindowStart.value = newWindowStart; // Update the last window start value
       windowStart.value = newWindowStart;
       props.loadWindow(newWindowStart);
     }
 
-    // Пока данные загружаются, возвращаем пустой массив (лоудер будет показан)
+    // Пока данные загружаются, показываем текущие данные (не очищаем таблицу)
+    // Возвращаем пустой массив только если данных совсем нет
+    if (props.data && props.data.length > 0) {
+      // Показываем хоть какие-то данные, даже если они частично не соответствуют видимой области
+      const availableStart = Math.max(0, startRow - windowStartRow);
+      const availableEnd = Math.min(
+        dataComp.value.length,
+        endRow - windowStartRow
+      );
+      if (
+        availableStart < availableEnd &&
+        availableStart < dataComp.value.length
+      ) {
+        return dataComp.value
+          .slice(availableStart, availableEnd)
+          .map((item, index) => ({
+            ...item,
+            _rowNumber: windowStartRow + availableStart + index + 1,
+          }));
+      }
+    }
+
     return [];
   } catch (error) {
     return [];
@@ -677,10 +729,14 @@ const secondColumnLeft = computed(() => {
   return firstColumnWidth + "px";
 });
 
-// Computed property для отображения лоудера при загрузке дополнительных данных
+// Computed property для отображения лоудера только при полной загрузке (не при фоновой подгрузке)
 const showLoadingMore = computed(() => {
   try {
-    return visiblePage.value.length === 0 && props.loadingMore;
+    // Показываем лоадер только если данных совсем нет И идет загрузка
+    // При инкрементальной подгрузке (isPreloading) лоадер не показываем
+    return (
+      visiblePage.value.length === 0 && props.loadingMore && !isPreloading.value
+    );
   } catch (error) {
     return false;
   }
@@ -1130,39 +1186,71 @@ function onDragStart(event, column, columnIndex) {
   }
 }
 
-function onDragOver(event, columnIndex) {
+function _getHeaderRects() {
+  const card = tableCardRef.value?.$el || tableCardRef.value;
+  if (!card) return [];
+  const ths = Array.from(card.querySelectorAll("thead th")) || [];
+  return ths.map((el) => el.getBoundingClientRect());
+}
+
+function _getInsertBeforeIndexFromX(x) {
+  const rects = _getHeaderRects();
+  const n = rects.length;
+  if (n === 0) return -1;
+
+  // compute centers
+  const centers = rects.map((r) => r.left + r.width / 2);
+  // compute midpoints between centers
+  const midpoints = [];
+  for (let i = 0; i < centers.length - 1; i++) {
+    midpoints.push((centers[i] + centers[i + 1]) / 2);
+  }
+
+  // find first midpoint greater than x --> insert before header index = i+1
+  for (let i = 0; i < midpoints.length; i++) {
+    if (x < midpoints[i]) {
+      return i + 1; // tableColumnsWithRowNumber index
+    }
+  }
+
+  // if x is beyond last midpoint, insert after last header
+  return n; // tableColumnsWithRowNumber index representing end
+}
+
+function _getHeaderUnderX(x) {
+  const card = tableCardRef.value?.$el || tableCardRef.value;
+  if (!card) return -1;
+  const ths = Array.from(card.querySelectorAll("thead th")) || [];
+  for (let i = 0; i < ths.length; i++) {
+    const r = ths[i].getBoundingClientRect();
+    if (x >= r.left && x <= r.right) return i;
+  }
+  return -1;
+}
+
+function onDragOver(event, _columnIndex) {
   try {
-    // Do not allow insert into fixed columns
-    if (columnIndex < props.fixedColumns) {
+    if (!draggingProp.value) return;
+
+    const x = event.clientX;
+    let insertThIndex = _getInsertBeforeIndexFromX(x);
+    if (insertThIndex < 0) {
       dragOverIndex.value = -1;
       insertBeforeIndex.value = -1;
       return;
     }
 
-    const el = event.currentTarget;
-    if (!el || !el.getBoundingClientRect) {
-      dragOverIndex.value = columnIndex;
-      insertBeforeIndex.value = columnIndex;
-      return;
-    }
+    // Ensure we don't insert into fixed columns area (props.fixedColumns is in th-index space)
+    if (insertThIndex < props.fixedColumns) insertThIndex = props.fixedColumns;
+    const maxTh = _getHeaderRects().length || 0;
+    if (insertThIndex > maxTh) insertThIndex = maxTh;
 
-    const rect = el.getBoundingClientRect();
-    const x = event.clientX - rect.left;
-    const half = rect.width / 2;
-    const baseIdx = columnIndex - 1; // index inside props.tableColumns
+    insertBeforeIndex.value = insertThIndex;
 
-    let baseInsert = x < half ? baseIdx : baseIdx + 1;
-    const max = (props.tableColumns || []).length;
-    // Prevent inserting into fixed columns area
-    const minInsert = Math.max(0, props.fixedColumns - 1);
-    if (baseInsert < minInsert) baseInsert = minInsert;
-    if (baseInsert > max) baseInsert = max;
-
-    // store as index in tableColumnsWithRowNumber space (baseInsert + 1)
-    insertBeforeIndex.value = baseInsert + 1;
-    dragOverIndex.value = columnIndex;
+    const headerUnder = _getHeaderUnderX(x);
+    dragOverIndex.value = headerUnder;
   } catch (e) {
-    dragOverIndex.value = columnIndex;
+    dragOverIndex.value = -1;
     insertBeforeIndex.value = -1;
   }
 }
@@ -1173,44 +1261,123 @@ function onDragLeave(_event, _columnIndex) {
   insertBeforeIndex.value = -1;
 }
 
+function handleBodyDragOver(event) {
+  // If nothing is being dragged, ignore
+  if (!draggingProp.value) return;
+  try {
+    const card = tableCardRef.value?.$el || tableCardRef.value;
+    if (!card) return;
+    const ths = card.querySelectorAll("thead th");
+    if (!ths || ths.length === 0) return;
+    const x = event.clientX;
+    let foundIndex = -1;
+    for (let i = 0; i < ths.length; i++) {
+      const r = ths[i].getBoundingClientRect();
+      if (x >= r.left && x <= r.right) {
+        foundIndex = i;
+        break;
+      }
+    }
+    if (foundIndex === -1) {
+      // If to the right of all headers, target the last header
+      const lastRect = ths[ths.length - 1].getBoundingClientRect();
+      if (x > lastRect.right) foundIndex = ths.length - 1;
+      else if (x < ths[0].left) foundIndex = 0;
+    }
+    if (foundIndex >= 0) {
+      onDragOver(event, foundIndex);
+    }
+  } catch (e) {
+    // ignore
+  }
+}
+
+function handleBodyDrop(event) {
+  if (!draggingProp.value) {
+    try {
+      draggingProp.value = event.dataTransfer?.getData("text/plain") || null;
+    } catch (e) {}
+  }
+  try {
+    const card = tableCardRef.value?.$el || tableCardRef.value;
+    if (!card) return;
+    const ths = card.querySelectorAll("thead th");
+    if (!ths || ths.length === 0) return;
+    const x = event.clientX;
+    let foundIndex = -1;
+    for (let i = 0; i < ths.length; i++) {
+      const r = ths[i].getBoundingClientRect();
+      if (x >= r.left && x <= r.right) {
+        foundIndex = i;
+        break;
+      }
+    }
+    if (foundIndex === -1) {
+      const lastRect = ths[ths.length - 1].getBoundingClientRect();
+      if (x > lastRect.right) foundIndex = ths.length - 1;
+      else if (x < ths[0].left) foundIndex = 0;
+    }
+    if (foundIndex >= 0) {
+      onDrop(event, foundIndex);
+    }
+  } catch (e) {
+    // ignore
+  }
+}
+
+function handleBodyDragLeave(_event) {
+  // Clear hover/insert when leaving the body area
+  dragOverIndex.value = -1;
+  insertBeforeIndex.value = -1;
+}
+
 function onDrop(event, columnIndex) {
   try {
     if (!draggingProp.value) {
-      // try dataTransfer as fallback
       try {
         draggingProp.value = event.dataTransfer.getData("text/plain");
       } catch (e) {
-        return;
+        // nothing
       }
     }
 
-    // Compute target index in props.tableColumns (exclude the inserted _rowNumber)
-    const targetIdx = columnIndex - 1;
-    if (targetIdx < 0) return;
-
-    const current = props.tableColumns.map((c) => c.prop);
     const fromProp = draggingProp.value;
     if (!fromProp) return;
 
-    // Remove existing
-    const existingIdx = current.indexOf(fromProp);
-    if (existingIdx === -1) return;
-    current.splice(existingIdx, 1);
+    // Work on props.tableColumns copy of props
+    const current = props.tableColumns.map((c) => c.prop);
+    const fromIdx = current.indexOf(fromProp);
+    if (fromIdx === -1) return;
 
-    // Adjust insertion index if necessary (if removing an earlier index shifts the target)
-    let insertAt = targetIdx;
-    // After removal, if the removed index was before the target, the target shifts left by 1
-    if (existingIdx < targetIdx) insertAt = Math.max(0, targetIdx - 1);
+    // Determine target insertion index based on insertBeforeIndex (which is in tableColumnsWithRowNumber space)
+    // convert to props.tableColumns index space
+    let targetInsertProps = -1;
+    if (
+      typeof insertBeforeIndex.value === "number" &&
+      insertBeforeIndex.value >= 0
+    ) {
+      targetInsertProps = Math.max(0, insertBeforeIndex.value - 1);
+    } else {
+      // fallback to columnIndex derived method
+      targetInsertProps = Math.max(0, columnIndex - 1);
+    }
 
-    // Ensure we don't insert into fixed columns area (props.tableColumns index >= fixedColumns-1)
+    // Remove the dragged item
+    current.splice(fromIdx, 1);
+
+    // After removal, if original index was before the target, the target shifts left by 1
+    let insertAt = targetInsertProps;
+    if (fromIdx < targetInsertProps)
+      insertAt = Math.max(0, targetInsertProps - 1);
+
+    // Ensure we don't insert into fixed columns area
     const minAllowed = Math.max(0, props.fixedColumns - 1);
     if (insertAt < minAllowed) insertAt = minAllowed;
-
     if (insertAt > current.length) insertAt = current.length;
 
     current.splice(insertAt, 0, fromProp);
 
-    // Emit new order (array of prop strings) for parent to persist
+    // Emit new order for parent to persist
     emit("columns-reorder", current);
   } catch (e) {
     // ignore
@@ -1769,30 +1936,56 @@ function mousewheel(e) {
 
   // debug: ScrollTop updated (console.log removed)
 
-  // Автоматическая загрузка нового окна данных при приближении к границам
-  const threshold = 20; // Загружать, когда остается меньше 20 элементов от границы окна
+  // Асинхронная инкрементальная подгрузка данных при прокрутке на 2/3
   const currentRow = Math.floor(scrollTop.value / rowHeight);
-  const currentWindowEnd = windowStart.value + (props.data?.length || 0);
+  const windowLength = props.data?.length || 0;
 
-  // debug: Load condition check (console.log removed)
+  // Вычисляем порог для предзагрузки: 2/3 от текущего окна
+  const downThreshold =
+    windowStart.value + Math.floor(windowLength * prefetchThreshold);
+  const upThreshold =
+    windowStart.value + Math.floor(windowLength * (1 - prefetchThreshold));
 
-  // Проверяем, нужно ли загружать новое окно
-  const newWindowStart = Math.max(0, currentRow - bufferSize);
-  const shouldLoadNewWindow =
-    currentRow >= currentWindowEnd - threshold || // приближаемся к концу окна
-    (currentRow <= windowStart.value + threshold && windowStart.value > 0) || // приближаемся к началу окна
-    currentRow < windowStart.value ||
-    currentRow >= currentWindowEnd; // вышли за пределы текущего окна
+  // Проверяем, нужно ли подгружать дополнительные данные
+  const shouldLoadMore =
+    currentRow >= downThreshold && // проскроллили 2/3 окна вниз
+    windowStart.value + windowLength < props.totalCount && // есть еще данные в базе
+    !isPreloading.value;
 
-  if (shouldLoadNewWindow && newWindowStart !== lastWindowStart.value) {
-    // debug: Triggering new window load (console.log removed)
+  const shouldLoadPrevious =
+    windowStart.value > 0 && // есть данные сверху
+    currentRow <= upThreshold && // поднялись в верхнюю 1/3
+    !isPreloading.value;
 
-    // Отмечаем последний запрошенный windowStart, чтобы избежать повторов
-    lastWindowStart.value = newWindowStart;
+  if (shouldLoadMore) {
+    // Подгрузка следующих 300 строк вниз
+    const nextStart = windowStart.value + windowLength;
+    if (nextStart !== lastWindowStart.value) {
+      lastWindowStart.value = nextStart;
+      isPreloading.value = true;
 
-    // Загружаем новое окно; store синхронизирует windowStart после получения ответа
-    if (typeof props.loadWindow === "function") {
-      props.loadWindow(newWindowStart);
+      if (typeof props.loadWindow === "function") {
+        props.loadWindow(nextStart).finally(() => {
+          isPreloading.value = false;
+        });
+      } else {
+        isPreloading.value = false;
+      }
+    }
+  } else if (shouldLoadPrevious) {
+    // Подгрузка предыдущих 300 строк вверх
+    const prevStart = Math.max(0, windowStart.value - 300);
+    if (prevStart !== lastWindowStart.value) {
+      lastWindowStart.value = prevStart;
+      isPreloading.value = true;
+
+      if (typeof props.loadWindow === "function") {
+        props.loadWindow(prevStart).finally(() => {
+          isPreloading.value = false;
+        });
+      } else {
+        isPreloading.value = false;
+      }
     }
   }
 
@@ -1907,25 +2100,76 @@ function updateHandlePosition() {
 // Shared logic to request loading a new window based on current scrollTop
 function maybeRequestWindowByScroll() {
   try {
-    const threshold = 20;
     const currentRow = Math.floor(scrollTop.value / rowHeight);
-    const currentWindowEnd = windowStart.value + (props.data?.length || 0);
-    const newWindowStart = Math.max(0, currentRow - bufferSize);
+    const windowLength = props.data?.length || 0;
+    const windowEnd = windowStart.value + windowLength;
 
-    const shouldLoadNewWindow =
-      currentRow >= currentWindowEnd - threshold ||
-      (currentRow <= windowStart.value + threshold && windowStart.value > 0) ||
-      currentRow < windowStart.value ||
-      currentRow >= currentWindowEnd;
+    const downThreshold =
+      windowStart.value + Math.floor(windowLength * prefetchThreshold);
+    const upThreshold =
+      windowStart.value + Math.floor(windowLength * (1 - prefetchThreshold));
 
-    if (
-      shouldLoadNewWindow &&
-      newWindowStart !== lastWindowStart.value &&
-      typeof props.loadWindow === "function" &&
-      !props.loadingMore
-    ) {
-      lastWindowStart.value = newWindowStart;
-      props.loadWindow(newWindowStart);
+    // Проверяем, вышли ли мы за пределы текущего окна (при перетаскивании ползунка)
+    const isOutOfWindow =
+      currentRow < windowStart.value || currentRow >= windowEnd;
+
+    // Если вышли за пределы окна, загружаем новое окно с центром в текущей позиции
+    if (isOutOfWindow && !isPreloading.value && !props.loadingMore) {
+      const newWindowStart = Math.max(
+        0,
+        Math.min(currentRow - 150, props.totalCount - 300)
+      );
+      if (
+        newWindowStart !== lastWindowStart.value &&
+        typeof props.loadWindow === "function"
+      ) {
+        console.log(`Out of window: loading new window from ${newWindowStart}`);
+        lastWindowStart.value = newWindowStart;
+        isPreloading.value = true;
+        props.loadWindow(newWindowStart).finally(() => {
+          isPreloading.value = false;
+        });
+      }
+      return;
+    }
+
+    // Инкрементальная подгрузка для плавной прокрутки колесиком
+    const shouldLoadMore =
+      currentRow >= downThreshold &&
+      windowStart.value + windowLength < props.totalCount &&
+      !isPreloading.value &&
+      !props.loadingMore;
+
+    const shouldLoadPrevious =
+      windowStart.value > 0 &&
+      currentRow <= upThreshold &&
+      !isPreloading.value &&
+      !props.loadingMore;
+
+    if (shouldLoadMore) {
+      const nextStart = windowStart.value + windowLength;
+      if (
+        nextStart !== lastWindowStart.value &&
+        typeof props.loadWindow === "function"
+      ) {
+        lastWindowStart.value = nextStart;
+        isPreloading.value = true;
+        props.loadWindow(nextStart).finally(() => {
+          isPreloading.value = false;
+        });
+      }
+    } else if (shouldLoadPrevious) {
+      const prevStart = Math.max(0, windowStart.value - 300);
+      if (
+        prevStart !== lastWindowStart.value &&
+        typeof props.loadWindow === "function"
+      ) {
+        lastWindowStart.value = prevStart;
+        isPreloading.value = true;
+        props.loadWindow(prevStart).finally(() => {
+          isPreloading.value = false;
+        });
+      }
     }
   } catch (e) {
     // ignore
@@ -2100,6 +2344,13 @@ html.dark .table-cell.fixed-column:nth-child(1) {
   table-layout: fixed;
 }
 
+.cell-center {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+}
+
 /* Стили для Firefox в темной теме */
 html.dark .table-container {
   scrollbar-color: var(--el-border-color-darker) var(--el-bg-color); /* Firefox темная тема */
@@ -2107,12 +2358,13 @@ html.dark .table-container {
 
 /* Visual indicator when a header is a drop target during drag-and-drop */
 .drag-over {
+  /* Make header highlight more transparent so the vertical insert indicator is more visible */
   background: linear-gradient(
     90deg,
-    rgba(0, 123, 255, 0.06),
-    rgba(0, 123, 255, 0.02)
+    rgba(0, 123, 255, 0.03),
+    rgba(0, 123, 255, 0.008)
   );
-  box-shadow: inset 0 0 0 2px rgba(0, 123, 255, 0.12);
+  box-shadow: inset 0 0 0 2px rgba(0, 123, 255, 0.06);
   transition: background-color 120ms ease, box-shadow 120ms ease;
 }
 
@@ -2125,6 +2377,12 @@ html.dark .table-container {
   cursor: pointer;
 }
 
+/* Show grabbing cursor only while the header is pressed (active) */
+th[draggable="true"]:active,
+th[draggable="true"]:active .header-content {
+  cursor: grabbing;
+}
+
 /* Thin vertical insert indicator shown between columns during drag */
 .insert-line {
   position: absolute;
@@ -2133,7 +2391,7 @@ html.dark .table-container {
   width: 3px;
   background: var(--el-color-primary);
   opacity: 0.95;
-  z-index: 60;
+  z-index: 220;
   border-radius: 2px;
   transition: opacity 120ms ease, transform 120ms ease;
 }

@@ -128,40 +128,113 @@ const allColumns = [
   { prop: "category_info", name: "Категория", width: 240 },
   { prop: "class_info", name: "Класс", width: 240 },
   { prop: "cluster_label", name: "Кластер", width: 150 },
+  { prop: "lemma", name: "Лемма", width: 200 },
+  { prop: "tags", name: "Теги", width: 200 },
+  { prop: "is_valid_headline", name: "Проверка согласованности", width: 140 },
+  { prop: "validation_reason", name: "Правило согласованности", width: 320 },
   { prop: "_actions", name: "Actions", width: 50 },
 ];
 
 // Ключи включенных колонок (правый список в Transfer)
-const STORAGE_KEY = "keywords-table-columns";
 const allColumnKeys = allColumns.map((c) => c.prop);
 const currentTableColumns = ref(allColumnKeys);
 
-// Инициализация из localStorage
-try {
-  const saved = localStorage.getItem(STORAGE_KEY);
-  if (saved) {
-    const arr = JSON.parse(saved);
-    if (Array.isArray(arr)) {
-      // Фильтруем только валидные ключи и гарантируем наличие обязательной колонки
-      let next = arr.filter((k) => allColumnKeys.includes(k));
-      if (!next.includes("keyword")) next.unshift("keyword");
-      // Убираем дубликаты на всякий случай
-      currentTableColumns.value = Array.from(new Set(next));
-    }
-  }
-} catch (e) {
-  // ignore
+const getStorageKey = () => {
+  const pid = project.currentProjectId || "anon";
+  return `keywords-table-columns-${pid}`;
+};
+
+const getLegacyStorageKey = () => {
+  const pid = project.currentProjectId || "anon";
+  return `table-columns-${pid}-keywords`;
+};
+
+function applyColumns(source) {
+  if (!Array.isArray(source)) return;
+  let next = source.filter((k) => allColumnKeys.includes(k));
+  if (!next.includes("keyword")) next.unshift("keyword");
+  currentTableColumns.value = Array.from(new Set(next));
 }
+
+function hydrateColumns() {
+  // Приоритет: данные проекта (БД) -> localStorage (на проект) -> дефолт
+  const fromProject = project.data?.columns?.keywords;
+  if (Array.isArray(fromProject) && fromProject.length) {
+    applyColumns(fromProject);
+    return;
+  }
+
+  try {
+    const saved = localStorage.getItem(getStorageKey());
+    if (saved) {
+      const arr = JSON.parse(saved);
+      applyColumns(arr);
+      return;
+    }
+    const legacy = localStorage.getItem(getLegacyStorageKey());
+    if (legacy) {
+      const arr = JSON.parse(legacy);
+      applyColumns(arr);
+      return;
+    }
+  } catch (e) {
+    // ignore
+  }
+
+  applyColumns(allColumnKeys);
+}
+
+hydrateColumns();
 
 // Сохраняем настройки при изменении
 watch(
   () => currentTableColumns.value.slice(),
   (val) => {
     try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(val));
+      // Avoid recursive save: if project already has same columns, skip persisting
+      const projCols =
+        project.data && project.data.columns && project.data.columns.keywords;
+      try {
+        if (
+          Array.isArray(projCols) &&
+          JSON.stringify(projCols) === JSON.stringify(val)
+        ) {
+          // still update localStorage for UI consistency, but don't call saveColumnOrder
+          try {
+            localStorage.setItem(getStorageKey(), JSON.stringify(val));
+            localStorage.setItem(getLegacyStorageKey(), JSON.stringify(val));
+          } catch (_) {}
+          return;
+        }
+      } catch (_) {}
+
+      localStorage.setItem(getStorageKey(), JSON.stringify(val));
+      // Persist to project and legacy key to keep backward compatibility
+      saveColumnOrder(project, "keywords", val);
+      try {
+        localStorage.setItem(getLegacyStorageKey(), JSON.stringify(val));
+      } catch (_) {}
     } catch (e) {
       // ignore
     }
+  },
+  { deep: false }
+);
+
+// При смене проекта поднимаем порядок колонок из БД/хранилища проекта
+watch(
+  () => project.currentProjectId,
+  () => {
+    hydrateColumns();
+  }
+);
+
+// Когда из БД приезжают настройки колонок нового проекта (project.data.columns),
+// повторно применяем порядок/видимость, чтобы не брать кеш от предыдущего проекта.
+watch(
+  () => project.data && project.data.columns && project.data.columns.keywords,
+  () => {
+    hydrateColumns();
   },
   { deep: false }
 );

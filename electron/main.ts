@@ -6,7 +6,7 @@ import Database from "better-sqlite3";
 // newProjectDefaults moved to IPC modules; no longer needed here
 import { createDatabase } from "./db/init.ts";
 import { registerAllIpc } from "./ipc/index.ts";
-import { stopCrawlerWorker } from "./workers/crawler.ts";
+import { stopCrawlerWorker } from "./managers/crawler.ts";
 
 // Автообновление
 import { autoUpdater } from "electron-updater";
@@ -46,7 +46,6 @@ let db: Database.Database | null = null;
 // Persist resolved database path for worker access
 let resolvedDbPath: string | null = null;
 // Column name for category text (some older DBs use 'category_name')
-let categoriesNameColumn = 'name';
 // Typing samples schema compatibility (old: label,text | new: url,sample)
 let typingLabelColumn = 'label';
 let typingTextColumn = 'text';
@@ -62,7 +61,6 @@ function initializeDatabase() {
     const res = createDatabase({ isDev });
     db = res.db;
     resolvedDbPath = res.dbPath;
-    categoriesNameColumn = res.categoriesNameColumn ?? categoriesNameColumn;
     typingLabelColumn = res.typingLabelColumn ?? typingLabelColumn;
     typingTextColumn = res.typingTextColumn ?? typingTextColumn;
     // typingDateColumn can be `null` to indicate the DB has no date column — accept null explicitly
@@ -238,7 +236,6 @@ app.whenReady().then(() => {
       db,
       getWindow,
       resolvedDbPath,
-      categoriesNameColumn,
       typingLabelColumn,
       typingTextColumn,
       typingDateColumn,

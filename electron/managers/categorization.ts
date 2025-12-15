@@ -3,7 +3,7 @@ import fs from 'fs';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'url';
 import type { CategorizationCtx } from './types.js';
-import { acquirePowerSaveBlocker, isRateLimitError, releasePowerSaveBlocker } from '../managers/utils.js';
+import { acquirePowerSaveBlocker, isRateLimitError, releasePowerSaveBlocker } from './utils.js';
 import { createRequire } from 'module';
 import type { ChildProcess } from 'node:child_process';
 const require = createRequire(import.meta.url);
@@ -52,7 +52,7 @@ export async function startCategorizationWorker(ctx: CategorizationCtx, projectI
   const { db, getWindow, resolvedDbPath } = ctx;
   const devCandidate = path.join(process.cwd(), 'electron', 'workers', 'assignCategorization.cjs');
   const packagedCandidate = process.resourcesPath
-    ? path.join(process.resourcesPath, 'app.asar.unpacked', 'worker', 'assignCategorization.cjs')
+    ? path.join(process.resourcesPath, 'app.asar.unpacked', 'electron', 'workers', 'assignCategorization.cjs')
     : null;
   const workerPath = fs.existsSync(devCandidate)
     ? devCandidate

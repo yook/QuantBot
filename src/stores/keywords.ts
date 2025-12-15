@@ -48,8 +48,11 @@ export const useKeywordsStore = defineStore("keywords", () => {
   const typingRunning = ref(false);
   const clusteringRunning = ref(false);
   const stopwordsRunning = ref(false);
+  const morphologyRunning = ref(false);
+  const morphologyCheckRunning = ref(false);
   const stopwordsFinished = ref(false);
-  const stopwordsPercent = ref(0);
+  const morphologyFinished = ref(false);
+  const morphologyCheckFinished = ref(false);
   const categorizationFinished = ref(false);
   const typingFinished = ref(false);
   const clusteringFinished = ref(false);
@@ -57,17 +60,36 @@ export const useKeywordsStore = defineStore("keywords", () => {
   const categorizationPercent = ref(0);
   const typingPercent = ref(0);
   const clusteringPercent = ref(0);
+  const stopwordsPercent = ref(0);
+  const morphologyPercent = ref(0);
+  const morphologyCheckPercent = ref(0);
 
   // UI helpers for detailed progress
   const currentProcessLabel = ref("");
   const currentProcessed = ref(0);
   const currentTotal = ref(0);
+  // Timestamp of last stop notification to avoid duplicates
+  const _lastMorphologyCheckStopAt = ref<number>(0);
+
+  function _notifyMorphologyCheckStoppedOnce() {
+    try {
+      const now = Date.now();
+      // If we showed a stop notification in the last 2000ms, skip
+      if (now - _lastMorphologyCheckStopAt.value < 2000) return;
+      _lastMorphologyCheckStopAt.value = now;
+      ElMessage.info('Проверка согласованности остановлена');
+    } catch (e) {
+      console.error('[Keywords Store] Failed to show stop notification:', e);
+    }
+  }
 
   // Целевые флаги: какие процессы пользователь намерен запускать (используются для прогресса/сброса)
   const targetCategorization = ref(false);
   const targetTyping = ref(false);
   const targetClustering = ref(false);
   const targetStopwords = ref(false);
+  const targetMorphology = ref(false);
+  const targetMorphologyCheck = ref(false);
 
   function updateOverallProgress() {
     // Учитываем только те процессы, которые пользователь запустил (target*)
@@ -76,6 +98,8 @@ export const useKeywordsStore = defineStore("keywords", () => {
       targetTyping.value ? typingPercent.value : null,
       targetClustering.value ? clusteringPercent.value : null,
       targetStopwords.value ? stopwordsPercent.value : null,
+      targetMorphology.value ? morphologyPercent.value : null,
+      targetMorphologyCheck.value ? morphologyCheckPercent.value : null,
     ].filter((v) => v !== null) as number[];
 
     if (targets.length === 0) {
@@ -88,7 +112,9 @@ export const useKeywordsStore = defineStore("keywords", () => {
     const anyRunning =
       (targetCategorization.value && categorizationRunning.value) ||
       (targetTyping.value && typingRunning.value) ||
-      (targetClustering.value && clusteringRunning.value);
+      (targetClustering.value && clusteringRunning.value) ||
+      (targetMorphology.value && morphologyRunning.value) ||
+      (targetMorphologyCheck.value && morphologyCheckRunning.value);
 
     // include stopwords
     const anyStopwordsRunning = targetStopwords.value && stopwordsRunning.value;
@@ -96,7 +122,9 @@ export const useKeywordsStore = defineStore("keywords", () => {
     const allTargetFinished =
       (!targetCategorization.value || categorizationFinished.value) &&
       (!targetTyping.value || typingFinished.value) &&
-      (!targetClustering.value || clusteringFinished.value);
+      (!targetClustering.value || clusteringFinished.value) &&
+      (!targetMorphology.value || morphologyFinished.value) &&
+      (!targetMorphologyCheck.value || morphologyCheckFinished.value);
 
     running.value = (anyRunning || anyStopwordsRunning) && !allTargetFinished;
   }
@@ -239,6 +267,22 @@ export const useKeywordsStore = defineStore("keywords", () => {
           limit: windowSize.value,
           sort: sort.value,
         });
+        // Если были добавлены новые записи, запускаем автоматическую лемматизацию
+        try {
+          if (typeof inserted === 'number' && inserted > 0) {
+            // Не запускаем, если уже запущена
+            if (!morphologyRunning.value) {
+              // Устанавливаем цель и запускаем в фоне
+              targetMorphology.value = true;
+              // Не await — хотим стартовать немедленно, не блокируя UI
+              startMorphology().catch((e) => {
+                console.error('[Keywords Store] Failed to start morphology after addKeywords:', e);
+              });
+            }
+          }
+        } catch (e) {
+          console.error('[Keywords Store] Error while attempting to auto-start morphology:', e);
+        }
         // Дадим прогресс-бару время отобразиться перед сбросом состояния
         setTimeout(() => {
           isAddingWithProgress.value = false;
@@ -370,45 +414,186 @@ export const useKeywordsStore = defineStore("keywords", () => {
     });
   }
 
+  async function startMorphology() {
+    if (!currentProjectId.value) {
+      ElMessage.error('Проект не выбран');
+      return;
+    }
+    // Показываем метку процесса сразу при старте, чтобы UI не показывал fallback
+    currentProcessLabel.value = "Лемматизирую";
+    morphologyRunning.value = true;
+    morphologyPercent.value = 0;
+    morphologyFinished.value = false;
+    targetMorphology.value = true;
+    updateOverallProgress();
+
+    try {
+      // Попытка получить общее количество ключевых слов сразу, чтобы показать "X из N"
+      try {
+        const winData = await ipcClient.getKeywordsWindow(Number(currentProjectId.value), 0, 1, sort.value, searchQuery.value);
+        if (winData && typeof winData.total === 'number') {
+          currentTotal.value = winData.total || 0;
+          // Если есть уже обработанные — пока ставим 0, актуализация придёт от прогресса воркера
+          currentProcessed.value = 0;
+        }
+      } catch (e) {
+        // ignore failures here — we'll rely on worker progress events
+      }
+      console.log('Starting morphology analysis for project:', currentProjectId.value);
+      await ipcClient.startMorphology(Number(currentProjectId.value));
+    } catch (err: any) {
+      console.error('Error starting morphology:', err);
+      ElMessage.error(`Ошибка: ${err.message}`);
+      morphologyRunning.value = false;
+    }
+  }
+
+  async function startMorphologyCheck() {
+    if (!currentProjectId.value) {
+      ElMessage.error('Проект не выбран');
+      return;
+    }
+
+    currentProcessLabel.value = "Проверяю согласованность";
+    morphologyCheckRunning.value = true;
+    morphologyCheckPercent.value = 0;
+    morphologyCheckFinished.value = false;
+    targetMorphologyCheck.value = true;
+    // сбрасываем детальные счетчики, чтобы UI показал новые данные из прогресса воркера
+    currentProcessed.value = 0;
+    currentTotal.value = 0;
+    updateOverallProgress();
+
+    try {
+      await ipcClient.startMorphologyCheck(Number(currentProjectId.value));
+    } catch (err: any) {
+      console.error('[Keywords Store] Error starting morphology check:', err);
+      ElMessage.error(`Ошибка запуска проверки заголовков: ${err.message}`);
+      morphologyCheckRunning.value = false;
+      targetMorphologyCheck.value = false;
+      updateOverallProgress();
+    }
+  }
+
+  async function stopMorphologyCheck() {
+    if (!currentProjectId.value || !morphologyCheckRunning.value) return;
+    try {
+      await ipcClient.stopMorphologyCheck(Number(currentProjectId.value));
+      morphologyCheckRunning.value = false;
+      currentProcessLabel.value = "";
+      targetMorphologyCheck.value = false;
+      updateOverallProgress();
+    } catch (err: any) {
+      console.error('[Keywords Store] Error stopping morphology check:', err);
+      // If the error is an AbortError from main process, treat as a successful stop
+      const isAbort = err && (err.code === 'ABORT_ERR' || err.name === 'AbortError' || String(err.message).toLowerCase().includes('aborted'));
+      morphologyCheckRunning.value = false;
+      currentProcessLabel.value = "";
+      targetMorphologyCheck.value = false;
+      updateOverallProgress();
+      if (!isAbort) {
+        ElMessage.error(`Не удалось остановить проверку заголовков: ${err.message}`);
+      } else {
+        // Abort — progress event will notify user, avoid duplicate message here
+        console.info('[Keywords Store] Morphology check stop aborted by main process');
+      }
+    }
+  }
+
   function loadWindow(startIndex: number) {
     console.log("=== loadWindow called ===");
     console.log("startIndex:", startIndex);
     console.log("currentProjectId:", currentProjectId.value);
-    console.log("bufferSize:", bufferSize.value);
 
     if (!currentProjectId.value) {
       console.log("No currentProjectId, skipping loadWindow");
-      return;
+      return Promise.resolve();
     }
 
     if (loadingMore.value) {
       console.log("Skipping loadWindow because loadingMore is already true");
-      return;
+      return Promise.resolve();
     }
 
-    let newWindowStart = Math.max(0, startIndex - bufferSize.value);
-    const maxStartAllowed = Math.max(0, totalCount.value - windowSize.value);
-    if (newWindowStart > maxStartAllowed) newWindowStart = maxStartAllowed;
-
-    if (newWindowStart === windowStart.value) {
-      console.log("loadWindow: newWindowStart equals current windowStart, skipping", newWindowStart);
-      return;
-    }
-
-    if (newWindowStart === lastRequestedWindowStart.value) {
-      console.log("loadWindow: newWindowStart equals lastRequestedWindowStart, skipping", newWindowStart);
-      return;
+    // Проверка на дубликат запроса
+    if (startIndex === lastRequestedWindowStart.value) {
+      console.log("loadWindow: startIndex equals lastRequestedWindowStart, skipping", startIndex);
+      return Promise.resolve();
     }
 
     loadingMore.value = true;
-    lastRequestedWindowStart.value = newWindowStart;
-    console.log("Loading window with skip:", newWindowStart, "limit:", windowSize.value);
+    lastRequestedWindowStart.value = startIndex;
+    console.log("Loading incremental data with skip:", startIndex, "limit:", 300);
 
-    loadKeywords(currentProjectId.value, {
-      skip: newWindowStart,
-      limit: windowSize.value,
-      sort: sort.value,
-    });
+    // Инкрементальная загрузка: запрашиваем 300 строк от startIndex
+    return ipcClient
+      .getKeywordsWindow(
+        Number(currentProjectId.value),
+        startIndex,
+        300,
+        sort.value,
+        searchQuery.value
+      )
+      .then((result: any) => {
+        if (!result) {
+          console.error("Invalid response from getKeywordsWindow");
+          return;
+        }
+
+        const newData = result.keywords || [];
+        console.log(`Received ${newData.length} keywords from skip=${startIndex}`);
+
+        // Определяем тип загрузки
+        const currentWindowEnd = windowStart.value + keywords.value.length;
+        const isLoadingDown = startIndex >= currentWindowEnd;
+        const isLoadingUp = startIndex < windowStart.value && startIndex >= windowStart.value - 300;
+        const isJump = Math.abs(startIndex - windowStart.value) > 300; // Скачок при перетаскивании ползунка
+
+        if (isJump) {
+          // Скачок на новую позицию: заменяем все данные
+          console.log("Jump to new position: replacing all data");
+          keywords.value = newData;
+          windowStart.value = startIndex;
+        } else if (isLoadingDown) {
+          // Подгрузка вниз: добавляем данные в конец
+          console.log("Appending data to bottom");
+          keywords.value = [...keywords.value, ...newData];
+          // windowStart остается прежним
+        } else if (isLoadingUp) {
+          // Подгрузка вверх: добавляем данные в начало
+          console.log("Prepending data to top");
+          keywords.value = [...newData, ...keywords.value];
+          windowStart.value = startIndex;
+        } else {
+          // Замена текущего окна (перекрытие)
+          console.log("Replacing current window");
+          keywords.value = newData;
+          windowStart.value = startIndex;
+        }
+
+        // Ограничиваем размер массива keywords максимум 900 строками (3 окна по 300)
+        const maxWindowSize = 900;
+        if (keywords.value.length > maxWindowSize && !isJump) {
+          if (isLoadingDown) {
+            // Удаляем старые данные сверху
+            const toRemove = keywords.value.length - maxWindowSize;
+            keywords.value = keywords.value.slice(toRemove);
+            windowStart.value += toRemove;
+          } else if (isLoadingUp) {
+            // Удаляем старые данные снизу
+            keywords.value = keywords.value.slice(0, maxWindowSize);
+          }
+        }
+
+        console.log(`Window: start=${windowStart.value}, length=${keywords.value.length}`);
+      })
+      .catch((err: any) => {
+        console.error("Error loading window:", err);
+        ElMessage.error(i18n.global.t("keywords.errorLoading"));
+      })
+      .finally(() => {
+        loadingMore.value = false;
+      });
   }
 
   // Вспомогательное: сбросить состояние прогресса/флагов
@@ -458,13 +643,25 @@ export const useKeywordsStore = defineStore("keywords", () => {
 
       // First: apply stop-words if any (run before other processes)
       try {
+        console.log('[Keywords Store] startAllProcesses: starting stopwords');
         targetStopwords.value = true;
         stopwordsRunning.value = true;
         running.value = true;
+        currentProcessLabel.value = "Фильтрую по стоп-словам";
+        currentProcessed.value = 0;
+        currentTotal.value = 100; // fallback until worker reports exact total
         updateOverallProgress();
         await ipcClient.startApplyStopwords(Number(currentProjectId.value));
         stopwordsFinished.value = true;
         stopwordsRunning.value = false;
+        // Clear UI labels/counters after stopwords finished
+        try {
+          currentProcessLabel.value = "";
+          currentProcessed.value = 0;
+          currentTotal.value = 0;
+          targetStopwords.value = false;
+          updateOverallProgress();
+        } catch (_) {}
         // reload keywords after applying stopwords in the Start All flow
         try {
           if (currentProjectId.value) {
@@ -558,13 +755,18 @@ export const useKeywordsStore = defineStore("keywords", () => {
       return;
     }
     try {
+      console.log('[Keywords Store] startStopwordsOnly: setting stopwordsRunning = true');
       resetProcessState();
       targetStopwords.value = true;
       stopwordsRunning.value = true;
+      currentProcessLabel.value = "Фильтрую по стоп-словам";
+      currentProcessed.value = 0;
+      currentTotal.value = 100; // fallback until worker reports exact total
       running.value = true;
       updateOverallProgress();
       await ipcClient.startApplyStopwords(Number(currentProjectId.value));
       stopwordsFinished.value = true;
+      stopwordsRunning.value = false;
       // Reload keywords to reflect applied stop-words
       try {
         if (currentProjectId.value) {
@@ -577,10 +779,26 @@ export const useKeywordsStore = defineStore("keywords", () => {
       } catch (e) {
         console.error('[Keywords Store] Error reloading keywords after startStopwordsOnly', e);
       }
-      ElMessage.success("Применение стоп-слов завершено");
+      // Clear UI labels/counters after stopwords finished
+      try {
+        currentProcessLabel.value = "";
+        currentProcessed.value = 0;
+        currentTotal.value = 0;
+        targetStopwords.value = false;
+        updateOverallProgress();
+      } catch (_) {}
+      // Уведомление об успешном применении стоп-слов убрано — прогресс виден в UI
     } catch (err: any) {
       console.error("Error applying stopwords:", err);
       stopwordsRunning.value = false;
+      // Ensure UI labels cleared on error
+      try {
+        currentProcessLabel.value = "";
+        currentProcessed.value = 0;
+        currentTotal.value = 0;
+        targetStopwords.value = false;
+        updateOverallProgress();
+      } catch (_) {}
       running.value = anyProcessRunning();
       ElMessage.error(`Ошибка применения стоп-слов: ${err.message}`);
     }
@@ -690,8 +908,8 @@ export const useKeywordsStore = defineStore("keywords", () => {
     // Если это первая загрузка (skip === 0), показываем основной лоадер
     // Иначе показываем loadingMore для подгрузки следующего окна
     if (skip === 0) {
-      console.log("First load: clearing keywords array and showing main loader");
-      setKeywords([]);
+      console.log("First load: showing main loader (keeping existing data visible)");
+      // НЕ очищаем данные - оставляем старые видимыми до получения новых
       windowStart.value = 0;
       visibleStart.value = 0;
       currentSkip.value = 0;
@@ -916,7 +1134,8 @@ export const useKeywordsStore = defineStore("keywords", () => {
     const allTargetFinished =
       (!targetCategorization.value || categorizationFinished.value) &&
       (!targetTyping.value || typingFinished.value) &&
-      (!targetClustering.value || clusteringFinished.value);
+      (!targetClustering.value || clusteringFinished.value) &&
+      (!targetMorphology.value || morphologyFinished.value);
 
     updateOverallProgress();
 
@@ -1427,20 +1646,20 @@ export const useKeywordsStore = defineStore("keywords", () => {
         typingFinished.value = true;
         targetTyping.value = false;
         typingPercent.value = 0;
-        currentProcessLabel.value = "";
-        currentProcessed.value = 0;
-        currentTotal.value = 0;
-        updateOverallProgress();
-        try {
-          console.error('[Worker Error] keywords:typing-error', data, 'status=', data?.status, 'debug=', data?.debug || data?.error || null);
-        } catch (e) {}
-        ElMessage.error(mapErrorMessage(data));
-    });
-
-    ipcClient.on('keywords:typing-stopped', (data: any) => {
-      if (!data || String(data.projectId) !== String(currentProjectId.value)) return;
-      typingRunning.value = false;
-      targetTyping.value = false;
+        // При ошибке тоже принудительно перезагружаем окно таблицы
+        (async () => {
+          try {
+            if (currentProjectId.value) {
+              await loadKeywords(currentProjectId.value as number, {
+                skip: 0,
+                limit: windowSize.value,
+                sort: sort.value,
+              });
+            }
+          } catch (e) {
+            console.error('[Keywords Store] Error reloading after morphology-check stop', e);
+          }
+        })();
       typingPercent.value = 0;
       currentProcessLabel.value = 'Остановлено';
       currentProcessed.value = 0;
@@ -1460,6 +1679,9 @@ export const useKeywordsStore = defineStore("keywords", () => {
           stopwordsFinished.value = true;
           targetStopwords.value = false;
           stopwordsPercent.value = 0;
+          currentProcessLabel.value = '';
+          currentProcessed.value = 0;
+          currentTotal.value = 0;
           updateOverallProgress();
           ElMessage.error(mapErrorMessage(data));
           return;
@@ -1468,9 +1690,35 @@ export const useKeywordsStore = defineStore("keywords", () => {
         stopwordsRunning.value = true;
         stopwordsPercent.value = Math.max(0, Math.min(100, Number(data.percent) || 0));
 
+        // Update detailed counters for UI (Y из N). Prefer exact counts from worker; fall back to percent.
+        try {
+          const totalRaw = data.total ?? data.count ?? null;
+          const processedRaw = data.processed ?? data.fetched ?? null;
+          if (totalRaw !== null && typeof totalRaw !== 'undefined') {
+            const totalNum = Number(totalRaw) || 0;
+            currentTotal.value = totalNum;
+            if (processedRaw !== null && typeof processedRaw !== 'undefined') {
+              currentProcessed.value = Number(processedRaw) || 0;
+            } else {
+              // derive processed from percent when total known
+              const p = Math.max(0, Math.min(100, Number(data.percent) || 0));
+              currentProcessed.value = Math.round((p / 100) * totalNum);
+            }
+          } else {
+            // No totals provided: treat percent as out of 100
+            currentTotal.value = 100;
+            const p = Math.max(0, Math.min(100, Number(data.percent) || 0));
+            currentProcessed.value = Math.round(p);
+          }
+          currentProcessLabel.value = 'Фильтрую по стоп-словам';
+        } catch (_) {}
+
         if (stopwordsPercent.value === 100) {
           stopwordsRunning.value = false;
           stopwordsFinished.value = true;
+          currentProcessLabel.value = '';
+          currentProcessed.value = 0;
+          currentTotal.value = 0;
           // Reload keywords window to reflect updated target_query/blocking_rule
           try {
             if (currentProjectId.value) {
@@ -1630,6 +1878,214 @@ export const useKeywordsStore = defineStore("keywords", () => {
         console.error('[Keywords Store] Error handling IPC keywords:updated', e);
       }
     });
+
+    // Morphology events
+    ipcClient.on('keywords:morphology-progress', (data: any) => {
+      if (String(data.projectId) === String(currentProjectId.value)) {
+        if (data.stage === 'processing') {
+          // Устанавливаем метку процесса до флага running,
+          // чтобы computed в компонентах сразу показывал "Лемматизирую",
+          // а не временно fallback "Морфологический анализ".
+          currentProcessLabel.value = "Лемматизирую";
+          morphologyRunning.value = true;
+          currentProcessed.value = data.processed || 0;
+          currentTotal.value = data.total || 0;
+          morphologyPercent.value = data.percent || 0;
+          updateOverallProgress();
+        } else if (data.stage === 'complete') {
+          // Mark finished and set percent to 100, but keep the detailed
+          // progress fields visible until we reload the window. This avoids
+          // the UI jumping (label disappearing) before the final 100% is shown.
+          morphologyRunning.value = false;
+          morphologyFinished.value = true;
+          morphologyPercent.value = 100;
+          // Ensure processed equals total for final display
+          try {
+            if (typeof data.total === 'number') currentTotal.value = data.total;
+            if (typeof data.processed === 'number') currentProcessed.value = data.processed;
+            else if (currentTotal.value) currentProcessed.value = currentTotal.value;
+          } catch (_) {}
+          updateOverallProgress();
+
+          // Принудительно перезагружаем текущее окно данных и только после
+          // успешной перезагрузки сбрасываем детальные поля и флаги.
+          setTimeout(async () => {
+            try {
+              // Сбрасываем windowStart чтобы перезагрузить данные с начала
+              windowStart.value = 0;
+              await loadKeywords(currentProjectId.value as number, {
+                skip: 0,
+                limit: windowSize.value,
+                sort: sort.value,
+              });
+              // Небольшая задержка, чтобы UI успел отобразить обновлённые данные
+              await new Promise((res) => setTimeout(res, 300));
+            } catch (e) {
+              console.error('[Keywords Store] Error reloading keywords after morphology complete', e);
+            } finally {
+              // Теперь можно сбросить подробные поля
+              currentProcessLabel.value = "";
+              currentProcessed.value = 0;
+              currentTotal.value = 0;
+              targetMorphology.value = false; // сбрасываем флаг цели
+              updateOverallProgress();
+            }
+          }, 300);
+        }
+      }
+    });
+
+    ipcClient.on('keywords:morphology-check-progress', (data: any) => {
+      if (String(data.projectId) !== String(currentProjectId.value)) return;
+
+      if (data.stage === 'processing') {
+        currentProcessLabel.value = "Проверяю согласованность";
+        morphologyCheckRunning.value = true;
+        morphologyCheckFinished.value = false;
+        currentProcessed.value = data.processed || 0;
+        currentTotal.value = data.total || 0;
+        morphologyCheckPercent.value = data.percent || 0;
+        updateOverallProgress();
+        return;
+      }
+
+      if (data.stage === 'complete') {
+        morphologyCheckRunning.value = false;
+        morphologyCheckFinished.value = true;
+        morphologyCheckPercent.value = 100;
+        try {
+          if (typeof data.total === 'number') currentTotal.value = data.total;
+          if (typeof data.processed === 'number') currentProcessed.value = data.processed;
+          else if (currentTotal.value) currentProcessed.value = currentTotal.value;
+        } catch (_) {}
+        updateOverallProgress();
+
+        (async () => {
+          try {
+            // Сбрасываем фильтры/окно, чтобы гарантированно увидеть новые поля
+            searchQuery.value = "";
+            windowStart.value = 0;
+            visibleStart.value = 0;
+            currentSkip.value = 0;
+            if (currentProjectId.value) {
+              await loadKeywords(currentProjectId.value as number, {
+                skip: 0,
+                limit: windowSize.value,
+                sort: sort.value,
+              });
+            }
+          } catch (e) {
+            console.error('[Keywords Store] Error reloading after morphology-check complete', e);
+          } finally {
+            currentProcessLabel.value = "";
+            currentProcessed.value = 0;
+            currentTotal.value = 0;
+            targetMorphologyCheck.value = false;
+            updateOverallProgress();
+          }
+        })();
+        return;
+      }
+
+      if (data.stage === 'error') {
+        morphologyCheckRunning.value = false;
+        morphologyCheckFinished.value = false;
+        currentProcessLabel.value = "";
+        currentProcessed.value = 0;
+        currentTotal.value = 0;
+        targetMorphologyCheck.value = false;
+        morphologyCheckPercent.value = 0;
+          // Если это ошибка прерывания от main/worker — трактуем как остановку пользователем
+          const errText = String(data.error || '');
+          const isAbort = /abort(ed)?|ABORT_ERR|AbortError/i.test(errText);
+          const isExitedNull = /exited with code null/i.test(errText) || /worker exited with code null/i.test(errText);
+          if (isAbort || isExitedNull) {
+            // Аборт/выход воркера — покажем единоразовое уведомление через helper
+            _notifyMorphologyCheckStoppedOnce();
+            console.info('[Keywords Store] Morphology-check reported abort/exit:', errText);
+          } else {
+            ElMessage.error(`Ошибка проверки заголовков: ${data.error || 'Неизвестная ошибка'}`);
+            console.error('[Keywords Store] Morphology-check error:', data);
+          }
+        (async () => {
+          try {
+            if (currentProjectId.value) {
+              await loadKeywords(currentProjectId.value as number, {
+                skip: 0,
+                limit: windowSize.value,
+                sort: sort.value,
+              });
+            }
+          } catch (e) {
+            console.error('[Keywords Store] Error reloading after morphology-check error', e);
+          }
+        })();
+        return;
+      }
+
+      if (data.stage === 'stopped') {
+        morphologyCheckRunning.value = false;
+        morphologyCheckFinished.value = false;
+        currentProcessLabel.value = "";
+        currentProcessed.value = 0;
+        currentTotal.value = 0;
+        morphologyCheckPercent.value = 0;
+        _notifyMorphologyCheckStoppedOnce();
+        targetMorphologyCheck.value = false;
+        updateOverallProgress();
+        (async () => {
+          try {
+            if (currentProjectId.value) {
+              await loadKeywords(currentProjectId.value as number, {
+                skip: 0,
+                limit: windowSize.value,
+                sort: sort.value,
+              });
+            }
+          } catch (e) {
+            console.error('[Keywords Store] Error reloading after morphology-check stop', e);
+          }
+        })();
+      }
+    });
+
+    ipcClient.on('keywords:morphology-error', (data: any) => {
+      if (String(data.projectId) === String(currentProjectId.value)) {
+        morphologyRunning.value = false;
+        morphologyFinished.value = false;
+        currentProcessLabel.value = "";
+        currentProcessed.value = 0;
+        // При ошибке тоже принудительно перезагружаем окно таблицы
+        (async () => {
+          try {
+            if (currentProjectId.value) {
+              await loadKeywords(currentProjectId.value as number, {
+                skip: 0,
+                limit: windowSize.value,
+                sort: sort.value,
+              });
+            }
+          } catch (e) {
+            console.error('[Keywords Store] Error reloading after morphology-check stop', e);
+          }
+        })();
+        currentTotal.value = 0;
+        ElMessage.error(`Ошибка морфологического анализа: ${data.error || 'Неизвестная ошибка'}`);
+        console.error('[Keywords Store] Morphology error:', data);
+        checkBothProcessesFinished();
+      }
+    });
+
+    ipcClient.on('keywords:morphology-stopped', (data: any) => {
+      if (String(data.projectId) === String(currentProjectId.value)) {
+        morphologyRunning.value = false;
+        currentProcessLabel.value = "";
+        currentProcessed.value = 0;
+        currentTotal.value = 0;
+        ElMessage.info('Морфологический анализ остановлен пользователем');
+        checkBothProcessesFinished();
+      }
+    });
   }
 
   // Initialize IPC listeners
@@ -1650,6 +2106,14 @@ export const useKeywordsStore = defineStore("keywords", () => {
     if (clusteringRunning.value) {
       await ipcClient.invoke('keywords:stop-process', pid, 'clustering');
       clusteringRunning.value = false;
+    }
+    if (morphologyRunning.value) {
+      await ipcClient.invoke('keywords:stop-process', pid, 'morphology');
+      morphologyRunning.value = false;
+    }
+    if (morphologyCheckRunning.value) {
+      await ipcClient.invoke('keywords:stop-process', pid, 'morphology-check');
+      morphologyCheckRunning.value = false;
     }
     
     running.value = false;
@@ -1704,6 +2168,9 @@ export const useKeywordsStore = defineStore("keywords", () => {
   startStopwordsOnly,
   startClusteringOnly,
   stopCurrentProcess,
+  startMorphology,
+  startMorphologyCheck,
+  stopMorphologyCheck,
     // New actions/flags
     // startCategorization, // TODO: IPC migration
     // Background process flags
@@ -1712,5 +2179,21 @@ export const useKeywordsStore = defineStore("keywords", () => {
     currentProcessLabel,
     currentProcessed,
     currentTotal,
+    // Stopwords flags
+    stopwordsRunning,
+    stopwordsPercent,
+    stopwordsFinished,
+    targetStopwords,
+    // Morphology flags
+    morphologyRunning,
+    morphologyPercent,
+    morphologyFinished,
+    targetMorphology,
+    // Morphology check flags
+    morphologyCheckRunning,
+    morphologyCheckPercent,
+    morphologyCheckFinished,
+    targetMorphologyCheck,
   };
 });
+

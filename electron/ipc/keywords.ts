@@ -3,9 +3,11 @@ import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { ipcMain } from 'electron';
 import type { IpcContext } from './types';
-import { stopCategorizationWorker } from '../workers/categorization.js';
-import { stopTypingWorker } from '../workers/typing.js';
-import { stopClusteringWorker } from '../workers/clustering.js';
+import { stopCategorizationWorker } from '../managers/categorization.js';
+import { stopTypingWorker } from '../managers/typing.js';
+import { stopClusteringWorker } from '../managers/clustering.js';
+import { startMorphologyWorker, stopMorphologyWorker } from '../managers/morphology.js';
+import { startMorphologyCheckWorker, stopMorphologyCheckWorker } from '../managers/morphologyCheck.js';
 import { createRequire } from 'module';
 const require = createRequire(import.meta.url);
 
@@ -14,7 +16,7 @@ export function registerKeywordsIpc(ctx: IpcContext) {
 
   ipcMain.handle('db:keywords:getAll', async (_event, projectId) => {
     try {
-      const result = db.prepare('SELECT * FROM keywords WHERE project_id = ? ORDER BY id').all(projectId);
+      const result = db.prepare('SELECT * FROM keywords WHERE project_id = ? AND is_keyword = 1 ORDER BY id').all(projectId);
       return { success: true, data: result };
     } catch (error: any) {
       return { success: false, error: error.message };
@@ -23,7 +25,7 @@ export function registerKeywordsIpc(ctx: IpcContext) {
 
   ipcMain.handle('db:keywords:getWindow', async (_event, projectId, skip, limit, sort, searchQuery) => {
     try {
-      let sql = 'SELECT * FROM keywords WHERE project_id = ?';
+      let sql = 'SELECT * FROM keywords WHERE project_id = ? AND is_keyword = 1';
       const params: any[] = [projectId];
 
       const q = typeof searchQuery === 'string' ? searchQuery.trim() : '';
@@ -47,7 +49,8 @@ export function registerKeywordsIpc(ctx: IpcContext) {
 
       const allowedSortColumns = [
         'id', 'keyword', 'blocking_rule', 'created_at', 'category_id', 'category_name',
-        'category_similarity', 'class_name', 'class_similarity', 'cluster_label', 'target_query'
+        'category_similarity', 'class_name', 'class_similarity', 'cluster_label', 'target_query',
+        'lemma', 'tags', 'is_valid_headline', 'validation_reason'
       ];
 
       let orderByClause = ' ORDER BY id DESC';
@@ -76,7 +79,7 @@ export function registerKeywordsIpc(ctx: IpcContext) {
 
       const rows = db.prepare(sql).all(...params);
 
-      let countSql = 'SELECT COUNT(*) as total FROM keywords WHERE project_id = ?';
+      let countSql = 'SELECT COUNT(*) as total FROM keywords WHERE project_id = ? AND is_keyword = 1';
       const countParams: any[] = [projectId];
       if (q) {
         if (explicitTargetFilter !== null) {
@@ -99,7 +102,7 @@ export function registerKeywordsIpc(ctx: IpcContext) {
 
   ipcMain.handle('db:keywords:insert', async (_event, keyword, projectId, categoryId, _color, disabled) => {
     try {
-      const result = db.prepare('INSERT INTO keywords (keyword, project_id, category_id, disabled, target_query) VALUES (?, ?, ?, ?, NULL)')
+      const result = db.prepare('INSERT INTO keywords (keyword, project_id, category_id, disabled, is_keyword, target_query) VALUES (?, ?, ?, ?, 1, NULL)')
         .run(keyword, projectId, categoryId, disabled);
       try {
         // Use DB facade to apply stop-words (migrated from legacy socket helpers)
@@ -343,10 +346,54 @@ export function registerKeywordsIpc(ctx: IpcContext) {
         stopTypingWorker(projectId);
       } else if (processType === 'clustering') {
         stopClusteringWorker(projectId);
+      } else if (processType === 'morphology') {
+        stopMorphologyWorker(projectId);
+      } else if (processType === 'morphology-check') {
+        stopMorphologyCheckWorker(projectId);
       }
       return { success: true };
     } catch (error: any) {
       console.error(`[IPC] Failed to stop process ${processType}:`, error);
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('keywords:startMorphology', async (_event, projectId: number) => {
+    try {
+      console.log(`[IPC] Starting morphology worker for project ${projectId}`);
+      await startMorphologyWorker(ctx, projectId);
+      return { success: true };
+    } catch (error: any) {
+      console.error('[IPC keywords:startMorphology]', error);
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('keywords:stopMorphology', async (_event, projectId: number) => {
+    try {
+      stopMorphologyWorker(projectId);
+      return { success: true };
+    } catch (error: any) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('keywords:startMorphologyCheck', async (_event, projectId: number) => {
+    try {
+      console.log(`[IPC] Starting morphology check worker for project ${projectId}`);
+      await startMorphologyCheckWorker(ctx, projectId);
+      return { success: true };
+    } catch (error: any) {
+      console.error('[IPC keywords:startMorphologyCheck]', error);
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('keywords:stopMorphologyCheck', async (_event, projectId: number) => {
+    try {
+      stopMorphologyCheckWorker(projectId);
+      return { success: true };
+    } catch (error: any) {
       return { success: false, error: error.message };
     }
   });

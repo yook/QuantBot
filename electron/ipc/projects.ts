@@ -98,7 +98,7 @@ export function registerProjectsIpc(ctx: IpcContext) {
       try {
         stmtBegin.run();
         // Delete dependent rows in related tables
-        const childTables = ['urls', 'keywords', 'categories', 'typing_samples', 'stop_words', 'embeddings_cache', 'disallowed', 'embeddings_cache'];
+        const childTables = ['urls', 'keywords', 'typing_samples', 'stop_words', 'embeddings_cache', 'disallowed', 'embeddings_cache'];
         for (const table of childTables) {
           try {
             db.prepare(`DELETE FROM ${table} WHERE project_id = ?`).run(id);

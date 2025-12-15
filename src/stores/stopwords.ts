@@ -167,11 +167,16 @@ export const useStopwordsStore = defineStore("stopwords", () => {
 
     try {
       // Парсим стоп-слова
+      // Сохраняем регулярные выражения в оригинальном виде, простые слова приводим к lower-case
+      const regexLike = /^\/(?:\\.|[^\\\/])+\/[gimsuy]*$/;
       let parsedStopwords = text
         .split(/[\,\n]/)
         .map((k) => k.trim())
         .filter((k) => k.length > 0)
-        .map((k) => k.toLowerCase());
+        .map((k) => {
+          if (regexLike.test(k)) return k; // regex - keep as entered
+          return k.toLowerCase();
+        });
 
       if (parsedStopwords.length === 0) {
         ElMessage.warning("Нет стоп-слов для добавления");

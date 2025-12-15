@@ -7,7 +7,7 @@ import { once } from 'node:events';
 import type { ClusteringCtx } from './types.js';
 import { createRequire } from 'module';
 import type { ChildProcess } from 'node:child_process';
-import { acquirePowerSaveBlocker, releasePowerSaveBlocker } from '../managers/utils.js';
+import { acquirePowerSaveBlocker, releasePowerSaveBlocker } from './utils.js';
 const require = createRequire(import.meta.url);
 
 type ActiveJob = {
@@ -54,7 +54,7 @@ export async function startClusteringWorker(ctx: ClusteringCtx, projectId: numbe
   const { db, getWindow, resolvedDbPath } = ctx;
   const devCandidate = path.join(process.cwd(), 'electron', 'workers', 'clusterСomponents.cjs');
   const packagedCandidate = process.resourcesPath
-    ? path.join(process.resourcesPath, 'app.asar.unpacked', 'worker', 'clusterСomponents.cjs')
+    ? path.join(process.resourcesPath, 'app.asar.unpacked', 'electron', 'workers', 'clusterСomponents.cjs')
     : null;
   const workerPath = fs.existsSync(devCandidate)
     ? devCandidate

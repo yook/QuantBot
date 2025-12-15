@@ -196,26 +196,6 @@ if (db) {
 
   try {
     db.prepare(
-      `CREATE TABLE IF NOT EXISTS categories (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        project_id INTEGER NOT NULL,
-        category_name TEXT NOT NULL,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY(project_id) REFERENCES projects(id)
-      )`
-    ).run();
-    db.prepare(
-      "CREATE INDEX IF NOT EXISTS idx_categories_project ON categories(project_id);"
-    ).run();
-    db.prepare(
-      "CREATE UNIQUE INDEX IF NOT EXISTS idx_categories_project_name ON categories(project_id, category_name);"
-    ).run();
-  } catch (err) {
-    console.error("Error creating categories table:", err);
-  }
-
-  try {
-    db.prepare(
       `CREATE TABLE IF NOT EXISTS stop_words (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         project_id INTEGER NOT NULL,

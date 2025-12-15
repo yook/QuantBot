@@ -47,7 +47,7 @@ export function registerStopwordsIpc(ctx: IpcContext) {
       const packagedCandidate = process.resourcesPath
         ? path.join(process.resourcesPath, 'app.asar.unpacked', 'worker', 'stopwordsProcessor.cjs')
         : null;
-      const devCandidate = path.join(process.cwd(), 'worker', 'stopwordsProcessor.cjs');
+      const devCandidate = path.join(process.cwd(), 'electron', 'workers', 'stopwordsProcessor.cjs');
       const workerPath = fs.existsSync(devCandidate)
         ? devCandidate
         : packagedCandidate && fs.existsSync(packagedCandidate)
@@ -69,9 +69,13 @@ export function registerStopwordsIpc(ctx: IpcContext) {
       // renderer and keep summary locally to return it to the caller.
       let summary: any = null;
       let totalImported = 0;
+      let stdoutBuffer = '';
       child.stdout.on('data', (data) => {
-        const lines = String(data).split('\n').filter(Boolean);
+        stdoutBuffer += String(data);
+        const lines = stdoutBuffer.split('\n');
+        stdoutBuffer = lines.pop() || '';
         for (const l of lines) {
+          if (!l) continue;
           try {
             const obj = JSON.parse(l);
             if (!obj) continue;
@@ -97,9 +101,15 @@ export function registerStopwordsIpc(ctx: IpcContext) {
             // Forward only errors (so UI can show failure messages)
             if (obj.type === 'error') sendToRenderer('stopwords:progress', obj);
           } catch (e) {
-            // ignore JSON parse errors
+            // ignore JSON parse errors for malformed lines
           }
         }
+      });
+
+      child.on('error', (err) => {
+        try { fs.unlinkSync(cfgPath); } catch (_e) {}
+        sendToRenderer('stopwords:progress', { type: 'error', message: String(err) });
+        return reject(err);
       });
 
       child.stderr.on('data', (d) => {
@@ -161,7 +171,7 @@ export function registerStopwordsIpc(ctx: IpcContext) {
       const packagedApplyCandidate = process.resourcesPath
         ? path.join(process.resourcesPath, 'app.asar.unpacked', 'worker', 'stopwordsApply.cjs')
         : null;
-      const devApplyCandidate = path.join(process.cwd(), 'worker', 'stopwordsApply.cjs');
+      const devApplyCandidate = path.join(process.cwd(), 'electron', 'workers', 'stopwordsApply.cjs');
       const workerPath = fs.existsSync(devApplyCandidate)
         ? devApplyCandidate
         : packagedApplyCandidate && fs.existsSync(packagedApplyCandidate)
@@ -178,9 +188,13 @@ export function registerStopwordsIpc(ctx: IpcContext) {
         stdio: ['ignore', 'pipe', 'pipe'],
       });
 
+      let stdoutBufferApply = '';
       child.stdout.on('data', (data) => {
-        const lines = String(data).split('\n').filter(Boolean);
+        stdoutBufferApply += String(data);
+        const lines = stdoutBufferApply.split('\n');
+        stdoutBufferApply = lines.pop() || '';
         for (const l of lines) {
+          if (!l) continue;
           try {
             const obj = JSON.parse(l);
             // forward apply-progress events
@@ -202,9 +216,15 @@ export function registerStopwordsIpc(ctx: IpcContext) {
               continue;
             }
           } catch (e) {
-            // ignore
+            // ignore JSON parse errors
           }
         }
+      });
+
+      child.on('error', (err) => {
+        try { fs.unlinkSync(cfgPath); } catch (_e) {}
+        sendToRenderer('stopwords:apply-progress', { type: 'error', message: String(err) });
+        return reject(err);
       });
 
       child.stderr.on('data', (d) => {

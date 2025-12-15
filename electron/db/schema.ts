@@ -1,7 +1,6 @@
 import Database from 'better-sqlite3';
 
 export function initSchema(db: Database.Database): {
-  categoriesNameColumn: string;
   typingLabelColumn: string;
   typingTextColumn: string;
   typingDateColumn: string | null;
@@ -67,7 +66,11 @@ export function initSchema(db: Database.Database): {
         project_id INTEGER NOT NULL,
         keyword TEXT NOT NULL,
         category_id INTEGER,
+        color TEXT,
         disabled INTEGER DEFAULT 0,
+        is_category INTEGER DEFAULT 0,
+        is_keyword INTEGER DEFAULT 0,
+        has_embedding INTEGER DEFAULT 0,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY(project_id) REFERENCES projects(id)
       )`
@@ -97,31 +100,15 @@ export function initSchema(db: Database.Database): {
     addIfMissing('cluster_label', 'TEXT');
     addIfMissing('blocking_rule', 'TEXT');
     addIfMissing('target_query', 'INTEGER DEFAULT 1', 'CREATE INDEX IF NOT EXISTS idx_keywords_target_query ON keywords(target_query);');
-  } catch (_e) {}
-
-  // Categories table
-  db.prepare(
-    `CREATE TABLE IF NOT EXISTS categories (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        project_id INTEGER NOT NULL,
-        name TEXT NOT NULL,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY(project_id) REFERENCES projects(id)
-      )`
-  ).run();
-
-  // Detect categories text column ('name' vs legacy 'category_name') and index accordingly
-  let categoriesNameColumn = 'name';
-  try {
-    const cols: any[] = db.prepare("PRAGMA table_info('categories')").all();
-    const names = (cols || []).map((c: any) => c && c.name);
-    if (names.includes('name')) categoriesNameColumn = 'name';
-    else if (names.includes('category_name')) categoriesNameColumn = 'category_name';
-  } catch (_e) {}
-
-  try {
-    db.prepare('CREATE INDEX IF NOT EXISTS idx_categories_project ON categories(project_id);').run();
-    db.prepare(`CREATE UNIQUE INDEX IF NOT EXISTS idx_categories_project_name ON categories(project_id, ${categoriesNameColumn});`).run();
+    addIfMissing('color', 'TEXT');
+    addIfMissing('is_category', 'INTEGER DEFAULT 0');
+    addIfMissing('is_keyword', 'INTEGER DEFAULT 0');
+    addIfMissing('has_embedding', 'INTEGER DEFAULT 0');
+    addIfMissing('lemma', 'TEXT');
+    addIfMissing('tags', 'TEXT');
+    addIfMissing('morphology_processed', 'INTEGER DEFAULT 0', 'CREATE INDEX IF NOT EXISTS idx_keywords_morphology_processed ON keywords(morphology_processed);');
+    addIfMissing('is_valid_headline', 'INTEGER');
+    addIfMissing('validation_reason', 'TEXT');
   } catch (_e) {}
 
   // Typing samples table
@@ -190,7 +177,6 @@ export function initSchema(db: Database.Database): {
   } catch (_e) {}
 
   return {
-    categoriesNameColumn,
     typingLabelColumn,
     typingTextColumn,
     typingDateColumn,

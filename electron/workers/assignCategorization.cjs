@@ -75,7 +75,7 @@ function resolveDbFacade() {
 }
 
 const dbFacade = resolveDbFacade();
-const { embeddingsCacheGet, embeddingsCachePut, dbAll } = dbFacade;
+const { embeddingsCacheGet, embeddingsCachePut, dbAll, dbRun } = dbFacade;
 const OPENAI_EMBED_URL = "https://api.openai.com/v1/embeddings";
 const MODEL = "text-embedding-3-small";
 
@@ -300,6 +300,152 @@ async function chunkArray(arr, size) {
   return out;
 }
 
+function emitWorkerProgress(obj) {
+  if (!obj || typeof obj !== "object") return;
+  try {
+    process.stdout.write(JSON.stringify(obj) + "\n");
+  } catch (_) {}
+}
+
+async function markEmbeddingsReady(ids) {
+  if (!Array.isArray(ids) || !ids.length) return;
+  const batchSize = 500;
+  for (let i = 0; i < ids.length; i += batchSize) {
+    const slice = [];
+    for (let j = i; j < Math.min(ids.length, i + batchSize); j++) {
+      const num = Number(ids[j]);
+      if (Number.isFinite(num)) slice.push(num);
+    }
+    if (!slice.length) continue;
+    const placeholders = slice.map(() => "?").join(",");
+    try {
+      await dbRun(
+        `UPDATE keywords SET has_embedding = 1 WHERE id IN (${placeholders})`,
+        slice
+      );
+    } catch (err) {
+      console.error(
+        "Failed to update has_embedding flags",
+        err?.message || err
+      );
+    }
+  }
+}
+
+// Курсорная категоризация напрямую из БД без промежуточных файлов
+async function runDbStreamingCategorization(projectId) {
+  const CATEGORY_BATCH_SIZE = Number(process.env.CATEGORY_BATCH_SIZE || 500);
+  const KEYWORD_BATCH_SIZE = Number(
+    process.env.CATEGORIZATION_KEYWORD_CHUNK || 5000
+  );
+
+  const countRows = await dbAll(
+    "SELECT (SELECT COUNT(*) FROM keywords WHERE project_id = ? AND is_keyword = 1 AND (target_query IS NULL OR target_query = 1)) as kw_cnt, (SELECT COUNT(*) FROM keywords WHERE project_id = ? AND is_category = 1) as cat_cnt",
+    [projectId, projectId]
+  );
+  const kwTotal = Number(countRows?.[0]?.kw_cnt || 0);
+  const catTotal = Number(countRows?.[0]?.cat_cnt || 0);
+
+  console.log(
+    `[assignCategorization] DB streaming mode: project=${projectId}, keywords=${kwTotal}, categories=${catTotal}, keyBatch=${KEYWORD_BATCH_SIZE}, catBatch=${CATEGORY_BATCH_SIZE}`
+  );
+
+  if (!kwTotal || catTotal < 1) {
+    console.error("Nothing to categorize (missing keywords or categories)");
+    return;
+  }
+
+  const fetchKeywordBatch = async (lastId) =>
+    dbAll(
+      "SELECT id, keyword FROM keywords WHERE project_id = ? AND is_keyword = 1 AND (target_query IS NULL OR target_query = 1) AND id > ? ORDER BY id LIMIT ?",
+      [projectId, lastId, KEYWORD_BATCH_SIZE]
+    );
+
+  const forEachCategoryBatch = async (fn) => {
+    let lastId = 0;
+    while (true) {
+      const batch = await dbAll(
+        "SELECT id, keyword AS category_name FROM keywords WHERE project_id = ? AND is_category = 1 AND id > ? ORDER BY id LIMIT ?",
+        [projectId, lastId, CATEGORY_BATCH_SIZE]
+      );
+      if (!batch || !batch.length) break;
+      lastId = batch[batch.length - 1].id;
+      await fn(batch);
+    }
+  };
+
+  let processed = 0;
+  let lastKeyId = 0;
+  while (true) {
+    const keywordBatch = await fetchKeywordBatch(lastKeyId);
+    if (!keywordBatch || !keywordBatch.length) break;
+    lastKeyId = keywordBatch[keywordBatch.length - 1].id;
+
+    const kwTexts = keywordBatch.map((k) => k.keyword || "");
+    const kwEmbeddings = await fetchEmbeddings(kwTexts, "keyword_embeddings");
+    const kwIdsToMark = [];
+    for (let i = 0; i < keywordBatch.length; i++) {
+      const vec = kwEmbeddings[i];
+      if (Array.isArray(vec) && vec.length) {
+        keywordBatch[i].embedding = vec;
+        kwIdsToMark.push(keywordBatch[i].id);
+      } else {
+        keywordBatch[i].embedding = null;
+      }
+    }
+    if (kwIdsToMark.length) await markEmbeddingsReady(kwIdsToMark);
+
+    const best = keywordBatch.map(() => ({ sim: -1, cat: null }));
+
+    await forEachCategoryBatch(async (catBatch) => {
+      const catTexts = catBatch.map((c) => c.category_name || "");
+      const catEmbeddings = await fetchEmbeddings(
+        catTexts,
+        "category_embeddings"
+      );
+      const catIdsToMark = [];
+      for (let ci = 0; ci < catBatch.length; ci++) {
+        const catEmb = catEmbeddings[ci];
+        if (!Array.isArray(catEmb) || !catEmb.length) continue;
+        const cat = catBatch[ci];
+        catIdsToMark.push(cat.id);
+        for (let ki = 0; ki < keywordBatch.length; ki++) {
+          const kw = keywordBatch[ki];
+          const kwEmb = kw.embedding;
+          if (!Array.isArray(kwEmb)) continue;
+          const sim = cosineSimilarity(kwEmb, catEmb);
+          if (sim > best[ki].sim) {
+            best[ki] = { sim, cat };
+          }
+        }
+      }
+      if (catIdsToMark.length) await markEmbeddingsReady(catIdsToMark);
+    });
+
+    for (let i = 0; i < keywordBatch.length; i++) {
+      const kw = keywordBatch[i];
+      const b = best[i];
+      process.stdout.write(
+        JSON.stringify({
+          id: kw.id,
+          bestCategoryId: b.cat ? b.cat.id : null,
+          bestCategoryName: b.cat ? b.cat.category_name : null,
+          similarity: b.sim,
+          embeddingSource: kw.embeddingSource || "unknown",
+        }) + "\n"
+      );
+    }
+
+    processed += keywordBatch.length;
+    emitWorkerProgress({
+      type: "progress",
+      stage: "categorization",
+      fetched: processed,
+      total: kwTotal || null,
+    });
+  }
+}
+
 async function main() {
   const args = parseArgs();
   const projectId = args.projectId ? Number(args.projectId) : null;
@@ -307,17 +453,22 @@ async function main() {
     console.error("Please provide --projectId=<id>");
     process.exit(1);
   }
+  // Если не передан inputFile — читаем напрямую из БД курсорно, без промежуточного файла
+  if (!args.inputFile) {
+    await runDbStreamingCategorization(projectId);
+    return;
+  }
 
-  console.error(
+  console.log(
     `Assigning keywords for project ${projectId} using model ${MODEL}`
   );
 
-  // Support input via file or stdin. Expected shape: { categories: [...], keywords: [...] }
+  // Поддержка старого пути через inputFile/stdin: { categories: [...], keywords: [...] }
   let categories = [];
   let keywords = [];
   let keywordStreamIteratorFactory = null;
   if (args.inputFile) {
-    // Stream-parse categories fully (they are small) and keywords lazily to avoid OOM
+    // Stream-parse categories fully (они обычно малы) и keywords лениво, чтобы избежать OOM
     async function streamReadArray(filePath, key) {
       return new Promise((resolve, reject) => {
         const rs = fs.createReadStream(filePath, { encoding: "utf8" });
@@ -458,7 +609,7 @@ async function main() {
   const estimatedKeywords = keywordStreamIterator
     ? "stream"
     : String(keywords.length);
-  console.error(
+  console.log(
     `assignCategorization: loaded ${categories.length} categories, ${estimatedKeywords} keywords`
   );
 
@@ -475,7 +626,7 @@ async function main() {
     dedupedCategories.push(c);
   }
   if (dedupedCategories.length !== categories.length) {
-    console.error(
+    console.log(
       `[assignCategorization] Deduped categories: ${categories.length} -> ${dedupedCategories.length}`
     );
   }
@@ -486,7 +637,7 @@ async function main() {
   const formatMemMB = (bytes) => (bytes / 1024 / 1024).toFixed(2);
   const logMemory = (label) => {
     const mem = process.memoryUsage();
-    console.error(
+    console.log(
       `[MEMORY ${label}] RSS: ${formatMemMB(mem.rss)} MB, Heap: ${formatMemMB(
         mem.heapUsed
       )}/${formatMemMB(mem.heapTotal)} MB`
@@ -547,7 +698,7 @@ async function main() {
               k.target_query === true)
         );
       }
-      console.error(
+      console.log(
         `[assignCategorization] Filtered keywords by target_query: ${before} -> ${keywords.length}`
       );
     }
@@ -555,93 +706,158 @@ async function main() {
     // ignore
   }
   const CATEGORY_BATCH_SIZE = Number(process.env.CATEGORY_BATCH_SIZE || 500);
+  const KEYWORD_BATCH_SIZE = Number(
+    process.env.CATEGORIZATION_KEYWORD_CHUNK || 2000
+  );
   const totalKeywords = keywordStreamIterator ? null : keywords.length;
-  console.error(
+  console.log(
     `Computing similarity for ${
       keywordStreamIterator ? "streamed" : totalKeywords
-    } keywords in category batches of ${CATEGORY_BATCH_SIZE}...`
+    } keywords (keyword batch ${KEYWORD_BATCH_SIZE}) in category batches of ${CATEGORY_BATCH_SIZE}...`
   );
 
-  const bestMap = new Map(); // id -> { bestSim, bestCat, embeddingSource }
-
-  async function getKeywordIterator() {
-    if (keywordStreamIterator) return keywordStreamIteratorFactory();
-    return keywords[Symbol.iterator]();
+  async function* keywordBatchIterator() {
+    if (keywordStreamIterator) {
+      const iterator = keywordStreamIteratorFactory();
+      let batch = [];
+      for await (const kw of iterator) {
+        if (kw) batch.push(kw);
+        if (batch.length >= KEYWORD_BATCH_SIZE) {
+          yield batch;
+          batch = [];
+        }
+      }
+      if (batch.length) yield batch;
+      return;
+    }
+    while (keywords.length) {
+      yield keywords.splice(0, KEYWORD_BATCH_SIZE);
+    }
   }
 
-  async function processBatch(catBatch, catEmbeddings, batchIndex) {
-    let idx = 0;
-    const iter = await getKeywordIterator();
-    for await (const kw of iter) {
-      idx += 1;
-      const kwText = kw.keyword || "";
-      let kwEmb = Array.isArray(kw.embedding) ? kw.embedding : null;
-      if (!kwEmb && kwText) {
-        try {
-          const cached = await embeddingsCacheGet(kwText, MODEL);
-          if (cached && Array.isArray(cached.embedding))
-            kwEmb = cached.embedding;
-        } catch (_) {}
+  async function hydrateKeywordBatchEmbeddings(keywordBatch) {
+    const missingTexts = [];
+    const missingIndices = [];
+    const idsToMark = [];
+    for (let i = 0; i < keywordBatch.length; i++) {
+      const kw = keywordBatch[i];
+      if (!kw) continue;
+      const existing = Array.isArray(kw.embedding)
+        ? kw.embedding
+        : Array.isArray(kw.vector)
+        ? kw.vector
+        : null;
+      if (Array.isArray(existing) && existing.length) {
+        kw.embedding = existing;
+        kw.embeddingSource = kw.embeddingSource || "input";
+        if (kw.id !== undefined && kw.id !== null)
+          idsToMark.push(Number(kw.id));
+        continue;
       }
-      let bestSim = -1;
-      let bestCat = null;
-      if (Array.isArray(kwEmb)) {
-        for (let j = 0; j < catBatch.length; j++) {
-          const catEmb = catEmbeddings[j];
-          if (!Array.isArray(catEmb)) continue;
-          const sim = cosineSimilarity(kwEmb, catEmb);
-          if (sim > bestSim) {
-            bestSim = sim;
-            bestCat = catBatch[j];
+      const text =
+        (typeof kw.keyword === "string" && kw.keyword.trim()) ||
+        (typeof kw.text === "string" && kw.text.trim()) ||
+        "";
+      if (!text) continue;
+      missingTexts.push(text);
+      missingIndices.push(i);
+    }
+    if (!missingTexts.length) {
+      if (idsToMark.length) await markEmbeddingsReady(idsToMark);
+      return;
+    }
+    const vectors = await fetchEmbeddings(missingTexts, "keyword_embeddings");
+    for (let j = 0; j < missingIndices.length; j++) {
+      const idx = missingIndices[j];
+      const vec = vectors[j];
+      if (!Array.isArray(vec) || !vec.length) continue;
+      const kw = keywordBatch[idx];
+      if (!kw) continue;
+      kw.embedding = vec;
+      kw.embeddingSource = kw.embeddingSource || "worker";
+      if (kw.id !== undefined && kw.id !== null) idsToMark.push(Number(kw.id));
+    }
+    if (idsToMark.length) await markEmbeddingsReady(idsToMark);
+  }
+
+  async function processCategoriesForBatch(keywordBatch, best, batchIndex) {
+    for (
+      let start = 0;
+      start < categories.length;
+      start += CATEGORY_BATCH_SIZE
+    ) {
+      const catBatch = categories.slice(start, start + CATEGORY_BATCH_SIZE);
+      if (!catBatch.length) continue;
+      const catTexts = catBatch.map((c) => c.category_name || "");
+      console.log(
+        `Batch ${batchIndex}: embeddings for ${catBatch.length} categories (offset ${start})...`
+      );
+      logMemory(`before category slice ${batchIndex}:${start}`);
+      const catEmbeddings = await fetchEmbeddings(
+        catTexts,
+        "category_embeddings"
+      );
+      const catIdsToMark = [];
+      logMemory(`after category slice ${batchIndex}:${start}`);
+      for (let ci = 0; ci < catBatch.length; ci++) {
+        const catEmb = catEmbeddings[ci];
+        if (!Array.isArray(catEmb) || !catEmb.length) continue;
+        const cat = catBatch[ci];
+        if (cat && cat.id !== undefined && cat.id !== null) {
+          catIdsToMark.push(Number(cat.id));
+        }
+        for (let ki = 0; ki < keywordBatch.length; ki++) {
+          const kw = keywordBatch[ki];
+          if (!kw || !Array.isArray(kw.embedding)) continue;
+          const sim = cosineSimilarity(kw.embedding, catEmb);
+          if (sim > best[ki].sim) {
+            best[ki].sim = sim;
+            best[ki].cat = cat;
           }
         }
       }
-      const prev = bestMap.get(kw.id);
-      if (!prev || bestSim > prev.bestSim) {
-        bestMap.set(kw.id, {
-          bestSim,
-          bestCat,
-          embeddingSource: kw.embeddingSource || "unknown",
-        });
-      }
-      if (idx % 20000 === 0) {
-        logMemory(
-          `batch ${batchIndex} after ${idx}${
-            totalKeywords ? "/" + totalKeywords : ""
-          } keywords`
-        );
-      }
+      if (catIdsToMark.length) await markEmbeddingsReady(catIdsToMark);
     }
-    logMemory(`batch ${batchIndex} completed`);
   }
 
+  function emitBatchResults(keywordBatch, best) {
+    for (let i = 0; i < keywordBatch.length; i++) {
+      const kw = keywordBatch[i];
+      if (!kw || kw.id === undefined || kw.id === null) continue;
+      const state = best[i];
+      const result = {
+        id: kw.id,
+        bestCategoryId: state && state.cat ? state.cat.id : null,
+        bestCategoryName: state && state.cat ? state.cat.category_name : null,
+        similarity: state ? state.sim : null,
+        embeddingSource: kw.embeddingSource || "unknown",
+      };
+      process.stdout.write(JSON.stringify(result) + "\n");
+    }
+  }
+
+  let processed = 0;
   let batchIndex = 0;
-  for (let start = 0; start < categories.length; start += CATEGORY_BATCH_SIZE) {
+  for await (const keywordBatch of keywordBatchIterator()) {
+    if (!keywordBatch.length) continue;
     batchIndex += 1;
-    const catBatch = categories.slice(start, start + CATEGORY_BATCH_SIZE);
-    const catTexts = catBatch.map((c) => c.category_name || "");
-    console.error(
-      `Batch ${batchIndex}: embeddings for ${catBatch.length} categories...`
+    console.log(
+      `[assignCategorization] processing keyword batch ${batchIndex} (${keywordBatch.length} items)`
     );
-    logMemory(`before category batch ${batchIndex}`);
-    const catEmbeddings = await fetchEmbeddings(catTexts);
-    logMemory(`after category batch ${batchIndex}`);
-    await processBatch(catBatch, catEmbeddings, batchIndex);
+    await hydrateKeywordBatchEmbeddings(keywordBatch);
+    const best = keywordBatch.map(() => ({ sim: -1, cat: null }));
+    await processCategoriesForBatch(keywordBatch, best, batchIndex);
+    emitBatchResults(keywordBatch, best);
+    processed += keywordBatch.length;
+    logMemory(
+      `after keyword batch ${batchIndex}: ${processed}${
+        totalKeywords ? "/" + totalKeywords : ""
+      } processed`
+    );
+    for (let i = 0; i < keywordBatch.length; i++) keywordBatch[i] = null;
   }
 
-  // Emit final results
-  logMemory("before writing results");
-  for (const [id, state] of bestMap.entries()) {
-    const result = {
-      id,
-      bestCategoryId: state.bestCat ? state.bestCat.id : null,
-      bestCategoryName: state.bestCat ? state.bestCat.category_name : null,
-      similarity: state.bestSim,
-      embeddingSource: state.embeddingSource,
-    };
-    process.stdout.write(JSON.stringify(result) + "\n");
-  }
-  logMemory("after writing results");
+  logMemory("categorization completed for input file mode");
 }
 
 if (require.main === module) {

@@ -7,6 +7,7 @@ import { fileURLToPath } from 'url';
 import { createRequire } from 'module';
 import type { TypingCtx } from './types.js';
 import type { ChildProcess } from 'node:child_process';
+import { acquirePowerSaveBlocker, releasePowerSaveBlocker } from './utils.js';
 
 const require = createRequire(import.meta.url);
 
@@ -14,9 +15,19 @@ type ActiveJob = {
   child?: ChildProcess;
   abortController: AbortController;
   manuallyStopped?: boolean;
+  powerBlockerId?: number | null;
 };
 
 const activeJobs = new Map<number, ActiveJob>();
+
+function cleanupJob(projectId: number) {
+  const job = activeJobs.get(projectId);
+  if (job) {
+    releasePowerSaveBlocker(job.powerBlockerId);
+    activeJobs.delete(projectId);
+  }
+  return job;
+}
 
 export function stopTypingWorker(projectId: number) {
   const job = activeJobs.get(projectId);
@@ -36,12 +47,13 @@ export async function startTypingWorker(ctx: TypingCtx, projectId: number) {
     return;
   }
   const abortController = new AbortController();
-  activeJobs.set(projectId, { abortController, manuallyStopped: false });
+  const powerBlockerId = acquirePowerSaveBlocker(`typing:${projectId}`);
+  activeJobs.set(projectId, { abortController, manuallyStopped: false, powerBlockerId });
 
   const { db, getWindow, resolvedDbPath, typingLabelColumn, typingTextColumn, typingDateColumn } = ctx;
-  const devCandidate = path.join(process.cwd(), 'worker', 'trainAndClassify.cjs');
+  const devCandidate = path.join(process.cwd(), 'electron', 'workers', 'trainAndClassify.cjs');
   const packagedCandidate = process.resourcesPath
-    ? path.join(process.resourcesPath, 'app.asar.unpacked', 'worker', 'trainAndClassify.cjs')
+    ? path.join(process.resourcesPath, 'app.asar.unpacked', 'electron', 'workers', 'trainAndClassify.cjs')
     : null;
   const workerPath = fs.existsSync(devCandidate)
     ? devCandidate
@@ -88,7 +100,7 @@ export async function startTypingWorker(ctx: TypingCtx, projectId: number) {
             labelsSample: labels.slice(0, 10),
           });
         }
-        activeJobs.delete(projectId);
+        cleanupJob(projectId);
         return;
       }
     } catch (e) {
@@ -100,7 +112,7 @@ export async function startTypingWorker(ctx: TypingCtx, projectId: number) {
       if (win && !win.isDestroyed()) {
         win.webContents.send('keywords:typing-error', { projectId, messageKey: 'keywords.noTargetKeywords', message: 'Не найдены целевые ключевые слова для проекта' });
         }
-      activeJobs.delete(projectId);
+      cleanupJob(projectId);
       return;
     }
 
@@ -151,8 +163,8 @@ export async function startTypingWorker(ctx: TypingCtx, projectId: number) {
 
       // 2. Embed keywords + stream to temp file
       tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'typing-'));
-      inputPath = path.join(tmpDir, `input-${Date.now()}.json`);
-      console.log(`[typing] Writing ${keywordsTotal} keywords (~${estimatedSizeMB} MB estimated) to temp file...`);
+      inputPath = path.join(tmpDir, `input-${Date.now()}.jsonl`);
+      console.log(`[typing] Writing ${keywordsTotal} keywords (~${estimatedSizeMB} MB estimated) to temp JSONL file...`);
 
       writeStream = fs.createWriteStream(inputPath, { encoding: 'utf8' });
       const writeChunk = async (chunk: string) => {
@@ -162,15 +174,6 @@ export async function startTypingWorker(ctx: TypingCtx, projectId: number) {
         }
       };
 
-      try {
-        await writeChunk('{"typingSamples":');
-        await writeChunk(JSON.stringify(typingSamples || []));
-        await writeChunk(',"keywords":[');
-      } catch (streamErr) {
-        (streamErr as any).__writeError = true;
-        throw streamErr;
-      }
-
       emitProgress('embeddings', {
         fetched: 0,
         total: keywordsTotal,
@@ -178,7 +181,6 @@ export async function startTypingWorker(ctx: TypingCtx, projectId: number) {
       });
 
       let processedKeywords = 0;
-      let wroteAnyKeyword = false;
       let lastKeywordId = 0;
       while (processedKeywords < keywordsTotal) {
         const chunk = keywordsStmt.all(projectId, lastKeywordId, keywordReadChunk) as any[];
@@ -210,9 +212,7 @@ export async function startTypingWorker(ctx: TypingCtx, projectId: number) {
 
         try {
           for (const keyword of chunk) {
-            if (wroteAnyKeyword) await writeChunk(',');
-            await writeChunk(JSON.stringify(keyword));
-            wroteAnyKeyword = true;
+            await writeChunk(JSON.stringify(keyword) + '\n');
           }
         } catch (streamErr) {
           (streamErr as any).__writeError = true;
@@ -238,8 +238,6 @@ export async function startTypingWorker(ctx: TypingCtx, projectId: number) {
       }
 
       try {
-        await writeChunk(']');
-        await writeChunk('}');
         writeStream.end();
         await once(writeStream, 'finish');
         writeStream = null;
@@ -264,7 +262,7 @@ export async function startTypingWorker(ctx: TypingCtx, projectId: number) {
         try { await fs.promises.rm(tmpDir, { recursive: true, force: true }); } catch (_) {}
       }
       if (embErr?.message === 'Aborted' && job?.manuallyStopped) {
-        activeJobs.delete(projectId);
+        cleanupJob(projectId);
         sendStoppedEvent();
         return;
       }
@@ -287,7 +285,7 @@ export async function startTypingWorker(ctx: TypingCtx, projectId: number) {
           });
         }
       }
-      activeJobs.delete(projectId);
+      cleanupJob(projectId);
       return;
     }
 
@@ -296,7 +294,7 @@ export async function startTypingWorker(ctx: TypingCtx, projectId: number) {
       if (tmpDir) {
         try { await fs.promises.rm(tmpDir, { recursive: true, force: true }); } catch (_) {}
       }
-      activeJobs.delete(projectId);
+      cleanupJob(projectId);
       return;
     }
 
@@ -312,7 +310,7 @@ export async function startTypingWorker(ctx: TypingCtx, projectId: number) {
         if (w && !w.isDestroyed()) {
           w.webContents.send('keywords:typing-error', { projectId, message: `Worker файл не найден: ${workerPath}` });
         }
-        activeJobs.delete(projectId);
+        cleanupJob(projectId);
         return;
       }
     } catch (e) {
@@ -424,7 +422,7 @@ export async function startTypingWorker(ctx: TypingCtx, projectId: number) {
     child.on('exit', async (code, signal) => {
       const jobState = activeJobs.get(projectId);
       const manuallyStopped = jobState?.manuallyStopped;
-      activeJobs.delete(projectId);
+      cleanupJob(projectId);
       console.log(`Typing worker exited with code ${code}, signal ${signal}`);
       try { await fs.promises.rm(tmpDirResolved, { recursive: true, force: true }); } catch {}
       const w = getWindow();
@@ -455,9 +453,8 @@ export async function startTypingWorker(ctx: TypingCtx, projectId: number) {
       }
     });
   } catch (error: any) {
-    const jobState = activeJobs.get(projectId);
+    const jobState = cleanupJob(projectId);
     const manuallyStopped = jobState?.manuallyStopped;
-    activeJobs.delete(projectId);
     if (error.message === 'Aborted') {
       console.log(`Typing for project ${projectId} aborted.`);
       if (manuallyStopped) {

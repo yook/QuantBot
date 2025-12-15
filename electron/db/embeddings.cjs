@@ -1,14 +1,22 @@
-const { dbGet, dbRun } = require("./adapter.cjs");
+const { dbGet, dbRun, dbAll } = require("./adapter.cjs");
+const fs = require('fs');
 
 // Robustly require the worker embeddings fetcher in dev/prod
 function requireEmbeddingsFetcher() {
   try {
     const path = require("path");
     const base = process.env.APP_ROOT || path.join(__dirname, "..");
+    // Prefer dev worker under electron/workers for repository layout
+    const devCandidate1 = path.join(process.cwd(), 'electron', 'workers', 'embeddingsClassifier.cjs');
+    const devCandidate2 = path.join(base, '..', 'electron', 'workers', 'embeddingsClassifier.cjs');
+    const legacyCandidate = path.join(base, '..', 'worker', 'embeddingsClassifier.cjs');
+    if (fs && fs.existsSync && fs.existsSync(devCandidate1)) return require(devCandidate1);
+    if (fs && fs.existsSync && fs.existsSync(devCandidate2)) return require(devCandidate2);
+    if (fs && fs.existsSync && fs.existsSync(legacyCandidate)) return require(legacyCandidate);
     return require(path.join(base, "..", "worker", "embeddingsClassifier.cjs"));
   } catch (e) {
     try {
-      return require("../../worker/embeddingsClassifier.cjs");
+      return require("../../electron/workers/embeddingsClassifier.cjs");
     } catch (_) {
       throw e;
     }
@@ -50,6 +58,38 @@ async function embeddingsCacheGet(key, vectorModel) {
   );
   const embedding = decodeEmbedding(row || {});
   return embedding ? { embedding } : null;
+}
+
+async function embeddingsCacheGetBulk(keys, vectorModel) {
+  const result = new Map();
+  if (!Array.isArray(keys) || !keys.length) return result;
+
+  const unique = [];
+  const seen = new Set();
+  for (const rawKey of keys) {
+    if (typeof rawKey !== "string") continue;
+    const key = rawKey.trim();
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    unique.push(key);
+  }
+  if (!unique.length) return result;
+
+  const modelParam = vectorModel || null;
+  const PARAM_LIMIT = 997; // 999 - 2 slots for model params
+  for (let i = 0; i < unique.length; i += PARAM_LIMIT) {
+    const slice = unique.slice(i, i + PARAM_LIMIT);
+    const placeholders = slice.map(() => "?").join(",");
+    const sql = `SELECT key, embedding FROM embeddings_cache WHERE key IN (${placeholders}) AND (vector_model = ? OR (? IS NULL AND vector_model IS NULL))`;
+    const rows = await dbAll(sql, [...slice, modelParam, modelParam]);
+    for (const row of rows || []) {
+      const embedding = decodeEmbedding(row);
+      if (embedding && Array.isArray(embedding)) {
+        result.set(row.key, embedding);
+      }
+    }
+  }
+  return result;
 }
 
 async function embeddingsCachePut(key, embedding, vectorModel) {
@@ -141,6 +181,7 @@ async function upsertTypingModel(projectId, payload) {
 
 module.exports = {
   embeddingsCacheGet,
+  embeddingsCacheGetBulk,
   embeddingsCachePut,
   updateTypingSampleEmbeddings,
   getTypingModel,
@@ -156,6 +197,7 @@ async function attachEmbeddingsToKeywords(keywords, opts = {}) {
       ? Math.floor(requestedChunkSize)
       : 64;
   const fetchOptions = opts.fetchOptions || {};
+  const cacheOnly = Boolean(opts.cacheOnly);
   // Determine projectId for proxy resolution: prefer explicit opt, fallback to keywords array
   const projectIdFromOpts = opts.projectId ? Number(opts.projectId) : null;
   const projectIdFromKeywords =
@@ -172,7 +214,22 @@ async function attachEmbeddingsToKeywords(keywords, opts = {}) {
     return { total: 0, embedded: 0, fetched: 0 };
   }
 
+  const collectKeywordId = (targetSet, kw) => {
+    if (!kw) return;
+    const rawId = kw.id;
+    if (typeof rawId === "number" && Number.isFinite(rawId)) {
+      targetSet.add(rawId);
+      return;
+    }
+    if (typeof rawId === "string" && rawId.trim()) {
+      const parsed = Number(rawId);
+      if (Number.isFinite(parsed)) targetSet.add(parsed);
+    }
+  };
+
   const textToIndices = new Map();
+  const textCacheHints = new Map();
+  const idsToMark = new Set();
   for (let i = 0; i < keywords.length; i++) {
     const kw = keywords[i];
     let text = "";
@@ -186,31 +243,70 @@ async function attachEmbeddingsToKeywords(keywords, opts = {}) {
     if (!text) continue;
     if (!textToIndices.has(text)) textToIndices.set(text, []);
     textToIndices.get(text).push(i);
+
+    const hasEmbeddingFlag = Boolean(
+      kw &&
+        (kw.has_embedding === 1 ||
+          kw.has_embedding === true ||
+          kw.has_embedding === "1")
+    );
+    if (!textCacheHints.has(text)) {
+      textCacheHints.set(text, hasEmbeddingFlag);
+    } else if (hasEmbeddingFlag) {
+      textCacheHints.set(text, true);
+    }
+  }
+
+  const cacheCandidates = [];
+  for (const [text] of textToIndices.entries()) {
+    if (textCacheHints.get(text)) cacheCandidates.push(text);
+  }
+
+  let cachedEmbeddings = new Map();
+  if (cacheCandidates.length) {
+    try {
+      cachedEmbeddings = await embeddingsCacheGetBulk(
+        cacheCandidates,
+        modelUsed
+      );
+    } catch (_) {
+      cachedEmbeddings = new Map();
+    }
   }
 
   const toFetch = [];
   for (const [text, indices] of textToIndices.entries()) {
-    try {
-      const cached = await embeddingsCacheGet(text, modelUsed);
-      if (
-        cached &&
-        Array.isArray(cached.embedding) &&
-        cached.embedding.length
-      ) {
-        for (const idx of indices) {
-          keywords[idx].embedding = cached.embedding;
-          keywords[idx].embeddingSource = "cache";
-        }
-        continue;
+    const cachedVector = cachedEmbeddings.get(text);
+    if (Array.isArray(cachedVector) && cachedVector.length) {
+      for (const idx of indices) {
+        const kw = keywords[idx];
+        kw.embedding = cachedVector;
+        kw.embeddingSource = "cache";
+        kw.has_embedding = 1;
+        collectKeywordId(idsToMark, kw);
       }
-    } catch (_) {}
+      continue;
+    }
     toFetch.push(text);
   }
 
-  // Debug: report how many unique texts will be fetched from OpenAI
-  try {
-    console.error(`[embeddings] toFetch unique texts: ${toFetch.length}, total keywords chunk: ${keywords.length}, chunkSize: ${chunkSize}, model: ${modelUsed}`);
-  } catch (_) {}
+  if (cacheOnly && toFetch.length) {
+    const err = new Error(
+      `Missing cached embeddings for ${toFetch.length} texts`
+    );
+    err.code = "EMBEDDING_CACHE_MISS";
+    err.missing = toFetch;
+    throw err;
+  }
+
+  if (toFetch.length) {
+    // Debug: report how many unique texts будут запрошены у модели
+    try {
+      console.error(
+        `[embeddings] toFetch unique texts: ${toFetch.length}, total keywords chunk: ${keywords.length}, chunkSize: ${chunkSize}, model: ${modelUsed}`
+      );
+    } catch (_) {}
+  }
 
   let fetched = 0;
   const totalToFetch = toFetch.length;
@@ -221,9 +317,17 @@ async function attachEmbeddingsToKeywords(keywords, opts = {}) {
     const chunk = toFetch.slice(start, start + chunkSize);
     const fetchOpts = Object.assign({}, fetchOptions, { model: modelUsed });
     if (effectiveProjectId) fetchOpts.projectId = effectiveProjectId;
-    console.error(`[embeddings] requesting embeddings for chunk ${start}-${start + chunk.length - 1} (size ${chunk.length})`);
+    console.error(
+      `[embeddings] requesting embeddings for chunk ${start}-${
+        start + chunk.length - 1
+      } (size ${chunk.length})`
+    );
     const vectors = await fetchEmbeddings(chunk, fetchOpts);
-    console.error(`[embeddings] received embeddings for chunk ${start}-${start + chunk.length - 1}: vectors.length=${Array.isArray(vectors)?vectors.length:0}`);
+    console.error(
+      `[embeddings] received embeddings for chunk ${start}-${
+        start + chunk.length - 1
+      }: vectors.length=${Array.isArray(vectors) ? vectors.length : 0}`
+    );
     for (let i = 0; i < chunk.length; i++) {
       const vec = vectors[i];
       const text = chunk[i];
@@ -231,8 +335,11 @@ async function attachEmbeddingsToKeywords(keywords, opts = {}) {
         fetched++;
         const idxs = textToIndices.get(text) || [];
         for (const idx of idxs) {
-          keywords[idx].embedding = vec;
-          keywords[idx].embeddingSource = "openai";
+          const kw = keywords[idx];
+          kw.embedding = vec;
+          kw.embeddingSource = "openai";
+          kw.has_embedding = 1;
+          collectKeywordId(idsToMark, kw);
         }
         try {
           await embeddingsCachePut(text, vec, modelUsed);
@@ -253,6 +360,24 @@ async function attachEmbeddingsToKeywords(keywords, opts = {}) {
   let embedded = 0;
   for (const kw of keywords) {
     if (Array.isArray(kw.embedding) && kw.embedding.length) embedded++;
+  }
+
+  if (idsToMark.size) {
+    const idsArray = Array.from(idsToMark);
+    const placeholders = idsArray.map(() => "?").join(",");
+    if (placeholders) {
+      try {
+        await dbRun(
+          `UPDATE keywords SET has_embedding = 1 WHERE id IN (${placeholders})`,
+          idsArray
+        );
+      } catch (err) {
+        console.error(
+          "[embeddings] failed to update keyword embedding flags",
+          err
+        );
+      }
+    }
   }
 
   return {
