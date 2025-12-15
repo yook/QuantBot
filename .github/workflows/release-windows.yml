@@ -7,6 +7,14 @@ on:
     tags:
       - 'v*'
   workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to release (e.g. v1.2.3). If omitted, uses current git tag when triggered by tag.'
+        required: false
+      create_tag:
+        description: 'If true and tag provided, create and push tag from current commit.'
+        required: false
+        default: 'false'
 
 permissions:
   contents: write # нужно для загрузки файлов в релиз
@@ -19,6 +27,9 @@ jobs:
       # 1️⃣ Клонируем репозиторий
       - name: 🧾 Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: true
 
       # 2️⃣ Устанавливаем Node.js (та же версия, что в dev)
       - name: ⚙️ Setup Node.js
@@ -182,12 +193,39 @@ jobs:
         shell: pwsh
 
       # 8️⃣ Загружаем файлы в GitHub Release
+      - name: 🔎 Prepare release tag
+        shell: pwsh
+        run: |
+          $currentRef = "${{ github.ref }}"
+          $inputTag = "${{ github.event.inputs.tag }}"
+          $createTag = "${{ github.event.inputs.create_tag }}"
+
+          if ($currentRef -like 'refs/tags/*') {
+            Write-Host "Triggered by tag: $currentRef"
+            $releaseTag = $currentRef.Substring(10)
+            Add-Content -Path $env:GITHUB_ENV -Value "RELEASE_TAG=$releaseTag"
+          } elseif ($inputTag) {
+            $releaseTag = $inputTag
+            Write-Host "Using provided tag: $releaseTag"
+            Add-Content -Path $env:GITHUB_ENV -Value "RELEASE_TAG=$releaseTag"
+            if ($createTag -eq 'true') {
+              git config user.name "github-actions[bot]"
+              git config user.email "github-actions[bot]@users.noreply.github.com"
+              git tag -a $releaseTag -m "Release $releaseTag"
+              git push origin $releaseTag
+            }
+          } else {
+            Write-Host "No release tag available; upload to GitHub Release will be skipped."
+            Add-Content -Path $env:GITHUB_ENV -Value "RELEASE_TAG="
+          }
+
       - name: 🚀 Upload to GitHub Release
+        if: env.RELEASE_TAG != ''
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ env.RELEASE_TAG }}
           files: dist-upload/**
         env:
-          # Prefer a dedicated PAT if present, otherwise use the auto-provided GITHUB_TOKEN
           GH_TOKEN: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
 
       - name: Validate GH token (safe)
