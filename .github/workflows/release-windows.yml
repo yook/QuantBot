@@ -30,8 +30,27 @@ jobs:
       - name: 🔖 Set version from Git tag
         run: |
           $tagName = "${{ github.ref_name }}"
-          $version = $tagName.Substring(1) # Удаляем префикс "v"
-          Write-Host "Tag name: $tagName -> target version: $version"
+          Write-Host "Tag name: $tagName"
+
+          # Only attempt to set package.json version when the ref is a tag in form vX.Y.Z
+          # or the ref itself looks like a semver (X.Y.Z). This avoids using branch names
+          # like 'master' which would produce invalid versions (e.g. 'aster').
+          $version = $null
+          if ($tagName -and $tagName.StartsWith('v')) {
+            $candidate = $tagName.Substring(1)
+            if ($candidate -match '^[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.-]+)?$') {
+              $version = $candidate
+            }
+          } elseif ($tagName -match '^[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.-]+)?$') {
+            $version = $tagName
+          }
+
+          if (-not $version) {
+            Write-Host "Ref '$tagName' is not a release tag/semver — skipping version bump"
+            exit 0
+          }
+
+          Write-Host "Target version: $version"
 
           # Читаем текущий package.json и сравниваем версию
           try {
