@@ -87,9 +87,6 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install libvips
-        run: brew install vips
-
       - name: Install dependencies
         run: npm ci --prefer-offline --no-audit --no-fund
 
