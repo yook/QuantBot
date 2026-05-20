@@ -94,7 +94,7 @@ jobs:
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
           GH_TOKEN: ""
-        run: npx electron-builder --mac --publish=never
+        run: npm run build -- --mac --publish never
 
       - name: Resolve artifact metadata
         id: meta
