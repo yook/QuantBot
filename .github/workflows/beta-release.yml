@@ -145,8 +145,12 @@ jobs:
 
       - name: Install AWS CLI
         run: |
-          sudo apt-get update
-          sudo apt-get install -y awscli
+          if command -v aws >/dev/null 2>&1; then
+            aws --version
+            exit 0
+          fi
+          python3 -m pip install --user --upgrade awscli
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
       - name: Configure SSH key for release registration
         env:
