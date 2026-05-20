@@ -39,3 +39,5 @@ dist-electron/
 
 # Local test scripts and temporary test artifacts
 test/
+# Local build baselines
+release-baseline/

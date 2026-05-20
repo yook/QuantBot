@@ -28,7 +28,11 @@
   >
     <div class="table-container">
       <div
+        ref="virtualScrollContainerRef"
         class="virtual-scroll-container"
+        v-loading="props.loading"
+        element-loading-text=""
+        element-loading-background="rgba(255,255,255,0.7)"
         @wheel.prevent="mousewheel"
         @dragover.prevent="handleBodyDragOver"
         @drop.prevent="handleBodyDrop"
@@ -212,7 +216,7 @@
                             formatSimilarity(
                               column.prop === "category_info"
                                 ? row.category_similarity
-                                : row.class_similarity
+                                : row.class_similarity,
                             )
                           }}
                         </el-tag>
@@ -265,28 +269,16 @@
                 </div>
               </td>
             </tr>
-            <tr
-              v-if="
-                ((visiblePage.length === 0 && props.totalCount === 0) ||
-                  !props.data ||
-                  props.data.length === 0) &&
-                !props.loading &&
-                !props.loadingMore
-              "
-              class="no-data-row"
-            >
-              <td
-                :colspan="tableColumnsWithRowNumber.length"
-                class="no-data-cell"
-              >
-                <el-empty
-                  description="Нет данных для отображения"
-                  :image-size="80"
-                />
-              </td>
-            </tr>
           </tbody>
         </table>
+        <div v-if="showEmptyState" class="no-data-overlay">
+          <div class="no-data-empty-wrap">
+            <el-empty
+              description="Нет данных для отображения"
+              :image-size="80"
+            />
+          </div>
+        </div>
         <!-- Скрытая область для имитации общей высоты всех строк -->
         <div
           v-if="props.totalCount > 0"
@@ -316,10 +308,10 @@
 </template>
 
 <script setup>
-import moment from "moment";
 import { ref, computed, onMounted, onUnmounted, watch, nextTick } from "vue";
 import { useProjectStore } from "../stores/project";
 import { Delete, DeleteFilled, Check, Close } from "@element-plus/icons-vue";
+import { formatDateTime, parseDateTime } from "../utils/date-time";
 
 const emit = defineEmits(["delete-row", "delete-all", "columns-reorder"]);
 
@@ -367,7 +359,7 @@ const props = defineProps({
   },
   fixedHeight: {
     type: Number,
-    required: true,
+    default: 0,
   },
   // Vertical offset subtracted from window height when computing available table area
   heightOffset: {
@@ -383,6 +375,10 @@ const props = defineProps({
   dbKey: {
     type: String,
     default: undefined,
+  },
+  revision: {
+    type: Number,
+    default: 0,
   },
 });
 
@@ -412,6 +408,7 @@ const draggingProp = ref(null);
 const dragOverIndex = ref(-1);
 const insertBeforeIndex = ref(-1);
 const tableCardRef = ref(null);
+const virtualScrollContainerRef = ref(null);
 const windowHeight = ref(window.innerHeight);
 
 // Virtual scroll variables
@@ -426,6 +423,7 @@ const lastScrollTime = ref(0); // Для throttling скролла
 const lastLoadTime = ref(0); // Для throttling загрузки данных
 const lastWindowStart = ref(null); // Track the last window start value
 const isPreloading = ref(false); // Флаг асинхронной предзагрузки данных
+let revisionReloadTimer = null;
 
 // Set cursor style for the entire document during resizing
 const documentStyle = computed(() => {
@@ -590,7 +588,7 @@ const visiblePage = computed(() => {
       const availableStart = Math.max(0, startRow - windowStartRow);
       const availableEnd = Math.min(
         dataComp.value.length,
-        endRow - windowStartRow
+        endRow - windowStartRow,
       );
       if (
         availableStart < availableEnd &&
@@ -645,7 +643,7 @@ const handleHeight = computed(() => {
     const proportion = visibleRows / totalRows;
     const calculatedHeight = Math.max(
       20,
-      Math.floor((scroller.value.clientHeight - 10) * proportion)
+      Math.floor((scroller.value.clientHeight - 10) * proportion),
     ); // Минимум 20px
 
     return `${calculatedHeight}px`;
@@ -659,44 +657,62 @@ const handleHeight = computed(() => {
 // floor((window.innerHeight - 400) / rowHeight) * rowHeight — чтобы высота была кратна rowHeight.
 const tableHeight = computed(() => {
   try {
+    const minHeight = 220;
+    const bottomGap = 4;
+
     // 1) Явно заданная высота имеет приоритет
     if (
       props.fixedHeight &&
       typeof props.fixedHeight === "number" &&
       props.fixedHeight > 0
     ) {
-      // Если явно задана fixedHeight, но записей мало (<5), подстраиваем высоту под контент
-      const totalRowsFixed = Number(props.totalCount) || 0;
-      if (totalRowsFixed > 0 && totalRowsFixed < 5) {
-        const headerHeightFallback = rowHeight; // используем высоту строки как оценку шапки
-        const contentH = headerHeightFallback + totalRowsFixed * rowHeight;
-        return contentH + "px";
-      }
       return props.fixedHeight + "px";
     }
 
-    // Базируем высоту на количестве строк: каждая строка 35px + высота заголовка ≈ 35px
-    const totalRows = Number(props.totalCount) || 0;
-    const header = rowHeight; // приблизительная высота заголовка
-    const contentHeight =
-      totalRows > 0
-        ? totalRows * rowHeight + header
-        : Math.max(270, header + rowHeight * 3); // минимальная комфортная высота, если данных нет
-
-    // Если окно доступно — ограничиваем только сверху: если контента мало, роли не играет
     if (typeof window !== "undefined" && windowHeight.value) {
-      const availableRaw = windowHeight.value - props.heightOffset;
-      const available = Math.max(0, availableRaw);
-      // Для пустой таблицы применяем минимальную комфортную высоту (270px)
-      if (totalRows === 0) {
-        const final = Math.min(contentHeight, Math.max(270, available));
-        return final + "px";
+      const container = tableCardRef.value?.$el || tableCardRef.value;
+      const rect = container?.getBoundingClientRect?.();
+
+      if (container?.parentElement?.getBoundingClientRect) {
+        const parent = container.parentElement;
+        const parentRect = parent.getBoundingClientRect();
+        const parentStyles = window.getComputedStyle(parent);
+        const parentPaddingTop =
+          Number.parseFloat(parentStyles.paddingTop || "0") || 0;
+        const parentPaddingBottom =
+          Number.parseFloat(parentStyles.paddingBottom || "0") || 0;
+
+        let previousBlocksHeight = 0;
+        for (const child of Array.from(parent.children)) {
+          if (child === container) break;
+          const childRect = child.getBoundingClientRect();
+          const childStyles = window.getComputedStyle(child);
+          const marginBottom =
+            Number.parseFloat(childStyles.marginBottom || "0") || 0;
+          previousBlocksHeight += childRect.height + marginBottom;
+        }
+
+        const available = Math.max(
+          minHeight,
+          Math.floor(
+            windowHeight.value -
+              parentRect.top -
+              parentPaddingTop -
+              parentPaddingBottom -
+              previousBlocksHeight -
+              bottomGap,
+          ),
+        );
+        return `${available}px`;
       }
-      // Для непустых таблиц используем общую логику: не принудительно увеличиваем контейнер,
-      // но гарантируем минимум для заголовка + 1 строки, чтобы не обрезать интерфейс
-      const minForOneRow = header + rowHeight;
-      const final = Math.min(contentHeight, Math.max(minForOneRow, available));
-      return final + "px";
+
+      const fallbackTop =
+        typeof rect?.top === "number" ? rect.top : props.heightOffset || 250;
+      const available = Math.max(
+        minHeight,
+        Math.floor(windowHeight.value - fallbackTop - bottomGap),
+      );
+      return `${available}px`;
     }
   } catch (e) {
     return "600px";
@@ -742,6 +758,19 @@ const showLoadingMore = computed(() => {
   }
 });
 
+const showEmptyState = computed(() => {
+  try {
+    return (
+      visiblePage.value.length === 0 &&
+      props.totalCount === 0 &&
+      !props.loading &&
+      !props.loadingMore
+    );
+  } catch (error) {
+    return false;
+  }
+});
+
 // Новое вычисляемое свойство для столбцов таблицы с номером строки
 const tableColumnsWithRowNumber = computed(() => {
   // Defensive: ensure props.tableColumns is iterable (array). If not, fall back to empty array.
@@ -776,9 +805,9 @@ function formatCellValue(value, columnProp, row = null) {
         // Use inline-flex wrapper so the tag can be right-aligned inside the cell.
         // Escape the category name to avoid accidental HTML injection.
         return `<span class="category-info-inline"><span class="category-name" title="${escapeHtml(
-          name
+          name,
         )}">${escapeHtml(
-          name
+          name,
         )}</span><span class="similarity-tag">${simFormatted}</span></span>`;
       } catch (e) {
         console.error("Error in category_info formatting:", e);
@@ -787,14 +816,14 @@ function formatCellValue(value, columnProp, row = null) {
     }
 
     if (columnProp === "date" && value) {
-      return moment(value).format("YYYY-MM-DD HH:mm:ss");
+      return formatDateTime(value);
     }
 
     if (columnProp === "created_at" && value) {
       // Обрабатываем как ISO строку или как строку в формате YYYY-MM-DD HH:mm:ss
-      const date = moment(value);
-      if (date.isValid()) {
-        return date.format("YYYY-MM-DD HH:mm:ss");
+      const date = parseDateTime(value);
+      if (date) {
+        return formatDateTime(date);
       }
       return value; // Если не удалось распарсить, возвращаем как есть
     }
@@ -892,7 +921,7 @@ function getSortClass(columnProp) {
       "derivedField=",
       field,
       "direction=",
-      direction
+      direction,
     );
 
     // Учитываем маппинг _id <-> id
@@ -901,8 +930,8 @@ function getSortClass(columnProp) {
       columnProp === "category_info"
         ? "category_similarity"
         : columnProp === "class_info"
-        ? "class_similarity"
-        : columnProp;
+          ? "class_similarity"
+          : columnProp;
     const isCurrentColumn =
       field === mappedColumnProp ||
       (field === "id" && mappedColumnProp === "_id") ||
@@ -979,7 +1008,7 @@ function handleSort(columnProp) {
       "from column=",
       columnProp,
       "props.sort=",
-      props.sort
+      props.sort,
     );
 
     props.sortData(sortObj);
@@ -1077,7 +1106,7 @@ watch(
     if (!newVal) {
       // debug: loadingMore reset to false (removed console.log)
     }
-  }
+  },
 );
 
 // Column resizing functions
@@ -1150,7 +1179,7 @@ function stopResize() {
     // Then save the final width to the project store
     saveColumnWidth(
       currentColumn.value,
-      columnWidths.value[currentColumn.value]
+      columnWidths.value[currentColumn.value],
     );
   }
 
@@ -1265,6 +1294,18 @@ function handleBodyDragOver(event) {
   // If nothing is being dragged, ignore
   if (!draggingProp.value) return;
   try {
+    const container = virtualScrollContainerRef.value;
+    if (container) {
+      const containerRect = container.getBoundingClientRect();
+      const edgeZone = 90;
+      const step = 28;
+      if (event.clientX <= containerRect.left + edgeZone) {
+        container.scrollLeft = Math.max(0, container.scrollLeft - step);
+      } else if (event.clientX >= containerRect.right - edgeZone) {
+        container.scrollLeft = container.scrollLeft + step;
+      }
+    }
+
     const card = tableCardRef.value?.$el || tableCardRef.value;
     if (!card) return;
     const ths = card.querySelectorAll("thead th");
@@ -1285,6 +1326,11 @@ function handleBodyDragOver(event) {
       else if (x < ths[0].left) foundIndex = 0;
     }
     if (foundIndex >= 0) {
+      // When cursor is over fixed area (including URL), gently scroll table left
+      // so user can return to earlier columns during drag.
+      if (container && foundIndex < props.fixedColumns) {
+        container.scrollLeft = Math.max(0, container.scrollLeft - 36);
+      }
       onDragOver(event, foundIndex);
     }
   } catch (e) {
@@ -1422,7 +1468,7 @@ function saveColumnWidth(columnProp, width) {
 
   // Find the column in the default settings or parser columns and update there too
   const defaultColumnIndex = project.defaultColumns.findIndex(
-    (col) => col.prop === columnProp
+    (col) => col.prop === columnProp,
   );
   if (defaultColumnIndex !== -1) {
     project.defaultColumns[defaultColumnIndex].width = finalWidth;
@@ -1430,7 +1476,7 @@ function saveColumnWidth(columnProp, width) {
     // Try to find in the parser columns (only if parser exists and is an array)
     if (Array.isArray(project.data.parser)) {
       const parserColumnIndex = project.data.parser.findIndex(
-        (col) => col.prop === columnProp
+        (col) => col.prop === columnProp,
       );
       if (parserColumnIndex !== -1) {
         project.data.parser[parserColumnIndex].width = finalWidth;
@@ -1499,7 +1545,7 @@ function loadColumnWidthsFromLocalStorage() {
       if (processedWidths["_rowNumber"]) {
         processedWidths["_rowNumber"] = Math.max(
           35,
-          processedWidths["_rowNumber"]
+          processedWidths["_rowNumber"],
         );
       }
 
@@ -1528,7 +1574,7 @@ function loadColumnWidthsFromLocalStorage() {
 const syncHeaderAndBodyColumns = () => {
   const headerCols = document.querySelectorAll(".table-header-container th");
   const bodyCols = document.querySelectorAll(
-    ".table-body-container tr:first-child td"
+    ".table-body-container tr:first-child td",
   );
 
   if (headerCols.length === bodyCols.length) {
@@ -1596,7 +1642,7 @@ onMounted(async () => {
         if (projectWidths["_rowNumber"]) {
           projectWidths["_rowNumber"] = Math.max(
             35,
-            projectWidths["_rowNumber"]
+            projectWidths["_rowNumber"],
           );
         }
         columnWidths.value = { ...projectWidths };
@@ -1687,10 +1733,10 @@ onMounted(async () => {
           }
           if (!headerHeight || headerHeight < 24) headerHeight = rowHeight; // фоллбек
 
-          // Доступная высота под строки = высота окна минус отступы и высота заголовка
+          const tableHeightPx = Number.parseInt(tableHeight.value, 10);
           const available = Math.max(
-            0,
-            windowHeight.value - props.heightOffset - headerHeight
+            rowHeight,
+            (Number.isFinite(tableHeightPx) ? tableHeightPx : 0) - headerHeight,
           );
           const rows = Math.floor(available / rowHeight);
           const effectiveRows = Math.max(1, rows);
@@ -1707,7 +1753,7 @@ onMounted(async () => {
           // Рассчитываем новый максимально допустимый scrollTop и корректируем текущий.
           const newMaxScrollTop = Math.max(
             0,
-            totalTableHeight.value - pageSize.value * rowHeight
+            totalTableHeight.value - pageSize.value * rowHeight,
           );
           if (scrollTop.value > newMaxScrollTop) {
             scrollTop.value = newMaxScrollTop;
@@ -1717,7 +1763,7 @@ onMounted(async () => {
           const newStartFromScroll = Math.floor(scrollTop.value / rowHeight);
           start.value = Math.min(
             start.value,
-            Math.max(0, props.totalCount - pageSize.value)
+            Math.max(0, props.totalCount - pageSize.value),
           );
           // Также убеждаемся, что start синхронизирован с scrollTop
           if (start.value !== newStartFromScroll) {
@@ -1762,7 +1808,7 @@ onMounted(async () => {
         }
         updateHandlePosition();
       },
-      { deep: true }
+      { deep: true },
     );
 
     // Следим за изменениями pageSize и количества данных для обновления позиции ползунка
@@ -1792,7 +1838,7 @@ onMounted(async () => {
       () => start.value,
       (newStart, oldStart) => {
         // Track start changes for debugging
-      }
+      },
     );
 
     // Отслеживаем изменения в scrollTop для синхронизации с start
@@ -1803,7 +1849,7 @@ onMounted(async () => {
         if (newStart !== start.value) {
           start.value = newStart;
         }
-      }
+      },
     );
 
     // Следим за количеством данных и запрашиваем дополнительные, если их меньше 50
@@ -1812,7 +1858,7 @@ onMounted(async () => {
     watch(
       () => visiblePage.value,
       (newPage, oldPage) => {},
-      { deep: true }
+      { deep: true },
     );
 
     // Запускаем синхронизацию сразу после монтирования
@@ -1827,21 +1873,18 @@ onMounted(async () => {
     // Сохраняем ссылку на функцию для удаления в onUnmounted
     window.updateWindowHeight = updateWindowHeight;
 
-    // Обеспечиваем правильный расчет pageSize после монтирования
-    onMounted(() => {
-      try {
-        nextTick(() => {
-          updatePageSize();
+    // Обеспечиваем правильный расчет pageSize и первичную загрузку данных
+    try {
+      nextTick(() => {
+        updatePageSize();
 
-          // Если проект уже выбран, загружаем keywords
-          if (project.currentProjectId) {
-            props.loadData(project.currentProjectId);
-          }
-        });
-      } catch (error) {
-        // Ignore errors
-      }
-    });
+        if (project.currentProjectId && typeof props.loadData === "function") {
+          props.loadData(project.currentProjectId);
+        }
+      });
+    } catch (error) {
+      // Ignore errors
+    }
   } catch (error) {
     // Ignore errors
   }
@@ -1860,6 +1903,10 @@ onUnmounted(() => {
   if (window.updateWindowHeight) {
     window.removeEventListener("resize", window.updateWindowHeight);
   }
+  if (revisionReloadTimer) {
+    clearTimeout(revisionReloadTimer);
+    revisionReloadTimer = null;
+  }
 });
 
 // Следим за изменениями проекта для загрузки keywords
@@ -1869,7 +1916,7 @@ watch(
     if (newProjectId) {
       props.loadData(newProjectId);
     }
-  }
+  },
 );
 
 // Sync internal windowStart with prop from parent store so component
@@ -1888,7 +1935,27 @@ watch(
         nextTick(() => updateHandlePosition());
       }
     } catch (e) {}
-  }
+  },
+);
+
+watch(
+  () => props.revision,
+  (newVal, oldVal) => {
+    if (typeof newVal !== "number" || newVal === oldVal) return;
+    if (revisionReloadTimer) clearTimeout(revisionReloadTimer);
+    revisionReloadTimer = setTimeout(() => {
+      try {
+        const nextStart =
+          typeof props.windowStart === "number"
+            ? Math.max(0, props.windowStart)
+            : Math.max(0, windowStart.value || 0);
+        if (typeof props.loadWindow === "function") {
+          props.loadWindow(nextStart);
+        }
+        nextTick(() => updateHandlePosition());
+      } catch (_) {}
+    }, 120);
+  },
 );
 
 // Add logging for debugging scrollTop, windowStart, and newWindowStart
@@ -1896,11 +1963,21 @@ watch(
   [scrollTop, () => windowStart.value],
   ([newScrollTop, newWindowStart]) => {
     // debug: scrollTop/windowStart change (console.log removed)
-  }
+  },
 );
 
 // Virtual scroll methods
 function mousewheel(e) {
+  try {
+    const container = virtualScrollContainerRef.value;
+    const hasHorizontalIntent = Math.abs(Number(e?.deltaX || 0)) > 0 || !!e?.shiftKey;
+    if (container && hasHorizontalIntent) {
+      const horizontalDelta =
+        Math.abs(Number(e?.deltaX || 0)) > 0 ? Number(e.deltaX) : Number(e.deltaY || 0);
+      container.scrollLeft += horizontalDelta;
+    }
+  } catch (_) {}
+
   if (!needsScrolling.value) return;
 
   // Throttling: ограничиваем частоту вызовов до 16ms (примерно 60fps)
@@ -1918,7 +1995,7 @@ function mousewheel(e) {
   // Ограничиваем scrollTop в допустимых пределах
   const maxScrollTop = Math.max(
     0,
-    totalTableHeight.value - pageSize.value * rowHeight
+    totalTableHeight.value - pageSize.value * rowHeight,
   );
 
   if (scrollTop.value < 0) scrollTop.value = 0;
@@ -1945,6 +2022,10 @@ function mousewheel(e) {
     windowStart.value + Math.floor(windowLength * prefetchThreshold);
   const upThreshold =
     windowStart.value + Math.floor(windowLength * (1 - prefetchThreshold));
+  const windowShift = Math.max(
+    50,
+    Math.floor(windowLength * (1 - prefetchThreshold)),
+  );
 
   // Проверяем, нужно ли подгружать дополнительные данные
   const shouldLoadMore =
@@ -1958,8 +2039,11 @@ function mousewheel(e) {
     !isPreloading.value;
 
   if (shouldLoadMore) {
-    // Подгрузка следующих 300 строк вниз
-    const nextStart = windowStart.value + windowLength;
+    // Сдвигаем окно с overlap, чтобы текущая видимая позиция оставалась внутри окна
+    const nextStart = Math.min(
+      Math.max(0, props.totalCount - windowLength),
+      windowStart.value + windowShift,
+    );
     if (nextStart !== lastWindowStart.value) {
       lastWindowStart.value = nextStart;
       isPreloading.value = true;
@@ -1973,8 +2057,8 @@ function mousewheel(e) {
       }
     }
   } else if (shouldLoadPrevious) {
-    // Подгрузка предыдущих 300 строк вверх
-    const prevStart = Math.max(0, windowStart.value - 300);
+    // Аналогично вверх — не прыгаем целым окном, а сдвигаем его частично
+    const prevStart = Math.max(0, windowStart.value - windowShift);
     if (prevStart !== lastWindowStart.value) {
       lastWindowStart.value = prevStart;
       isPreloading.value = true;
@@ -2042,7 +2126,7 @@ function handleMouseMove(e) {
   // Рассчитываем scrollTop на основе позиции ползунка
   const maxScrollTop = Math.max(
     0,
-    totalTableHeight.value - pageSize.value * rowHeight
+    totalTableHeight.value - pageSize.value * rowHeight,
   );
   const availableHeight = Math.max(1, scrollerHeight - handleHeightPx); // Избегаем деления на 0
 
@@ -2075,7 +2159,7 @@ function updateHandlePosition() {
   const scrollerHeight = scroller.value.clientHeight - 10; // Высота скроллера минус отступы
   const maxScrollTop = Math.max(
     0,
-    totalTableHeight.value - pageSize.value * rowHeight
+    totalTableHeight.value - pageSize.value * rowHeight,
   );
 
   if (maxScrollTop === 0) {
@@ -2092,7 +2176,7 @@ function updateHandlePosition() {
     const handleHeightPx = parseInt(handleHeight.value);
     const availableHeight = scrollerHeight - handleHeightPx;
     htop.value = Math.floor(
-      (availableHeight / maxScrollTop) * scrollTop.value + 0.5
+      (availableHeight / maxScrollTop) * scrollTop.value + 0.5,
     );
   }
 }
@@ -2108,6 +2192,10 @@ function maybeRequestWindowByScroll() {
       windowStart.value + Math.floor(windowLength * prefetchThreshold);
     const upThreshold =
       windowStart.value + Math.floor(windowLength * (1 - prefetchThreshold));
+    const windowShift = Math.max(
+      50,
+      Math.floor(windowLength * (1 - prefetchThreshold)),
+    );
 
     // Проверяем, вышли ли мы за пределы текущего окна (при перетаскивании ползунка)
     const isOutOfWindow =
@@ -2117,7 +2205,7 @@ function maybeRequestWindowByScroll() {
     if (isOutOfWindow && !isPreloading.value && !props.loadingMore) {
       const newWindowStart = Math.max(
         0,
-        Math.min(currentRow - 150, props.totalCount - 300)
+        Math.min(currentRow - 150, props.totalCount - 300),
       );
       if (
         newWindowStart !== lastWindowStart.value &&
@@ -2147,7 +2235,10 @@ function maybeRequestWindowByScroll() {
       !props.loadingMore;
 
     if (shouldLoadMore) {
-      const nextStart = windowStart.value + windowLength;
+      const nextStart = Math.min(
+        Math.max(0, props.totalCount - windowLength),
+        windowStart.value + windowShift,
+      );
       if (
         nextStart !== lastWindowStart.value &&
         typeof props.loadWindow === "function"
@@ -2159,7 +2250,7 @@ function maybeRequestWindowByScroll() {
         });
       }
     } else if (shouldLoadPrevious) {
-      const prevStart = Math.max(0, windowStart.value - 300);
+      const prevStart = Math.max(0, windowStart.value - windowShift);
       if (
         prevStart !== lastWindowStart.value &&
         typeof props.loadWindow === "function"
@@ -2365,7 +2456,9 @@ html.dark .table-container {
     rgba(0, 123, 255, 0.008)
   );
   box-shadow: inset 0 0 0 2px rgba(0, 123, 255, 0.06);
-  transition: background-color 120ms ease, box-shadow 120ms ease;
+  transition:
+    background-color 120ms ease,
+    box-shadow 120ms ease;
 }
 
 .sortable-header[draggable="true"] {
@@ -2393,7 +2486,9 @@ th[draggable="true"]:active .header-content {
   opacity: 0.95;
   z-index: 220;
   border-radius: 2px;
-  transition: opacity 120ms ease, transform 120ms ease;
+  transition:
+    opacity 120ms ease,
+    transform 120ms ease;
 }
 .insert-left {
   left: 0px;
@@ -2707,6 +2802,19 @@ html.dark .custom-table tbody tr:last-child td {
   border-bottom: 1px solid var(--el-border-color-darker) !important;
 }
 
+/* Empty state must not draw the closing row divider */
+.custom-table tbody tr.no-data-row:last-child td,
+.custom-table tbody tr.no-data-row td {
+  border-bottom: none !important;
+  border-top: none !important;
+}
+
+html.dark .custom-table tbody tr.no-data-row:last-child td,
+html.dark .custom-table tbody tr.no-data-row td {
+  border-bottom: none !important;
+  border-top: none !important;
+}
+
 /* Темная тема: убираем правую границу у последнего столбца */
 html.dark .custom-table td:last-child {
   border-right: none !important;
@@ -3011,7 +3119,47 @@ html.dark .custom-table tbody tr:hover .fixed-column {
   background-color: var(--el-bg-color);
 }
 
+.no-data-row td,
+.no-data-row .no-data-cell {
+  border-bottom: none !important;
+}
+
 .no-data-cell .el-empty {
+  margin: 0;
+  align-items: center;
+}
+
+.no-data-cell :deep(.el-empty__image) {
+  margin: 0;
+}
+
+.no-data-cell :deep(.el-empty__description) {
+  text-align: center;
+}
+
+.no-data-overlay {
+  position: sticky;
+  left: 0;
+  width: 100%;
+  min-width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: calc(var(--table-height) - 35px);
+  pointer-events: none;
+  z-index: 6;
+}
+
+.no-data-empty-wrap {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  padding: 40px 20px;
+  box-sizing: border-box;
+}
+
+.no-data-empty-wrap .el-empty {
   margin: 0;
 }
 

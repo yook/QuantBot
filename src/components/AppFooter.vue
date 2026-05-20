@@ -1,13 +1,25 @@
 <template>
-  <el-footer class="app-footer"> </el-footer>
+  <el-footer class="app-footer" :style="footerStyle"> </el-footer>
 </template>
 
 <script setup>
+import { computed } from "vue";
 import { useProjectStore } from "../stores/project";
 import { useI18n } from "vue-i18n";
 
+const props = defineProps({
+  sidebarWidth: {
+    type: Number,
+    default: 220,
+  },
+});
+
 const project = useProjectStore();
 const { t } = useI18n();
+
+const footerStyle = computed(() => ({
+  left: `${props.sidebarWidth}px`,
+}));
 
 function clearCache() {
   try {
@@ -32,33 +44,12 @@ function clearCache() {
   line-height: 20px;
   display: flex;
   align-items: center;
+  justify-content: flex-end;
   position: fixed;
-  left: 0;
   right: 0;
   bottom: 0;
-  z-index: 1200; /* above aside/menu */
-}
-
-/* Стили для progress bar в темной теме */
-html.dark .el-progress {
-  --el-progress-text-color: var(--el-text-color-primary);
-}
-
-html.dark .el-progress-bar__outer {
-  background-color: var(--el-fill-color-darker) !important;
-  border: 1px solid var(--el-border-color) !important;
-}
-
-html.dark .el-progress-bar__inner {
-  background-color: var(--el-color-primary) !important;
-  background-image: none !important;
-}
-
-html.dark .el-progress__text {
-  color: var(--el-text-color-primary) !important;
-}
-
-html.dark .el-footer {
+  z-index: 2000; /* above aside/menu */
+  transition: left 0.28s ease;
   background-color: var(--el-bg-color);
   color: var(--el-text-color-primary);
   border-top: 1px solid var(--el-border-color);
@@ -71,21 +62,12 @@ html.dark .el-footer {
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  color: #606266;
+  color: var(--el-text-color-regular);
   transition: background-color 0.2s;
   font-size: 12px;
 }
 
 .clear-cache-link:hover {
-  background-color: #f0f2f5;
-}
-
-/* Темная тема для поля */
-html.dark .clear-cache-link {
-  color: #d1d5db;
-}
-
-html.dark .clear-cache-link:hover {
-  background-color: #374151;
+  background-color: var(--el-fill-color-light);
 }
 </style>

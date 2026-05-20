@@ -8,7 +8,6 @@ import { i18n } from './i18n'
 // Import Element Plus
 import ElementPlus from 'element-plus'
 import 'element-plus/dist/index.css'
-import { ElMessageBox, ElMessage } from 'element-plus'
 
 const app = createApp(App)
 app.use(pinia);
@@ -21,63 +20,18 @@ app.mount('#app').$nextTick(() => {
       console.log(message)
     })
     // Mirror main-process logs into renderer console
-    window.ipcRenderer.on('app-log', (_event, payload: { level?: string; args?: any[] }) => {
+    const logHandler = (_event: any, payload: { level?: string; args?: any[] } | { level?: string; message?: any[] }) => {
       try {
-        const level = (payload && payload.level) || 'log';
-        const args = (payload && payload.args) || [];
+        const level = (payload && (payload as any).level) || 'log';
+        const args = (payload && ((payload as any).args || (payload as any).message)) || [];
         const fn = (console as any)[level] || console.log;
         fn.apply(console, args);
       } catch (e) {
-        console.log('[app-log]', payload);
+        console.log('[main-log]', payload);
       }
-      // Auto-updater events from main process
-      window.ipcRenderer.on('auto-updater', async (_ev: any, payload: any) => {
-        try {
-          const evt = payload && payload.event;
-          if (!evt) return;
-
-          if (evt === 'update-available') {
-            const info = payload.info || {};
-            const ver = info.version || info.releaseName || '';
-            const notes = info.releaseNotes || info.releaseNotes || '';
-            const message = notes || `Найдена новая версия ${ver}. Запустить скачивание обновления?`;
-            try {
-              await ElMessageBox.confirm(message, 'Доступно обновление', {
-                confirmButtonText: 'Скачать',
-                cancelButtonText: 'Отложить',
-                type: 'info',
-              });
-              // Ask main to download the update
-              window.ipcRenderer.send('auto-updater-download');
-              ElMessage({ type: 'info', message: 'Загрузка обновления началась' });
-            } catch (e) {
-              // User cancelled
-            }
-          } else if (evt === 'update-downloaded') {
-            const info = payload.info || {};
-            const message = `Обновление загружено (${info.version || ''}). Установить и перезапустить сейчас?`;
-            try {
-              await ElMessageBox.confirm(message, 'Готово к установке', {
-                confirmButtonText: 'Установить и перезапустить',
-                cancelButtonText: 'Позже',
-                type: 'warning',
-              });
-              window.ipcRenderer.send('auto-updater-quit-and-install');
-            } catch (e) {
-              // User chose not to install now
-            }
-          } else if (evt === 'error') {
-            const err = payload && payload.error;
-            ElMessage.error(`Ошибка автообновления: ${err || 'unknown'}`);
-          } else if (evt === 'download-progress') {
-            // Optionally show progress toast — for now just log
-            console.log('Download progress', payload.progress);
-          }
-        } catch (err) {
-          console.error('auto-updater handler error', err);
-        }
-      });
-    })
+    };
+    window.ipcRenderer.on('app-log', logHandler);
+    window.ipcRenderer.on('main-process-log', logHandler);
   }
 })
 

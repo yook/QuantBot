@@ -19,7 +19,10 @@ export interface ParserField {
   name: string;
   prop: string;
   selector: string;
+  selectorType?: "css" | "xpath";
+  selectorLabel?: string;
   find: string;
+  findLabel?: string;
   attrClass: string;
   getLength: boolean;
 }
@@ -54,6 +57,7 @@ export interface ReportsFile {
 export interface CrawlerConfig {
   maxDepth: number;
   maxConcurrency: number;
+  maxUrls?: number;
   interval: number;
   timeout: number;
   parseScriptTags: boolean;
@@ -63,6 +67,10 @@ export interface CrawlerConfig {
   respectRobotsTxt: boolean;
   scanSubdomains: boolean;
   userAgent: string;
+  renderEnabled?: boolean;
+  renderMode?: "lightweight" | "chromium" | "hybrid";
+  renderTimeoutMs?: number;
+  renderMaxConcurrency?: number;
 }
 
 export interface NewProjectFile {
@@ -91,6 +99,45 @@ export interface SortOption {
   [key: string]: 1 | -1; // MongoDB-style sort: 1 for ascending, -1 for descending
 }
 
+export interface TableFilterOption {
+  id?: string;
+  field: string;
+  operator:
+    | "contains"
+    | "eq"
+    | "neq"
+    | "startsWith"
+    | "endsWith"
+    | "gt"
+    | "gte"
+    | "lt"
+    | "lte"
+    | "between";
+  value: string | number;
+  secondValue?: string | number;
+  label?: string;
+}
+
+export type ExportFormat = "csv" | "xlsx" | "json";
+export type ExportScope = "filtered" | "current";
+
+export interface ExportColumnOption {
+  prop: string;
+  name?: string;
+}
+
+export interface ExportUrlsRequest {
+  projectId: number | string;
+  projectName?: string;
+  db: string;
+  sort: SortOption;
+  filters: TableFilterOption[];
+  columns: ExportColumnOption[];
+  format: ExportFormat;
+  scope: ExportScope;
+  rows?: Record<string, any>[];
+}
+
 export interface SortedRequestOptions {
   id: number | string;
   sort: SortOption;
@@ -98,6 +145,7 @@ export interface SortedRequestOptions {
   skip: number;
   db: string;
   requestId?: string;
+  filters?: TableFilterOption[];
 }
 
 export interface GetAllDataRequest {
@@ -115,6 +163,7 @@ export interface SortedUrlsResponse {
 // URL data structure based on the default columns
 export interface UrlData {
   _id?: string;
+  source?: "crawler" | "parser" | string;
   url: string;
   referrer?: string;
   depth?: number;
@@ -162,141 +211,3 @@ export interface TableUpdate {
   projectId: number | string;
   tableName: string;
 }
-
-// ===== Domain models for keywords/categories/typing =====
-
-export interface Category {
-  id?: number | string;
-  name: string;
-  [key: string]: any;
-}
-
-export interface Keyword {
-  id?: number | string;
-  keyword: string;
-  is_valid_headline?: number | null;
-  validation_reason?: string | null;
-  [key: string]: any;
-}
-
-export interface Sample {
-  id?: number | string;
-  label: string;
-  text: string;
-  [key: string]: any;
-}
-
-// ===== Socket payloads for categories =====
-
-export interface CategoriesListResponse {
-  projectId: number | string;
-  categories: Category[];
-  totalCount: number;
-  skip: number;
-  hasMore: boolean;
-}
-
-export interface CategoriesProgressPayload {
-  projectId: number | string;
-  progress: number; // 0..100
-  processed: number;
-  total: number;
-}
-
-export interface CategoriesAddedPayload {
-  projectId: number | string;
-  added: number;
-}
-
-export interface SimpleProjectPayload {
-  projectId: number | string;
-  [key: string]: any;
-}
-
-export interface ErrorPayload {
-  message: string;
-  projectId?: number | string;
-  [key: string]: any;
-}
-
-// ===== Socket payloads for keywords =====
-
-export interface KeywordsListResponse {
-  projectId: number | string;
-  keywords: Keyword[];
-  totalCount: number;
-  skip: number;
-  hasMore: boolean;
-  searchQuery?: string;
-  timeoutId?: number;
-  promiseResolve?: () => void;
-}
-
-export type KeywordsLoadedMoreResponse = KeywordsListResponse;
-
-export interface KeywordUpdatedPayload {
-  projectId: number | string;
-  keyword: Keyword;
-}
-
-export interface KeywordsProgressPayload {
-  projectId: number | string;
-  progress: number; // 0..100
-  processed?: number;
-  total?: number;
-}
-
-export interface PercentageProgressPayload {
-  projectId: number | string;
-  percentage?: number; // 0..100
-}
-
-// ===== Socket payloads for typing samples =====
-
-export interface TypingSamplesListResponse {
-  projectId?: number | string;
-  samples: Sample[];
-  total?: number;
-}
-
-// Project stats data structure returned by `get-project-stats`
-export interface ProjectStatsData {
-  totalUrls: number;
-  statusCounts: Record<string, number>;
-  dailyStats: Record<string, number>;
-  lastUpdated: string;
-}
-
-// Keywords export response (full keyword objects for export)
-export interface KeywordsExportResponse {
-  projectId: number | string;
-  keywords: Keyword[];
-}
-
-// ===== Shared options (centralized) =====
-
-export interface LoadCategoriesOptions {
-  skip?: number;
-  limit?: number;
-  sort?: Record<string, number>;
-}
-
-export interface LoadKeywordsOptions {
-  skip?: number;
-  limit?: number;
-  sort?: Record<string, number>;
-  resetSearch?: boolean;
-}
-
-export interface LoadSamplesOptions {
-  skip?: number;
-  limit?: number;
-}
-
-export interface Stopword {
-  id: number;
-  project_id: number;
-  word: string;
-  created_at: string;
-}
-

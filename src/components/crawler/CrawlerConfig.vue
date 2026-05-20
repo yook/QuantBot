@@ -1,5 +1,5 @@
 <template>
-  <div class="m-10">
+  <div class="mx-10">
     <el-row class="py-2 items-center">
       <el-col :span="8">
         {{ t("crawler.config.depth") }}
@@ -11,7 +11,7 @@
           :content="t('crawler.config.depthTooltip')"
         >
           <template #reference>
-            <el-icon><QuestionFilled /></el-icon>
+            <el-icon class="crawler-help-icon"><QuestionFilled /></el-icon>
           </template>
         </el-popover>
       </el-col>
@@ -37,7 +37,7 @@
           :content="t('crawler.config.concurrencyTooltip')"
         >
           <template #reference>
-            <el-icon><QuestionFilled /></el-icon>
+            <el-icon class="crawler-help-icon"><QuestionFilled /></el-icon>
           </template>
         </el-popover>
       </el-col>
@@ -45,10 +45,37 @@
         ><div class="grid-content bg-purple-light" />
         <el-input-number
           v-model="project.data.crawler.maxConcurrency"
-          :min="1"
+          :min="0"
           :max="100"
-          @change="saveData"
-      /></el-col>
+          @change="onConcurrencyChange"
+        />
+      </el-col>
+    </el-row>
+
+    <el-row class="py-2 items-center">
+      <el-col :span="8">
+        {{ t("crawler.config.maxUrls") }}
+        <el-popover
+          placement="top"
+          title=""
+          :width="300"
+          trigger="hover"
+          :content="t('crawler.config.maxUrlsTooltip')"
+        >
+          <template #reference>
+            <el-icon class="crawler-help-icon"><QuestionFilled /></el-icon>
+          </template>
+        </el-popover>
+      </el-col>
+      <el-col :span="8">
+        <div class="grid-content bg-purple-light" />
+        <el-input-number
+          v-model="project.data.crawler.maxUrls"
+          :min="0"
+          :max="1000000"
+          @change="onMaxUrlsChange"
+        />
+      </el-col>
     </el-row>
 
     <el-row class="py-2 items-center">
@@ -62,7 +89,7 @@
           :content="t('crawler.config.intervalTooltip')"
         >
           <template #reference>
-            <el-icon><QuestionFilled /></el-icon>
+            <el-icon class="crawler-help-icon"><QuestionFilled /></el-icon>
           </template>
         </el-popover>
       </el-col>
@@ -70,10 +97,11 @@
         ><div class="grid-content bg-purple-light" />
         <el-input-number
           v-model="project.data.crawler.interval"
-          :min="1000"
+          :min="0"
           :step="100"
-          @change="saveData"
-      /></el-col>
+          @change="onIntervalChange"
+        />
+      </el-col>
     </el-row>
 
     <el-row class="py-2 items-center">
@@ -87,7 +115,7 @@
           :content="t('crawler.config.timeoutTooltip')"
         >
           <template #reference>
-            <el-icon><QuestionFilled /></el-icon>
+            <el-icon class="crawler-help-icon"><QuestionFilled /></el-icon>
           </template>
         </el-popover>
       </el-col>
@@ -200,17 +228,67 @@
         />
       </el-col>
     </el-row>
+
+    <el-row class="py-2 items-center">
+      <el-col :span="8">
+        {{ t("crawler.config.restrictToStartPath") }}
+        <el-popover
+          placement="top"
+          title=""
+          :width="300"
+          trigger="hover"
+          :content="t('crawler.config.restrictToStartPathTooltip')"
+        >
+          <template #reference>
+            <el-icon class="crawler-help-icon"><QuestionFilled /></el-icon>
+          </template>
+        </el-popover>
+      </el-col>
+      <el-col :span="8"
+        ><div class="grid-content bg-purple-light" />
+        <el-switch
+          v-model="project.data.crawler.restrictToStartPath"
+          @change="saveData"
+        />
+      </el-col>
+    </el-row>
+
   </div>
 </template>
 
 <script setup>
-import { ref, watch, onUnmounted } from "vue";
+import { watch, onUnmounted } from "vue";
 import { useProjectStore } from "../../stores/project";
 import { QuestionFilled } from "@element-plus/icons-vue";
 import { useI18n } from "vue-i18n";
+import { ElMessageBox } from "element-plus";
+import { isFreePlan } from "../../config/plan-limits";
+import { FREE_PLAN_LIMITS } from "../../config/plan-limits";
 
 const { t } = useI18n();
 const project = useProjectStore();
+const isFree = isFreePlan();
+const proUrl = (import.meta.env && import.meta.env.VITE_PRO_URL) || "https://example.com/pro";
+
+function showFreeLimitPopup(message) {
+  ElMessageBox({
+    title: "Ограничение Free",
+    message: `
+      <div style="text-align:left;">${message}</div>
+      <div style="margin-top:14px; display:flex; justify-content:center;">
+        <a href="${proUrl}" target="_blank" rel="noopener noreferrer"
+           style="display:inline-flex;align-items:center;justify-content:center;height:32px;padding:0 16px;border-radius:8px;background:var(--el-color-primary);color:#fff;text-decoration:none;font-weight:500;">
+          ${t("crawler.config.freeUpgradeCta")}
+        </a>
+      </div>
+    `,
+    dangerouslyUseHTMLString: true,
+    showConfirmButton: false,
+    showClose: true,
+    closeOnClickModal: true,
+    closeOnPressEscape: true,
+  }).catch(() => {});
+}
 // const crawler = project.data.crawler;
 
 // watch(
@@ -230,8 +308,58 @@ watch(
       project.updateProject();
     }, 300);
   },
-  { deep: true }
+  { deep: true },
 );
+
+function onMaxUrlsChange(value) {
+  if (!project.data?.crawler) return;
+  if (!isFree) return saveData(value);
+  const n = Number(value);
+  if (!Number.isFinite(n) || n === 0) {
+    project.data.crawler.maxUrls = FREE_PLAN_LIMITS.defaultMaxUrls;
+    showFreeLimitPopup(t("crawler.config.freeMaxUrlsZeroWarn"));
+    return saveData(value);
+  }
+  if (n > FREE_PLAN_LIMITS.urlsPerProject) {
+    project.data.crawler.maxUrls = FREE_PLAN_LIMITS.defaultMaxUrls;
+    showFreeLimitPopup(t("crawler.config.freeMaxUrlsHighWarn"));
+    return saveData(value);
+  }
+  if (n < 1) {
+    project.data.crawler.maxUrls = FREE_PLAN_LIMITS.defaultMaxUrls;
+  }
+  return saveData(value);
+}
+
+function onConcurrencyChange(value) {
+  if (!project.data?.crawler) return;
+  if (!isFree) return saveData(value);
+  const n = Number(value);
+  if (!Number.isFinite(n) || n < 1) {
+    project.data.crawler.maxConcurrency = FREE_PLAN_LIMITS.defaultCrawlerConcurrency;
+    showFreeLimitPopup(t("crawler.config.freeConcurrencyLowWarn"));
+    return saveData(value);
+  }
+  if (n > FREE_PLAN_LIMITS.crawlerConcurrency) {
+    project.data.crawler.maxConcurrency = FREE_PLAN_LIMITS.defaultCrawlerConcurrency;
+    showFreeLimitPopup(t("crawler.config.freeConcurrencyHighWarn"));
+    return saveData(value);
+  }
+  return saveData(value);
+}
+
+function onIntervalChange(value) {
+  if (!project.data?.crawler) return;
+  if (!isFree) return saveData(value);
+  const n = Number(value);
+  if (!Number.isFinite(n) || n < FREE_PLAN_LIMITS.minCrawlerIntervalMs) {
+    project.data.crawler.interval = FREE_PLAN_LIMITS.defaultCrawlerIntervalMs;
+    showFreeLimitPopup(t("crawler.config.freeIntervalLowWarn"));
+    return saveData(value);
+  }
+  return saveData(value);
+}
+
 
 // Гарантируем сохранение при закрытии диалога/размонтировании компонента
 onUnmounted(() => {
@@ -252,30 +380,8 @@ const saveData = (currentValue) => {
 };
 </script>
 
-<style>
-/* Стили для switch в темной теме - монохромные тона */
-html.dark .el-switch {
-  --el-switch-on-color: #1f2937 !important;
-  --el-switch-off-color: #6b7280 !important;
-  --el-switch-border-color: #4b5563 !important;
-}
-
-html.dark .el-switch__core {
-  background-color: #6b7280 !important;
-  border-color: #9ca3af !important;
-}
-
-html.dark .el-switch.is-checked .el-switch__core {
-  background-color: #1f2937 !important;
-  border-color: #4b5563 !important;
-}
-
-html.dark .el-switch__action {
-  background-color: #f9fafb !important;
-  border-color: #d1d5db !important;
-}
-
-html.dark .el-switch.is-checked .el-switch__action {
-  background-color: #e5e7eb !important;
+<style scoped>
+.crawler-help-icon {
+  color: #000 !important;
 }
 </style>

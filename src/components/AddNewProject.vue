@@ -1,11 +1,14 @@
 <template>
   <!-- Trigger button lives here now -->
   <el-button
+    v-if="showTrigger"
     type="primary"
+    plain
     class="add-project-btn no-drag"
+    size="small"
     @click="openNewProjectDialog"
   >
-    <el-icon><Plus /></el-icon>
+    <i-tabler-plus class="add-project-icon" />
     {{ t("header.addProjectButton") }}
   </el-button>
 
@@ -21,25 +24,24 @@
     :show-close="allowClose"
     @close="onRequestClose"
   >
-    <div class="flex flex-col items-center">
+    <div>
       <el-form
         label-position="top"
-        label-width="100px"
-        class="form-compact"
+        class="form-dialog"
         ref="ruleFormRef"
         :model="RuleForm"
         :rules="rules"
         status-icon
         @keydown.enter.prevent="submitForm(ruleFormRef)"
       >
-        <el-form-item :label="t('common.name')" prop="name" class="w-500">
+        <el-form-item :label="t('common.name')" prop="name" class="form-field-wide">
           <el-input
             v-model="RuleForm.name"
             :placeholder="t('addProject.namePlaceholder')"
             autofocus
           />
         </el-form-item>
-        <el-form-item :label="t('common.url')" prop="url" class="w-500">
+        <el-form-item :label="t('common.url')" prop="url" class="form-field-wide">
           <el-input
             v-model="RuleForm.url"
             :placeholder="t('addProject.urlPlaceholder')"
@@ -49,7 +51,10 @@
     </div>
 
     <template #footer>
-      <div style="display: flex; justify-content: center; width: 100%">
+      <div class="dialog-footer-row">
+        <el-button @click="showNewProjectDialog = false">
+          {{ t("crawler.cancelButton") }}
+        </el-button>
         <el-button type="primary" @click="submitForm(ruleFormRef)">
           {{ t("common.save") }}
         </el-button>
@@ -62,13 +67,18 @@
 import { reactive, ref, watch, computed } from "vue";
 import { useI18n } from "vue-i18n";
 import { useProjectStore } from "../stores/project";
-import { Plus } from "@element-plus/icons-vue";
 import { ElMessage } from "element-plus";
 // i18n
 const { t } = useI18n();
 
 // Define emits (kept for compatibility; parent may listen)
 const emit = defineEmits(["project-created"]);
+const props = defineProps({
+  showTrigger: {
+    type: Boolean,
+    default: true,
+  },
+});
 
 const project = useProjectStore();
 // remove local t() stub, using official vue-i18n
@@ -130,6 +140,10 @@ function openNewProjectDialog() {
   showNewProjectDialog.value = true;
 }
 
+defineExpose({
+  openNewProjectDialog,
+});
+
 const allowClose = computed(() => {
   try {
     return !!(project.projects && project.projects.length > 0);
@@ -143,7 +157,7 @@ function onRequestClose() {
   if (!allowClose.value) {
     ElMessage.warning(
       t("addProject.createFirstWarning") ||
-        "Создайте проект прежде чем закрывать диалог"
+        "Создайте проект прежде чем закрывать диалог",
     );
     // ensure dialog stays open (v-model will be false if parent tried to close)
     showNewProjectDialog.value = true;
@@ -171,7 +185,7 @@ watch(
       autoOpened.value = true;
     }
   },
-  { immediate: true, deep: false }
+  { immediate: true, deep: false },
 );
 
 // If some external action tries to close the dialog while there are no projects,
@@ -184,10 +198,10 @@ watch(
       showNewProjectDialog.value = true;
       ElMessage.warning(
         t("addProject.createFirstWarning") ||
-          "Создайте проект прежде чем закрывать диалог"
+          "Создайте проект прежде чем закрывать диалог",
       );
     }
-  }
+  },
 );
 
 // if (!validator.isURL(url, { require_protocol: true })) {
@@ -217,16 +231,24 @@ watch(
 }
 
 /* Reduce spacing between inputs and footer button inside this dialog */
-.el-dialog__body {
-  padding-bottom: 6px !important;
+.form-field-wide {
+  width: 100%;
+  max-width: 100%;
 }
 
-/* Compact form spacing for this dialog */
-.form-compact .el-form-item {
-  margin-bottom: 10px;
+.form-dialog .el-form-item {
+  margin-bottom: 14px;
 }
-.form-compact .el-form-item:last-of-type {
-  margin-bottom: 6px;
+
+.form-dialog .el-form-item:last-of-type {
+  margin-bottom: 0;
+}
+
+.dialog-footer-row {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  width: 100%;
 }
 
 /* Spacing between button icon and text */
@@ -236,15 +258,7 @@ watch(
   align-items: center;
 }
 
-/* Dark theme for add project button */
-html.dark .add-project-btn {
-  background-color: var(--el-color-primary) !important;
-  border-color: var(--el-color-primary) !important;
-  color: #ffffff !important;
-}
-
-html.dark .add-project-btn:hover {
-  background-color: var(--el-color-primary-light-3) !important;
-  border-color: var(--el-color-primary-light-3) !important;
+.add-project-icon {
+  margin-right: 8px;
 }
 </style>

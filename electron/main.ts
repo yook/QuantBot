@@ -1,5 +1,6 @@
 import { app, BrowserWindow, shell, dialog, ipcMain } from "electron";
 import path from "path";
+import fs from "fs";
 import { fileURLToPath } from "url";
 import Database from "better-sqlite3";
 
@@ -45,14 +46,52 @@ let win: BrowserWindow | null;
 let db: Database.Database | null = null;
 // Persist resolved database path for worker access
 let resolvedDbPath: string | null = null;
-// Column name for category text (some older DBs use 'category_name')
-// Typing samples schema compatibility (old: label,text | new: url,sample)
-let typingLabelColumn = 'label';
-let typingTextColumn = 'text';
-let typingDateColumn: string | null = 'date';
 
 // Provide current BrowserWindow to IPC/worker modules
 const getWindow = () => win;
+let updateDownloaded = false;
+let updateAvailable = false;
+let updateInfo: any = null;
+let installOnDownload = false;
+let devRelaunchMarkWritten = false;
+
+const getDevRelaunchMarkerPath = () => {
+  try {
+    const userData = app.getPath("userData");
+    return path.join(userData, "dev-update-relaunch.json");
+  } catch {
+    return null;
+  }
+};
+
+const getDevRelaunchKey = () => {
+  const feed = process.env.UPDATE_FEED_URL || "";
+  return `${app.getVersion()}|${feed}`;
+};
+
+const hasDevRelaunchMarker = () => {
+  try {
+    const markerPath = getDevRelaunchMarkerPath();
+    if (!markerPath || !fs.existsSync(markerPath)) return false;
+    const raw = fs.readFileSync(markerPath, "utf-8");
+    const data = JSON.parse(raw);
+    return data && data.key === getDevRelaunchKey();
+  } catch {
+    return false;
+  }
+};
+
+const writeDevRelaunchMarker = () => {
+  try {
+    const markerPath = getDevRelaunchMarkerPath();
+    if (!markerPath) return;
+    const payload = { key: getDevRelaunchKey(), at: new Date().toISOString() };
+    fs.writeFileSync(markerPath, JSON.stringify(payload));
+    devRelaunchMarkWritten = true;
+  } catch {
+    // ignore
+  }
+};
 
 // ===== Database Initialization =====
 function initializeDatabase() {
@@ -61,10 +100,6 @@ function initializeDatabase() {
     const res = createDatabase({ isDev });
     db = res.db;
     resolvedDbPath = res.dbPath;
-    typingLabelColumn = res.typingLabelColumn ?? typingLabelColumn;
-    typingTextColumn = res.typingTextColumn ?? typingTextColumn;
-    // typingDateColumn can be `null` to indicate the DB has no date column — accept null explicitly
-    typingDateColumn = res.typingDateColumn;
     console.log('[Main] Database initialized via electron/db/init.ts:', resolvedDbPath);
   } catch (err: any) {
     console.error('[Main] Failed to initialize database via createDatabase():', err && err.message ? err.message : err);
@@ -82,20 +117,49 @@ const originalConsole = {
 };
 
 const logBuffer: Array<{ level: LogLevel; args: any[] }> = [];
+let rendererLogReady = false;
+let isForwardingMainLog = false;
 
 function sendLogToRenderer(level: LogLevel, args: any[]) {
-  if (win && !win.isDestroyed()) {
+  const canSend = (() => {
+    if (!win || win.isDestroyed()) return false;
+    const wc = win.webContents;
+    if (!wc || wc.isDestroyed() || wc.isCrashed()) return false;
+    if (!rendererLogReady) return false;
     try {
-      win.webContents.send('main-process-log', {
-        level,
-        message: args.map((a) => {
-          try { return typeof a === 'string' ? a : JSON.stringify(a); } catch { return String(a); }
-        }),
-      });
-    } catch (_) {}
-  } else {
+      const frame = wc.mainFrame;
+      if (!frame) return false;
+      if (typeof (frame as any).isDestroyed === 'function' && (frame as any).isDestroyed()) {
+        return false;
+      }
+    } catch (_e) {
+      return false;
+    }
+    return true;
+  })();
+
+  if (!canSend) {
     logBuffer.push({ level, args });
     if (logBuffer.length > 1000) logBuffer.shift();
+    return;
+  }
+
+  if (isForwardingMainLog) {
+    return;
+  }
+
+  try {
+    isForwardingMainLog = true;
+    win!.webContents.send('main-process-log', {
+      level,
+      message: args.map((a) => {
+        try { return typeof a === 'string' ? a : JSON.stringify(a); } catch { return String(a); }
+      }),
+    });
+  } catch (_e) {
+    // Swallow transport errors here to avoid console.error recursion.
+  } finally {
+    isForwardingMainLog = false;
   }
 }
 
@@ -133,7 +197,7 @@ function createWindow() {
 
   // create main window
   win = new BrowserWindow({
-    icon: path.join(process.env.VITE_PUBLIC, "quant.png"),
+    icon: path.join(process.env.VITE_PUBLIC, "pageviewer.png"),
     width: 1400,
     height: 700,
     show: false, // Start hidden, will show after loading
@@ -162,6 +226,7 @@ function createWindow() {
 
   // Test active push message to Renderer-process.
   win.webContents.on("did-finish-load", () => {
+  rendererLogReady = true;
   win?.webContents.send("main-process-message", (new Date()).toLocaleString());
   if (!win?.isVisible()) win?.show();
   // Flush buffered main-process logs to renderer console
@@ -172,6 +237,13 @@ function createWindow() {
       }
     }
   } catch (_e) {}
+  });
+
+  win.webContents.on("render-process-gone", () => {
+    rendererLogReady = false;
+  });
+  win.on("closed", () => {
+    rendererLogReady = false;
   });
 
   if (VITE_DEV_SERVER_URL) {
@@ -236,9 +308,6 @@ app.whenReady().then(() => {
       db,
       getWindow,
       resolvedDbPath,
-      typingLabelColumn,
-      typingTextColumn,
-      typingDateColumn,
     });
     console.log('[Main] IPC handlers registered');
   } catch (error: any) {
@@ -260,8 +329,23 @@ app.whenReady().then(() => {
   }
 
   // Проверка обновлений и уведомление пользователя (только для production releases)
-  if (process.env.NODE_ENV === 'production' && !process.env.VITE_DEV_SERVER_URL) {
+  const forceUpdater =
+    process.env.VITE_FORCE_UPDATER === '1' || process.env.FORCE_UPDATER === '1';
+  const updateFeedUrl = process.env.UPDATE_FEED_URL;
+  if (updateFeedUrl) {
+    try {
+      autoUpdater.setFeedURL({ provider: 'generic', url: updateFeedUrl });
+      console.log('[Main] autoUpdater feed URL set to:', updateFeedUrl);
+    } catch (e) {
+      console.error('[Main] Failed to set autoUpdater feed URL:', errMsg(e));
+    }
+  }
+  if ((app.isPackaged && !process.env.VITE_DEV_SERVER_URL) || forceUpdater) {
     console.log('[Main] Checking for updates...');
+    if (forceUpdater) {
+      try { (autoUpdater as any).forceDevUpdateConfig = true; } catch (_) {}
+    }
+    try { autoUpdater.autoDownload = false; } catch (_) {}
 
     // Подробное логирование событий автообновления для отладки
     try {
@@ -272,11 +356,15 @@ app.whenReady().then(() => {
 
         autoUpdater.on('update-available', (info) => {
           console.log('[AutoUpdater] update-available', info);
+          updateAvailable = true;
+          updateInfo = info;
           try { win?.webContents.send('auto-updater', { event: 'update-available', info }); } catch (e) {}
         });
 
         autoUpdater.on('update-not-available', (info) => {
           console.log('[AutoUpdater] update-not-available', info);
+          updateAvailable = false;
+          updateInfo = null;
           try { win?.webContents.send('auto-updater', { event: 'update-not-available', info }); } catch (e) {}
         });
 
@@ -293,13 +381,49 @@ app.whenReady().then(() => {
 
         autoUpdater.on('update-downloaded', (info) => {
           console.log('[AutoUpdater] update-downloaded', info);
+          updateDownloaded = true;
+          updateInfo = info;
           try { win?.webContents.send('auto-updater', { event: 'update-downloaded', info }); } catch (e) {}
+          if (installOnDownload) {
+            console.log('[AutoUpdater] installOnDownload=true, calling quitAndInstall');
+            installOnDownload = false;
+            try {
+              autoUpdater.quitAndInstall(false, true);
+            } catch (e) {
+              console.error('[AutoUpdater] quitAndInstall failed:', errMsg(e));
+            }
+          }
+          if (!app.isPackaged) {
+            const devRelaunchEnabled = process.env.DEV_RELAUNCH === '1';
+            if (devRelaunchEnabled) {
+              console.log('[AutoUpdater] Dev mode: DEV_RELAUNCH=1 set, skipping auto relaunch (button-driven)');
+              return;
+            }
+            if (VITE_DEV_SERVER_URL) {
+              console.log('[AutoUpdater] Dev mode: VITE_DEV_SERVER_URL detected, skipping auto relaunch to avoid blank window');
+              return;
+            }
+            if (hasDevRelaunchMarker()) {
+              console.log('[AutoUpdater] Dev mode: relaunch already done for this version/feed, skipping');
+              return;
+            }
+            if (!devRelaunchMarkWritten) {
+              writeDevRelaunchMarker();
+            }
+            console.log('[AutoUpdater] Dev mode: relaunching app without applying update');
+            try {
+              app.relaunch();
+              app.exit(0);
+            } catch (e) {
+              console.error('[AutoUpdater] Dev relaunch failed:', errMsg(e));
+            }
+          }
         });
     } catch (e) {
         console.error('[Main] Failed to attach autoUpdater listeners:', errMsg(e));
     }
 
-    autoUpdater.checkForUpdatesAndNotify().catch(err => {
+    autoUpdater.checkForUpdates().catch(err => {
         console.error('[Main] Auto-update check failed:', errMsg(err));
     });
   } else {
@@ -316,7 +440,7 @@ try {
   // Open release page in external browser
   ipcMain.on('auto-updater-open-release', (_event: Electron.IpcMainEvent, url?: string) => {
     try {
-      const target = url || 'https://github.com/yook/QuantBot/releases/latest';
+      const target = url || 'https://github.com/yook/PageViewer/releases/latest';
       console.log('[Main] Opening release URL:', target);
       shell.openExternal(target);
     } catch (err) {
@@ -327,11 +451,51 @@ try {
   // Quit and install (called after update downloaded and user confirmed)
   ipcMain.on('auto-updater-quit-and-install', () => {
     try {
-      console.log('[Main] Received request to quit and install update');
-      // This will quit the app and install the update
-      autoUpdater.quitAndInstall();
+      console.log('[Main] Received request to quit and install update', {
+        isPackaged: app.isPackaged,
+        updateDownloaded,
+      });
+      if (!app.isPackaged) {
+        const devRelaunchEnabled = process.env.DEV_RELAUNCH === '1';
+        if (VITE_DEV_SERVER_URL && !devRelaunchEnabled) {
+          console.log('[Main] Dev mode: VITE_DEV_SERVER_URL detected, skipping relaunch to avoid blank window');
+          try { win?.webContents.send('auto-updater', { event: 'dev-relaunch-skipped' }); } catch (_) {}
+          return;
+        }
+        console.log('[Main] Dev mode: quit-and-install requested, relaunching without applying update');
+        setTimeout(() => {
+          try {
+            const relaunchEnv = { ...process.env };
+            if (VITE_DEV_SERVER_URL) {
+              relaunchEnv.VITE_DEV_SERVER_URL = VITE_DEV_SERVER_URL;
+            }
+            (app as any).relaunch({
+              args: process.argv.slice(1),
+              env: relaunchEnv,
+            });
+            app.exit(0);
+          } catch (e) {
+            console.error('[Main] Dev relaunch failed:', errMsg(e));
+          }
+        }, 1200);
+        return;
+      }
+      if (updateDownloaded) {
+        // This will quit the app and install the update
+        autoUpdater.quitAndInstall(false, true);
+      } else {
+        console.warn('[Main] quitAndInstall requested but update is not downloaded; downloading now');
+        installOnDownload = true;
+        try { autoUpdater.downloadUpdate(); } catch (e) {
+          console.error('[Main] downloadUpdate failed:', errMsg(e));
+        }
+      }
     } catch (err) {
       console.error('[Main] quitAndInstall failed:', (err as any)?.message || err);
+      try {
+        app.relaunch();
+        app.exit(0);
+      } catch (_) {}
     }
   });
 
@@ -346,6 +510,22 @@ try {
       console.error('[Main] downloadUpdate failed:', (err as any)?.message || err);
       try { win?.webContents.send('auto-updater', { event: 'error', error: (err as any)?.message || String(err) }); } catch (_) {}
     }
+  });
+
+  // Trigger update check explicitly
+  ipcMain.on('auto-updater-check', async () => {
+    try {
+      console.log('[Main] Received request to check for updates');
+      await autoUpdater.checkForUpdates();
+    } catch (err) {
+      console.error('[Main] checkForUpdates failed:', (err as any)?.message || err);
+      try { win?.webContents.send('auto-updater', { event: 'error', error: (err as any)?.message || String(err) }); } catch (_) {}
+    }
+  });
+
+  // Query current updater state (e.g., after UI mount)
+  ipcMain.handle('auto-updater-status', async () => {
+    return { available: updateAvailable, downloaded: updateDownloaded, info: updateInfo };
   });
 } catch (err) {
   console.error('[Main] Failed to register auto-updater IPC handlers:', (err as any)?.message || err);
