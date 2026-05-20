@@ -1,6 +1,13 @@
-// Pure IPC client for QuantBot
+// Pure IPC client for PageViewer
 // Direct communication with Electron main process via ipcRenderer
-import type { ProjectData, SortedRequestOptions, GetAllDataRequest, SortedUrlsResponse } from "../types/schema";
+import type {
+  ProjectData,
+  SortedRequestOptions,
+  GetAllDataRequest,
+  SortedUrlsResponse,
+  TableFilterOption,
+  ExportUrlsRequest,
+} from "../types/schema";
 
 // Type-safe IPC client wrapper class
 class IPCClient {
@@ -33,7 +40,7 @@ class IPCClient {
 
   async insertProject(name: string, url: string) {
     const result = await this.ipc.invoke('db:projects:insert', name, url);
-    return result.success ? result.data : null;
+    return result;
   }
 
   async updateProject(name: string, url: string, id: number) {
@@ -43,208 +50,6 @@ class IPCClient {
 
   async deleteProject(id: number) {
     const result = await this.ipc.invoke('db:projects:delete', id);
-    return result.success ? result.data : null;
-  }
-
-  async getKeywordsAll(projectId: number) {
-    const result = await this.ipc.invoke('db:keywords:getAll', projectId);
-    return result.success ? result.data : [];
-  }
-
-  async getKeywordsWindow(projectId: number, skip: number, limit: number, sort: Record<string, number> = {}, searchQuery: string = '') {
-    // Serialize sort to plain object to avoid IPC cloning errors
-    const plainSort = JSON.parse(JSON.stringify(sort));
-    const result = await this.ipc.invoke('db:keywords:getWindow', projectId, skip, limit, plainSort, searchQuery);
-    return result.success ? result.data : null;
-  }
-
-  async insertKeyword(keyword: string, projectId: number, categoryId: number | null, color: string | null, disabled: number) {
-    const result = await this.ipc.invoke('db:keywords:insert', keyword, projectId, categoryId, color, disabled);
-    return result.success ? result.data : null;
-  }
-
-  async updateKeyword(keyword: string, categoryId: number | null, color: string | null, disabled: number, id: number) {
-    const result = await this.ipc.invoke('db:keywords:update', keyword, categoryId, color, disabled, id);
-    return result.success ? result.data : null;
-  }
-
-  async deleteKeyword(id: number) {
-    const result = await this.ipc.invoke('db:keywords:delete', id);
-    return result.success ? result.data : null;
-  }
-
-  async deleteKeywordsByProject(projectId: number) {
-    const result = await this.ipc.invoke('db:keywords:deleteByProject', projectId);
-    return result.success ? result.data : null;
-  }
-
-  async insertKeywordsBulk(keywords: string[], projectId: number) {
-    console.log('[IPC Client] insertKeywordsBulk called:', { 
-      keywordsCount: keywords.length, 
-      projectId,
-      firstKeyword: keywords[0],
-      lastKeyword: keywords[keywords.length - 1]
-    });
-    
-    try {
-      const result = await this.ipc.invoke('db:keywords:insertBulk', keywords, projectId);
-      console.log('[IPC Client] insertKeywordsBulk result:', result);
-      return result.success ? result.data : null;
-    } catch (err) {
-      console.error('[IPC Client] insertKeywordsBulk error:', err);
-      throw err;
-    }
-  }
-
-  async getCategoriesAll(projectId: number) {
-    const result = await this.ipc.invoke('db:categories:getAll', projectId);
-    return result.success ? result.data : [];
-  }
-
-  async getCategoriesWindow(projectId: number, skip: number, limit: number, sort: Record<string, number> = {}, searchQuery: string = '') {
-    // Serialize sort to plain object to avoid IPC cloning errors
-    const plainSort = JSON.parse(JSON.stringify(sort));
-    const result = await this.ipc.invoke('db:categories:getWindow', projectId, skip, limit, plainSort, searchQuery);
-    return result.success ? { data: result.data, total: result.total } : null;
-  }
-
-  async insertCategory(name: string, projectId: number) {
-    const result = await this.ipc.invoke('db:categories:insert', name, projectId);
-    return result.success ? result.data : null;
-  }
-
-  async insertCategoriesBulk(categories: string[], projectId: number) {
-    const result = await this.ipc.invoke('db:categories:insertBulk', categories, projectId);
-    return result.success ? result.data : null;
-  }
-
-  async deleteCategoriesByProject(projectId: number) {
-    const result = await this.ipc.invoke('db:categories:deleteByProject', projectId);
-    return result.success ? result.data : null;
-  }
-
-  async deleteCategory(id: number) {
-    const result = await this.ipc.invoke('db:categories:delete', id);
-    return result.success ? result.data : null;
-  }
-
-  async getTypingAll(projectId: number) {
-    const result = await this.ipc.invoke('db:typing:getAll', projectId);
-    return result.success ? result.data : [];
-  }
-
-  async insertTyping(projectId: number, url: string, sample: string, date: string) {
-    const result = await this.ipc.invoke('db:typing:insert', projectId, url, sample, date);
-    return result.success ? result.data : null;
-  }
-
-  async updateTyping(url: string, sample: string, date: string, id: number) {
-    const result = await this.ipc.invoke('db:typing:update', url, sample, date, id);
-    return result.success ? result.data : null;
-  }
-
-  async deleteTyping(id: number) {
-    const result = await this.ipc.invoke('db:typing:delete', id);
-    return result.success ? result.data : null;
-  }
-
-  async deleteTypingByProject(projectId: number) {
-    const result = await this.ipc.invoke('db:typing:deleteByProject', projectId);
-    return result.success ? result.data : null;
-  }
-
-  async deleteTypingByLabel(projectId: number, label: string) {
-    const result = await this.ipc.invoke('db:typing:deleteByLabel', projectId, label);
-    return result.success ? result.data : null;
-  }
-
-  async getStopwordsAll(projectId: number) {
-    const result = await this.ipc.invoke('db:stopwords:getAll', projectId);
-    return result.success ? result.data : [];
-  }
-
-  async getStopwordsWindow(projectId: number, skip: number, limit: number, sort: Record<string, number> = {}, searchQuery: string = '') {
-    // Serialize sort to plain object to avoid IPC cloning errors
-    const plainSort = JSON.parse(JSON.stringify(sort));
-    const result = await this.ipc.invoke('db:stopwords:getWindow', projectId, skip, limit, plainSort, searchQuery);
-    return result.success ? { data: result.data, total: result.total } : null;
-  }
-
-  async insertStopword(projectId: number, word: string) {
-    console.log('[IPC Client] insertStopword called with projectId:', projectId, 'word:', word);
-    const result = await this.ipc.invoke('db:stopwords:insert', projectId, word);
-    console.log('[IPC Client] insertStopword result:', result);
-    if (!result.success) {
-      console.error('[IPC Client] insertStopword failed:', result.error);
-      throw new Error(result.error || 'Failed to insert stopword');
-    }
-    return result.data;
-  }
-
-  // Start stopwords import via worker (bulk) and stream progress events via 'stopwords:progress'
-  async importStopwords(projectId: number, words: string[], applyToKeywords = true) {
-    try {
-      const result = await this.ipc.invoke('stopwords:import', { projectId, dbPath: null, words, applyToKeywords });
-      return result;
-    } catch (err) {
-      console.error('[IPC Client] importStopwords error:', err);
-      throw err;
-    }
-  }
-
-  async deleteStopword(id: number) {
-    const result = await this.ipc.invoke('db:stopwords:delete', id);
-    return result.success ? result.data : null;
-  }
-
-  async deleteStopwordsByProject(projectId: number) {
-    const result = await this.ipc.invoke('db:stopwords:deleteByProject', projectId);
-    return result.success ? result.data : null;
-  }
-
-  // Process runners: categorization, typing, clustering
-  async startCategorization(projectId: number) {
-    const result = await this.ipc.invoke('keywords:start-categorization', projectId);
-    return result.success ? result.data : null;
-  }
-
-  async startTyping(projectId: number) {
-    const result = await this.ipc.invoke('keywords:start-typing', projectId);
-    return result.success ? result.data : null;
-  }
-
-  async startApplyStopwords(projectId: number) {
-    try {
-      const result = await this.ipc.invoke('stopwords:apply', { projectId, dbPath: null });
-      return result && result.ok ? result : null;
-    } catch (err) {
-      console.error('[IPC Client] startApplyStopwords error:', err);
-      throw err;
-    }
-  }
-
-  async startClustering(projectId: number, algorithm: string, eps: number, minPts?: number) {
-    const result = await this.ipc.invoke('keywords:start-clustering', projectId, algorithm, eps, minPts);
-    return result.success ? result.data : null;
-  }
-
-  async startMorphology(projectId: number) {
-    const result = await this.ipc.invoke('keywords:startMorphology', projectId);
-    return result.success ? result.data : null;
-  }
-
-  async stopMorphology(projectId: number) {
-    const result = await this.ipc.invoke('keywords:stopMorphology', projectId);
-    return result.success ? result.data : null;
-  }
-
-  async startMorphologyCheck(projectId: number) {
-    const result = await this.ipc.invoke('keywords:startMorphologyCheck', projectId);
-    return result.success ? result.data : null;
-  }
-
-  async stopMorphologyCheck(projectId: number) {
-    const result = await this.ipc.invoke('keywords:stopMorphologyCheck', projectId);
     return result.success ? result.data : null;
   }
 
@@ -276,6 +81,11 @@ class IPCClient {
     return result.success ? result.data : [];
   }
 
+  async getUrlsCurrent(projectId: number, skip = 0, limit = 200) {
+    const result = await this.ipc.invoke('db:urls:current:get', projectId, skip, limit);
+    return result.success ? result.data : [];
+  }
+
   async getUrlsSorted(options: SortedRequestOptions) {
     // Serialize options to plain object to avoid IPC cloning errors
     const plainOptions = JSON.parse(JSON.stringify(options));
@@ -302,9 +112,39 @@ class IPCClient {
     return result.success ? result.data : [];
   }
 
-  async getUrlsCount(projectId: number) {
-    const result = await this.ipc.invoke('db:urls:count', projectId);
+  async exportUrls(options: ExportUrlsRequest) {
+    const plainOptions = JSON.parse(JSON.stringify(options));
+    const result = await this.ipc.invoke('db:urls:export', plainOptions);
+    if (!result || !result.success) {
+      throw new Error(result?.error || 'Export failed');
+    }
+    return result.data;
+  }
+
+  async getUrlHistory(projectId: number, url: string, paramKey: string, limit = 200) {
+    const result = await this.ipc.invoke('db:url-history:get', projectId, url, paramKey, limit);
+    return result.success ? result.data : [];
+  }
+
+  async getUrlsCount(projectId: number, dbTable = 'urls', filters: TableFilterOption[] = []) {
+    const plainFilters = JSON.parse(JSON.stringify(Array.isArray(filters) ? filters : []));
+    const result = await this.ipc.invoke('db:urls:count', projectId, dbTable, plainFilters);
     return result.success ? result.data?.count || 0 : 0;
+  }
+
+  async getCrawlerStats(projectId: number) {
+    const result = await this.ipc.invoke('db:stats:crawler:get', projectId);
+    return result.success ? result.data : null;
+  }
+
+  async deleteFilteredUrls(projectId: number, dbTable = 'urls', filters: TableFilterOption[] = []) {
+    const result = await this.ipc.invoke('db:urls:deleteFiltered', projectId, dbTable, filters);
+    return result.success ? result.data : null;
+  }
+
+  async bulkInsertUrls(projectId: number, urls: string[]) {
+    const result = await this.ipc.invoke('db:urls:bulkInsert', projectId, urls);
+    return result;
   }
 
   once(channel: string, cb: (...args: any[]) => void) {
@@ -354,9 +194,6 @@ export const emitGetAllData = (_req: GetAllDataRequest) => {
 export const emitSyncProjectStats = (_projectId: number) => {
   console.warn('[IPC] emitSyncProjectStats not implemented yet');
 };
-export const emitClearEmbeddingsCache = () => {
-  console.warn('[IPC] emitClearEmbeddingsCache not implemented yet');
-};
 
 // Dynamic event helper for backward compatibility
 export const onSortedUrlsData = (
@@ -404,43 +241,8 @@ export const socket: IpcSocket = {
   },
   emit(_eventName: string, ..._args: any[]) {
     const eventName = _eventName;
-    const arg0 = _args[0] || {};
     try {
       switch (eventName) {
-        case 'integrations:get':
-          return ipcClient['ipc']?.invoke('integrations:get', arg0.projectId ?? null, arg0.service);
-        case 'integrations:setKey':
-          return ipcClient['ipc']?.invoke('integrations:setKey', arg0.projectId ?? null, arg0.service, arg0.key);
-        // Proxy-related events removed
-        case 'integrations:delete':
-          return ipcClient['ipc']?.invoke('integrations:delete', arg0.projectId ?? null, arg0.service);
-        
-        case 'get-embeddings-cache-size':
-          try {
-            ipcClient['ipc']?.invoke('embeddings:getCacheSize').then((res: any) => {
-              const payload = res && res.success ? (res.data || { size: 0 }) : { size: 0 };
-              // Trigger local renderer listeners via ipcRenderer.emit
-              ipcClient['ipc']?.emit('embeddings-cache-size', null, payload);
-            }).catch((e: any) => {
-              console.error('[IPC Socket] embeddings:getCacheSize invoke error:', e?.message || e);
-              ipcClient['ipc']?.emit('embeddings-cache-size', null, { size: 0 });
-            });
-          } catch (e: any) {
-            console.error('[IPC Socket] embeddings:getCacheSize error:', e?.message || e);
-            ipcClient['ipc']?.emit('embeddings-cache-size', null, { size: 0 });
-          }
-          break;
-        case 'clear-embeddings-cache':
-          try {
-            // Ask main process to clear the embeddings cache. The main process will
-            // notify renderer with 'embeddings-cache-cleared' and 'embeddings-cache-size'.
-            ipcClient['ipc']?.invoke('embeddings:clearCache').catch((e: any) => {
-              console.error('[IPC Socket] embeddings:clearCache invoke error:', e?.message || e);
-            });
-          } catch (e: any) {
-            console.error('[IPC Socket] embeddings:clearCache error:', e?.message || e);
-          }
-          break;
         default:
           console.warn('[IPC Socket] emit deprecated / unsupported event:', eventName);
       }

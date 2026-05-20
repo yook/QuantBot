@@ -28,12 +28,12 @@ function getDatabasePath(isDev = false) {
   }
 
   // In production, use user's home directory
-  const userDataPath = path.join(os.homedir(), ".quantbot");
+  const userDataPath = path.join(os.homedir(), ".pageviewer");
   return path.join(userDataPath, "projects.db");
 }
 
 /**
- * Get the database directory path (for QUANTBOT_DB_DIR env var)
+ * Get the database directory path (for PAGEVIEWER_DB_DIR env var)
  */
 function getDatabaseDir(isDev = false) {
   return path.dirname(getDatabasePath(isDev));

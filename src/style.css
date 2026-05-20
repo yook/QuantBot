@@ -81,67 +81,6 @@ html:not(.dark) #app {
 	color: #4a5568;
 }
 
-/* Dark theme globals */
-html.dark,
-html.dark body,
-html.dark #app {
-	background-color: var(--el-bg-color-page, #0f1115) !important;
-	color: var(--el-text-color-primary, #e5e7eb) !important;
-}
-
-/* Force dark background to the requested color */
-html.dark {
-	--el-bg-color-page: #262c36;
-	--el-bg-color: #262c36;
-	/* Замена цвета зебры (fill) */
-	--el-fill-color: #232833;
-}
-
-/* App layout surfaces in dark */
-html.dark .app-aside {
-	border-right: 1px solid var(--el-border-color, #2b2f36) !important;
-	background-color: var(--el-bg-color) !important;
-}
-
-html.dark .app-content {
-	background-color: var(--el-bg-color) !important;
-}
-
-/* Nice dark scrollbars */
-html.dark ::-webkit-scrollbar {
-	width: 10px;
-	height: 10px;
-}
-html.dark ::-webkit-scrollbar-track {
-	background: var(--el-fill-color-darker);
-}
-html.dark ::-webkit-scrollbar-thumb {
-	background: var(--el-fill-color);
-	border: 1px solid var(--el-border-color);
-	border-radius: 6px;
-}
-html.dark ::-webkit-scrollbar-thumb:hover {
-	background: var(--el-color-primary-light-5);
-}
-
-/* Стили для кнопок без type в темной теме */
-html.dark .el-button:not(.el-button--primary):not(.el-button--success):not(.el-button--info):not(.el-button--warning):not(.el-button--danger):not(.el-button--text) {
-	background-color: var(--el-bg-color) !important;
-	border-color: var(--el-border-color) !important;
-	color: var(--el-text-color-primary) !important;
-}
-
-html.dark .el-button:not(.el-button--primary):not(.el-button--success):not(.el-button--info):not(.el-button--warning):not(.el-button--danger):not(.el-button--text):hover {
-	background-color: var(--el-fill-color) !important;
-	border-color: var(--el-border-color-light) !important;
-	color: var(--el-text-color-primary) !important;
-}
-
-/* Стили для input в темной теме */
-html.dark .el-input--large .el-input__wrapper {
-	padding: 1px 15px !important;
-}
-
 /* Ensure common form controls inherit the global font */
 input,
 button,
@@ -273,6 +212,11 @@ textarea,
 /* Tailwind-like margin utility */
 .m-10 {
 	margin: 2.5rem !important; /* 40px */
+}
+
+.mx-10 {
+	margin-left: 2.5rem !important; /* 40px */
+	margin-right: 2.5rem !important; /* 40px */
 }
 
 .mt-1 {
@@ -641,4 +585,3 @@ textarea,
 .overflow-auto {
 	overflow: auto !important;
 }
-

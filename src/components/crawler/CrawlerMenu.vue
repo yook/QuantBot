@@ -22,20 +22,20 @@
     <div>
       <el-button
         @click="project.crawlerConfigDialog = true"
-        :icon="Operation"
-        :disabled="project.running"
+        :disabled="project.isAnyWorkerBusy"
         size="large"
       >
+        <i-tabler-settings class="action-btn-icon" />
         {{ t("menu.settings") }}
       </el-button>
       <el-button
         size="large"
         type="danger"
-        :icon="Delete"
-        :disabled="project.running"
         plain
+        :disabled="project.isAnyWorkerBusy"
         @click="deleteData"
       >
+        <i-tabler-trash class="action-btn-icon" />
         {{ t("crawler.clear") }}
       </el-button>
     </div>
@@ -47,8 +47,11 @@
     v-model="project.crawlerConfigDialog"
   >
     <el-tabs stretch v-model="activeTab" class="demo-tabs">
-      <el-tab-pane :label="t('menu.crawling')" name="crawler">
+      <el-tab-pane :label="t('menu.crawlingSettings')" name="crawler">
         <CrawlerConfig />
+      </el-tab-pane>
+      <el-tab-pane :label="t('crawler.rendering')" name="rendering">
+        <RenderingConfig />
       </el-tab-pane>
       <el-tab-pane :label="t('crawler.parser')" name="parser">
         <ParserConfig />
@@ -60,10 +63,10 @@
 <script setup>
 import { ref, markRaw } from "vue";
 import { useI18n } from "vue-i18n";
-import { Delete, Operation } from "@element-plus/icons-vue";
 import { ElMessageBox } from "element-plus";
 import { useProjectStore } from "../../stores/project";
 import CrawlerConfig from "./CrawlerConfig.vue";
+import RenderingConfig from "./RenderingConfig.vue";
 import ParserConfig from "./ParserConfig.vue";
 
 const { t } = useI18n();
@@ -82,7 +85,7 @@ function deleteData() {
       type: "error",
       icon: markRaw(Delete),
       customClass: "delete-msgbox-class",
-    }
+    },
   )
     .then(() => {
       project.deleteData();
@@ -106,6 +109,15 @@ function deleteData() {
 .progress-menu {
   width: 320px;
 }
+
+.action-btn-icon {
+  font-size: 20px;
+  width: 1em !important;
+  height: 1em !important;
+  margin-right: 8px;
+  flex-shrink: 0;
+  vertical-align: text-bottom;
+}
 .el-statistic__head {
   margin-bottom: 0;
 }
@@ -118,72 +130,5 @@ function deleteData() {
 .delete-msgbox-class {
   min-width: 50%;
   padding: 30px;
-}
-
-/* Стили для табов в темной теме */
-html.dark .el-tabs__header {
-  border-bottom-color: #374151 !important;
-}
-
-html.dark .el-tabs__nav-wrap::after {
-  background-color: #374151 !important;
-}
-
-html.dark .el-tabs__item {
-  color: #6b7280 !important;
-  border-bottom: 2px solid transparent !important;
-}
-
-html.dark .el-tabs__item:hover {
-  color: #9ca3af !important;
-}
-
-html.dark .el-tabs__item.is-active {
-  color: #e5e7eb !important;
-  border-bottom-color: #e5e7eb !important;
-}
-
-html.dark .el-tabs__active-bar {
-  background-color: #e5e7eb !important;
-}
-
-html.dark .el-tabs__content {
-  background-color: transparent !important;
-}
-
-html.dark .el-tab-pane {
-  color: #d1d5db !important;
-}
-
-/* Стили для кнопки "Очистить" в темной теме - менее контрастная */
-html.dark .el-button--danger.is-plain {
-  background-color: #374151 !important;
-  border-color: #d4a5a5 !important; /* Цвет #d4a5a5 для обводки */
-  color: #d4a5a5 !important; /* Цвет #d4a5a5 для текста */
-}
-
-html.dark .el-button--danger.is-plain:hover {
-  background-color: #4b5563 !important;
-  border-color: #d4a5a5 !important; /* Тот же цвет при наведении */
-  color: #d4a5a5 !important; /* Тот же цвет при наведении */
-}
-
-html.dark .el-button--danger.is-plain:active {
-  background-color: #374151 !important;
-  border-color: #d4a5a5 !important;
-  color: #d4a5a5 !important;
-}
-
-/* Цвет иконки в кнопке "Очистить" в темной теме */
-html.dark .el-button--danger.is-plain .el-icon {
-  color: #d4a5a5 !important;
-}
-
-html.dark .el-button--danger.is-plain:hover .el-icon {
-  color: #d4a5a5 !important;
-}
-
-html.dark .el-button--danger.is-plain:active .el-icon {
-  color: #d4a5a5 !important;
 }
 </style>

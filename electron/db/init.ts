@@ -3,13 +3,11 @@ import fs from 'fs';
 import Database from 'better-sqlite3';
 import { getDatabasePath } from '../db-path.js';
 import { initSchema } from './schema.js';
+import { applyMigrations } from './migrations.js';
 
 export type DbInitResult = {
   db: Database.Database;
   dbPath: string;
-  typingLabelColumn: string;
-  typingTextColumn: string;
-  typingDateColumn: string | null;
 };
 
 export function createDatabase(opts: { isDev: boolean }): DbInitResult {
@@ -25,7 +23,7 @@ export function createDatabase(opts: { isDev: boolean }): DbInitResult {
   }
 
   // Expose path to other modules/processes
-  process.env.QUANTBOT_DB_DIR = dbDir;
+  process.env.PAGEVIEWER_DB_DIR = dbDir;
   process.env.DB_PATH = dbPath;
 
   // Write a small log file to help debugging
@@ -49,17 +47,11 @@ export function createDatabase(opts: { isDev: boolean }): DbInitResult {
   db.pragma('temp_store = MEMORY');
 
   // Initialize schema and capture detected compatibility columns
-  const {
-    typingLabelColumn,
-    typingTextColumn,
-    typingDateColumn,
-  } = initSchema(db);
+  initSchema(db);
+  applyMigrations(db);
 
   return {
     db,
     dbPath,
-    typingLabelColumn,
-    typingTextColumn,
-    typingDateColumn,
   };
 }

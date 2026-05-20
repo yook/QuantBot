@@ -1,9 +1,19 @@
 import { ipcMain } from 'electron';
 import type { IpcContext } from './types';
 import newProjectDefaults from '../../src/stores/schema/new-project.json' assert { type: 'json' };
+import { FREE_PLAN_LIMITS, isFreePlan } from '../../src/config/plan-limits.js';
+import { clampCrawlerConfigForPlan } from '../../src/utils/plan-limit-normalizers.js';
 
 export function registerProjectsIpc(ctx: IpcContext) {
   const { db, getWindow } = ctx;
+  const hasFreezedColumn = (() => {
+    try {
+      const cols: any[] = db.prepare("PRAGMA table_info('projects')").all();
+      return (cols || []).some((c: any) => String(c?.name || '') === 'freezed');
+    } catch (_e) {
+      return false;
+    }
+  })();
 
   ipcMain.handle('db:projects:getAll', async () => {
     try {
@@ -34,6 +44,7 @@ export function registerProjectsIpc(ctx: IpcContext) {
       const parser = Array.isArray(parserFromDb) && parserFromDb.length > 0 ? parserFromDb : newProjectDefaults.parser;
       const data = {
         ...row,
+        freezed: !!row.freezed,
         crawler,
         parser,
         columns: parseJson(row.ui_columns, newProjectDefaults.columns || {}),
@@ -47,6 +58,17 @@ export function registerProjectsIpc(ctx: IpcContext) {
 
   ipcMain.handle('db:projects:insert', async (_event, name, url) => {
     try {
+      if (isFreePlan()) {
+        const totalProjects = db.prepare('SELECT COUNT(*) as count FROM projects').get() as any;
+        const count = Number(totalProjects?.count || 0);
+        if (count >= FREE_PLAN_LIMITS.projects) {
+          return {
+            success: false,
+            code: 'FREE_PROJECTS_LIMIT',
+            error: 'В бесплатной версии можно создать до 3 проектов. В Pro-версии нет ограничений по количеству проектов.',
+          };
+        }
+      }
       const defaultCrawler = JSON.stringify(newProjectDefaults.crawler || {});
       const defaultParser = JSON.stringify(newProjectDefaults.parser || []);
       const defaultStats = JSON.stringify(newProjectDefaults.stats || {});
@@ -69,18 +91,26 @@ export function registerProjectsIpc(ctx: IpcContext) {
     }
   });
 
-  ipcMain.handle('db:projects:updateConfigs', async (_event, id, crawler, parser, columns, stats) => {
+  ipcMain.handle('db:projects:updateConfigs', async (_event, id, crawler, parser, columns, stats, freezed) => {
     try {
       const pid = typeof id === 'number' ? id : Number(id);
       if (!pid || Number.isNaN(pid)) {
         return { success: false, error: 'Invalid project id' };
       }
-      const crawlerJson = JSON.stringify(crawler ?? {});
+      const safeCrawler = clampCrawlerConfigForPlan(crawler ?? {});
+      const crawlerJson = JSON.stringify(safeCrawler);
       const parserJson = JSON.stringify(Array.isArray(parser) ? parser : []);
       const columnsJson = JSON.stringify(columns ?? {});
       const statsJson = stats ? JSON.stringify(stats) : null;
-      const stmt = db.prepare('UPDATE projects SET crawler = ?, parser = ?, ui_columns = ?, stats = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?');
-      const result = stmt.run(crawlerJson, parserJson, columnsJson, statsJson, pid);
+      const freezedValue = freezed ? 1 : 0;
+      let result: any;
+      if (hasFreezedColumn) {
+        const stmt = db.prepare('UPDATE projects SET crawler = ?, parser = ?, ui_columns = ?, stats = ?, freezed = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?');
+        result = stmt.run(crawlerJson, parserJson, columnsJson, statsJson, freezedValue, pid);
+      } else {
+        const stmt = db.prepare('UPDATE projects SET crawler = ?, parser = ?, ui_columns = ?, stats = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?');
+        result = stmt.run(crawlerJson, parserJson, columnsJson, statsJson, pid);
+      }
       return { success: true, data: { changes: result.changes } };
     } catch (error: any) {
       return { success: false, error: error.message };
@@ -98,7 +128,7 @@ export function registerProjectsIpc(ctx: IpcContext) {
       try {
         stmtBegin.run();
         // Delete dependent rows in related tables
-        const childTables = ['urls', 'keywords', 'typing_samples', 'stop_words', 'embeddings_cache', 'disallowed', 'embeddings_cache'];
+        const childTables = ['urls', 'disallowed'];
         for (const table of childTables) {
           try {
             db.prepare(`DELETE FROM ${table} WHERE project_id = ?`).run(id);

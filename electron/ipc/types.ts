@@ -5,7 +5,4 @@ export type IpcContext = {
   db: Database.Database;
   getWindow: () => BrowserWindow | null;
   resolvedDbPath: string | null;
-  typingLabelColumn: string;
-  typingTextColumn: string;
-  typingDateColumn: string | null;
 };

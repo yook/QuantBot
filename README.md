@@ -1,4 +1,4 @@
-# QuantBot
+# PageViewer
 
 Инструмент для краулинга и анализа сайтов с использованием Vue 3, TypeScript и Electron.
 
@@ -19,12 +19,10 @@
 Ниже — краткое описание ключевых папок и файлов репозитория и их предназначение.
 
 - `electron/` — код основного процесса Electron (TypeScript). Создаёт окно, инициализирует БД, регистрирует IPC-хэндлеры.
-
   - `electron/main.ts` — точка входа main-процесса. Вызывает инициализацию БД и регистрирует IPC через `electron/ipc`.
   - `electron/preload.ts` — preload-скрипт для безопасной связи renderer ⇄ main.
 
 - `electron/db/` — синхронные CommonJS-модули и фасад для работы с SQLite (better-sqlite3). Основная бизнес-логика доступа к БД вынесена сюда.
-
   - `electron/db/index.cjs` — центральный фасад: экспортирует `dbGet`, `dbAll`, `dbRun`, `dbPath` и группы по доменам: `keywords`, `stopwords`, `projects`, `embeddings`, `typing`, `categories`.
   - `electron/db/adapter.cjs` — низкоуровневый адаптер работы с SQLite (реализация `dbGet`, `dbAll`, `dbRun`, инициализация/PRAGMA и утилиты). На него зависят остальные модули из `electron/db` (keywords, stopwords, projects и т.д.).
   - `electron/db/keywords.cjs` — функции для CRUD и массовых операций с ключевыми словами.
@@ -128,7 +126,7 @@
 
 ### Скачивание
 
-Скачайте последнюю версию с [GitHub Releases](https://github.com/yook/QuantBot/releases).
+Скачайте последнюю версию с [GitHub Releases](https://github.com/yook/PageViewer/releases).
 
 ### macOS Gatekeeper
 
@@ -137,11 +135,11 @@
 1. Откройте Терминал
 2. Выполните команду:
    ```bash
-   xattr -rd com.apple.quarantine /Applications/QuantBot.app
+   xattr -rd com.apple.quarantine /Applications/PageViewer.app
    ```
 3. Или альтернативно:
    ```bash
-   codesign --force --deep --sign - /Applications/QuantBot.app
+   codesign --force --deep --sign - /Applications/PageViewer.app
    ```
 
 После этого приложение можно будет открыть нормально.
@@ -168,6 +166,35 @@ npm run build
 ./publish-release.sh [версия] [описание]
 ```
 
+### Windows build policy
+
+- В стандартном пайплайне собирается только `Windows x64 installer (nsis)`.
+- `Windows ia32` отключен.
+- `Windows portable` не собирается на каждый релиз автоматически и запускается отдельно вручную.
+
+### Как собрать Windows portable отдельно
+
+Локально:
+
+```bash
+cd /Users/yook/Documents/PW/app
+npm ci
+npm run build:win:portable
+```
+
+Артефакт появится в `release/<version>/`.
+
+Через GitHub Actions (ручной запуск):
+
+1. Откройте workflow `🪟 Build and Release QuantBot (Windows)`.
+2. Нажмите `Run workflow`.
+3. При необходимости укажите `tag` и `create_tag`.
+4. Workflow соберет portable-версию через `npm run build:win:portable:ci`.
+
 ## Автообновление
 
 Приложение автоматически проверяет обновления при запуске и скачивает их в фоне.
+
+## Иконки
+
+https://icon-sets.iconify.design/tabler/

@@ -1,20 +1,38 @@
 <script setup lang="ts">
-import { computed, onMounted, onBeforeUnmount } from "vue";
+import { computed, onMounted, onBeforeUnmount, ref, watch } from "vue";
 import { useProjectStore } from "./stores/project";
 import AppHeader from "./components/AppHeader.vue";
 import AppMenu from "./components/AppMenu.vue";
-import AppFooter from "./components/AppFooter.vue";
 import CrawlerPage from "./components/pages/CrawlerPage.vue";
-import KeywordsPage from "./components/pages/KeywordsPage.vue";
-import IntegrationsPage from "./components/pages/IntegrationsPage.vue";
+import ParsingPage from "./components/pages/ParsingPage.vue";
 import SettingsPage from "./components/pages/SettingsPage.vue";
 
+const SIDEBAR_COLLAPSE_STORAGE_KEY = "sidebarCollapsed";
+
 const project = useProjectStore();
+const isCollapse = ref(true);
+const sidebarWidth = computed(() => (isCollapse.value ? 60 : 220));
 
 // Initialize socket listeners once when app mounts
 onMounted(() => {
+  const savedSidebarState = localStorage.getItem(SIDEBAR_COLLAPSE_STORAGE_KEY);
+  if (savedSidebarState !== null) {
+    isCollapse.value = savedSidebarState === "true";
+    console.log(
+      "[App] Restored sidebar state:",
+      savedSidebarState === "true" ? "collapsed" : "expanded",
+    );
+  } else {
+    console.log("[App] No saved sidebar state, using default (collapsed)");
+  }
+
   console.log("App mounted - initializing socket listeners");
   project.socketOn();
+});
+
+watch(isCollapse, (value) => {
+  localStorage.setItem(SIDEBAR_COLLAPSE_STORAGE_KEY, String(value));
+  console.log("[App] Saved sidebar state:", value ? "collapsed" : "expanded");
 });
 
 // Cleanup on unmount (mainly for HMR in dev mode)
@@ -27,13 +45,9 @@ const currentPageComponent = computed(() => {
   switch (project.activePage) {
     case "1":
       return CrawlerPage;
-    case "2":
-      return KeywordsPage;
     case "3":
-      return null; // Virtual Table - not yet implemented
-    case "integrations":
-      return IntegrationsPage;
-    case "5":
+      return ParsingPage;
+    case "2":
       return SettingsPage;
     default:
       return CrawlerPage; // default to crawler
@@ -43,12 +57,15 @@ const currentPageComponent = computed(() => {
 
 <template>
   <!-- Absolute header -->
-  <AppHeader />
+  <AppHeader :sidebar-width="sidebarWidth" />
 
   <!-- Body under header: aside (left) + main content -->
   <el-container class="app-root app-body">
-    <el-aside width="65px" class="app-aside">
-      <AppMenu />
+    <el-aside :width="`${sidebarWidth}px`" class="app-aside">
+      <AppMenu
+        :is-collapse="isCollapse"
+        @toggle-collapse="isCollapse = !isCollapse"
+      />
     </el-aside>
     <el-container class="app-right is-vertical">
       <el-main class="app-content p-1">
@@ -57,7 +74,6 @@ const currentPageComponent = computed(() => {
           <el-empty description="Страница в разработке" />
         </div>
       </el-main>
-      <AppFooter />
     </el-container>
   </el-container>
 </template>
@@ -76,25 +92,22 @@ body,
 .app-root {
   height: 100vh;
   overflow: hidden;
+  min-height: 0;
 }
 
-/* leave space for absolute header (56px) */
+/* leave space for absolute header (48px) */
 .app-body {
-  /* Place body under absolute header and keep total height within viewport */
-  margin-top: 56px;
-  height: calc(100vh - 56px);
+  height: 100vh;
   overflow: hidden;
+  min-height: 0;
 }
 
 .app-aside {
-  border-right: 1px solid var(--el-border-color, #ebeef5);
-}
-
-.app-content {
-  position: relative;
-  flex: 1;
-  overflow: auto;
-  padding-bottom: 20px; /* keep content visible above fixed footer */
+  border-right: 1px solid var(--el-border-color);
+  overflow: hidden;
+  box-sizing: border-box;
+  transition: width 0.28s ease;
+  min-height: 0;
 }
 
 .app-right {
@@ -102,12 +115,17 @@ body,
   flex-direction: column;
   flex: 1 1 auto;
   height: 100%;
-  min-height: 0; /* allow children to shrink for internal scroll */
+  padding-top: 48px;
+  box-sizing: border-box;
+  min-height: 0;
 }
 
 .app-content {
   position: relative;
   flex: 1 1 auto;
-  min-height: 0; /* enable scrolling within flex child */
+  min-height: 0;
+  height: 100%;
+  overflow: auto;
+  padding-bottom: 20px; /* keep content visible above fixed footer */
 }
 </style>

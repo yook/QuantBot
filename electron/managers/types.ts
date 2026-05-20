@@ -7,15 +7,4 @@ export type BaseWorkerCtx = {
   resolvedDbPath: string | null;
 };
 
-export type CategorizationCtx = BaseWorkerCtx & {
-};
-
-export type TypingCtx = BaseWorkerCtx & {
-  typingLabelColumn: string;
-  typingTextColumn: string;
-  typingDateColumn: string | null;
-};
-
-export type ClusteringCtx = BaseWorkerCtx;
 export type CrawlerCtx = BaseWorkerCtx;
-export type MorphologyCtx = BaseWorkerCtx;

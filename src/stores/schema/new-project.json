@@ -14,11 +14,13 @@
     "depth3": 0,
     "depth5": 0,
     "depth6": 0,
-    "other": 0
+    "other": 0,
+    "finishedAt": ""
   },
   "crawler": {
     "maxDepth": 1,
     "maxConcurrency": 1,
+    "maxUrls": 0,
     "interval": 1000,
     "timeout": 10000,
     "parseScriptTags": true,
@@ -27,13 +29,19 @@
     "sortQueryParameters": true,
     "respectRobotsTxt": true,
     "scanSubdomains": false,
-    "userAgent": "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)"
+    "userAgent": "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)",
+    "restrictToStartPath": false,
+    "renderEnabled": false,
+    "renderMode": "chromium",
+    "renderTimeoutMs": 30000,
+    "renderMaxConcurrency": 1
   },
   "parser": [
     {
       "name": "Title",
       "prop": "title",
       "selector": "title",
+      "selectorType": "css",
       "find": "text",
       "attrClass": "",
       "getLength": false
@@ -42,6 +50,7 @@
       "name": "Title length",
       "prop": "titleLength",
       "selector": "title",
+      "selectorType": "css",
       "find": "text",
       "attrClass": "",
       "getLength": true
@@ -50,6 +59,7 @@
       "name": "H1",
       "prop": "h1",
       "selector": "h1",
+      "selectorType": "css",
       "find": "text",
       "attrClass": "",
       "getLength": false
@@ -58,6 +68,7 @@
       "name": "H1 quantity",
       "prop": "h1quantity",
       "selector": "h1",
+      "selectorType": "css",
       "find": "quantity",
       "attrClass": "",
       "getLength": false
@@ -66,6 +77,7 @@
       "name": "Description",
       "prop": "description",
       "selector": "meta[name=description]",
+      "selectorType": "css",
       "find": "attr",
       "attrClass": "content",
       "getLength": false
@@ -74,20 +86,44 @@
       "name": "Description length",
       "prop": "descriptionLength",
       "selector": "meta[name=description]",
+      "selectorType": "css",
       "find": "attr",
       "attrClass": "content",
       "getLength": true
     },
     {
+      "name": "Canonical",
+      "prop": "canonical",
+      "selector": "link[rel=canonical]",
+      "selectorType": "css",
+      "find": "attr",
+      "attrClass": "href",
+      "getLength": false
+    },
+    {
       "name": "Links quantity",
       "prop": "linksLength",
       "selector": "a[href]",
+      "selectorType": "css",
       "find": "quantity",
       "attrClass": "",
       "getLength": false
     }
   ],
   "columns": {
+    "parser": [
+      "url",
+      "code",
+      "status",
+      "title",
+      "titleLength",
+      "h1",
+      "h1quantity",
+      "description",
+      "descriptionLength",
+      "canonical",
+      "linksLength"
+    ],
     "html": [
       "url",
       "referrer",

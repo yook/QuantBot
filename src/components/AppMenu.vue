@@ -1,108 +1,150 @@
 <template>
   <div class="menu-container">
+    <div class="menu-top-actions" :class="{ 'is-collapsed': props.isCollapse }">
+      <el-button
+        class="sidebar-toggle-btn"
+        text
+        @click="emit('toggle-collapse')"
+      >
+        <i-tabler-layout-sidebar class="sidebar-toggle-icon" />
+      </el-button>
+    </div>
+
     <el-menu
-      :active-text-color="isDark ? '#ffd04b' : '#ffd04b'"
-      :background-color="isDark ? 'var(--el-bg-color)' : '#545c64'"
-      :text-color="isDark ? '#64748b' : '#fff'"
+      :collapse="props.isCollapse"
+      :collapse-transition="true"
       :default-active="project.activePage"
-      collapse
       class="el-menu"
+      @open="handleOpen"
+      @close="handleClose"
       @select="handleMenuSelect"
     >
       <el-menu-item index="1">
-        <!-- <el-icon><Cpu /></el-icon> -->
-        <el-icon><MagicStick /></el-icon>
-        <template #title>{{ $t("menu.crawling") }}</template>
+        <span class="menu-item-icon" aria-hidden="true">
+          <i-tabler-scan class="menu-icon" />
+        </span>
+        <template #title>
+          <span>{{ $t("menu.crawling") }}</span>
+        </template>
       </el-menu-item>
-
+      <el-menu-item index="3">
+        <span class="menu-item-icon" aria-hidden="true">
+          <i-tabler-brackets class="menu-icon" />
+        </span>
+        <template #title>
+          <span>{{ $t("menu.parsing") }}</span>
+        </template>
+      </el-menu-item>
       <el-menu-item index="2">
-        <el-icon><PriceTag /></el-icon>
-        <template #title>{{ $t("menu.keywords") }}</template>
-      </el-menu-item>
-      <!-- <el-menu-item index="3">
-        <el-icon><Grid /></el-icon>
-        <template #title>{{ $t("menu.virtualTable") }}</template>
-      </el-menu-item>
-      <el-menu-item index="4" disabled>
-        <el-icon><Document /></el-icon>
-        <template #title>Navigator Four</template>
-      </el-menu-item> -->
-      <el-menu-item index="5">
-        <el-icon><Setting /></el-icon>
-        <template #title>{{ $t("menu.settings") }}</template>
+        <span class="menu-item-icon" aria-hidden="true">
+          <i-tabler-settings class="menu-icon" />
+        </span>
+        <template #title>
+          <span>{{ $t("menu.settings") }}</span>
+        </template>
       </el-menu-item>
     </el-menu>
 
+    <div class="menu-version" :class="{ 'is-collapsed': props.isCollapse }">
+      <span class="menu-version-label">v{{ appVersion }}</span>
+      <el-button
+        v-if="updateReady"
+        class="menu-update-btn"
+        size="small"
+        type="primary"
+        @click="applyUpdate"
+      >
+        <i-tabler-refresh class="menu-update-icon" />
+        <span class="menu-update-text">Обновить</span>
+      </el-button>
+    </div>
     <!-- theme toggle moved to header -->
   </div>
 </template>
 
-<script setup>
-import { ref, onMounted, onUnmounted } from "vue";
-import {
-  Document,
-  Menu as IconMenu,
-  Location,
-  Cpu,
-  Setting,
-  MagicStick,
-  PriceTag,
-  Sunny,
-  Moon,
-  Grid,
-} from "@element-plus/icons-vue";
+<script setup lang="ts">
+import { onMounted, onUnmounted, ref } from "vue";
 import { useProjectStore } from "../stores/project";
+import pkg from "../../package.json";
+
+const props = defineProps<{ isCollapse: boolean }>();
+const emit = defineEmits<{ (e: "toggle-collapse"): void }>();
 
 const project = useProjectStore();
+const appVersion = pkg && (pkg as any).version ? (pkg as any).version : "0.0.0";
+const updateReady = ref(false);
+let autoUpdaterHandler: any = null;
 
-// Определение темной темы с реактивностью
-const isDark = ref(document.documentElement.classList.contains("dark"));
+const handleMenuSelect = (index: string) => {
+  project.activePage = index;
+  localStorage.setItem("activeMenuItem", index);
+};
 
-// Отслеживание изменений темы
-const observer = new MutationObserver(() => {
-  isDark.value = document.documentElement.classList.contains("dark");
-});
+const handleOpen = (key: string, keyPath: string[]) => {
+  console.log(key, keyPath);
+};
+
+const handleClose = (key: string, keyPath: string[]) => {
+  console.log(key, keyPath);
+};
+
+function applyUpdate() {
+  try {
+    const ipc = (window as any).ipcRenderer;
+    if (ipc && typeof ipc.send === "function") {
+      console.log("[Updater] click: quit-and-install");
+      ipc.send("auto-updater-quit-and-install");
+    }
+  } catch (_) {}
+}
 
 onMounted(() => {
-  // Инициализация темы из localStorage при загрузке
-  const savedTheme = localStorage.getItem("theme") || "light";
-  if (
-    savedTheme === "dark" &&
-    !document.documentElement.classList.contains("dark")
-  ) {
-    document.documentElement.classList.add("dark");
-  } else if (
-    savedTheme === "light" &&
-    document.documentElement.classList.contains("dark")
-  ) {
-    document.documentElement.classList.remove("dark");
-  }
-
-  // Обновляем реактивную переменную
-  isDark.value = document.documentElement.classList.contains("dark");
-
   // Восстанавливаем активный элемент меню из localStorage
   const savedMenuItem = localStorage.getItem("activeMenuItem");
-  if (savedMenuItem) {
+  if (savedMenuItem === "1" || savedMenuItem === "2" || savedMenuItem === "3") {
     project.activePage = savedMenuItem;
+  } else {
+    project.activePage = "1";
+    localStorage.setItem("activeMenuItem", "1");
   }
 
-  // Настраиваем наблюдатель за изменениями темы
-  observer.observe(document.documentElement, {
-    attributes: true,
-    attributeFilter: ["class"],
-  });
+  try {
+    const ipc = (window as any).ipcRenderer;
+    if (ipc && typeof ipc.on === "function") {
+      if (typeof ipc.invoke === "function") {
+        ipc
+          .invoke("auto-updater-status")
+          .then((status: any) => {
+            console.log("[Updater] status", status);
+            if (status && status.downloaded) {
+              updateReady.value = true;
+            }
+          })
+          .catch(() => {});
+      }
+      autoUpdaterHandler = (_event: any, payload: any) => {
+        if (!payload) return;
+        console.log("[Updater] event", payload);
+        if (payload.event === "update-not-available") {
+          updateReady.value = false;
+        }
+        if (payload.event === "update-downloaded") {
+          updateReady.value = true;
+        }
+      };
+      ipc.on("auto-updater", autoUpdaterHandler);
+    }
+  } catch (_) {}
 });
 
 onUnmounted(() => {
-  observer.disconnect();
+  try {
+    const ipc = (window as any).ipcRenderer;
+    if (ipc && autoUpdaterHandler && typeof ipc.off === "function") {
+      ipc.off("auto-updater", autoUpdaterHandler);
+    }
+  } catch (_) {}
 });
-
-const handleMenuSelect = (index) => {
-  project.activePage = index;
-  // Сохраняем выбранный элемент меню в localStorage
-  localStorage.setItem("activeMenuItem", index);
-};
 
 // theme toggling is handled in header component
 </script>
@@ -115,92 +157,139 @@ const handleMenuSelect = (index) => {
   overflow: hidden;
 }
 
+.menu-top-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  height: 48px;
+  padding: 0;
+  background-color: var(--el-bg-color);
+  box-sizing: border-box;
+}
+
+.menu-top-actions.is-collapsed {
+  justify-content: center;
+}
+
+.sidebar-toggle-btn {
+  color: var(--el-text-color-disabled) !important;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 48px;
+  height: 48px;
+  margin: 0;
+  margin-right: 6px;
+  padding: 0 !important;
+}
+
+.menu-top-actions.is-collapsed .sidebar-toggle-btn {
+  margin-right: 0;
+}
+
+.sidebar-toggle-icon {
+  font-size: 20px;
+  width: 1em !important;
+  height: 1em !important;
+  display: block;
+  color: inherit;
+  fill: currentColor;
+}
+
+.menu-icon {
+  font-size: 20px;
+  width: 1em !important;
+  height: 1em !important;
+  flex-shrink: 0;
+}
+
+.menu-item-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-right: 12px;
+  flex-shrink: 0;
+}
+
+.el-menu--collapse .el-menu-item {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.el-menu--collapse .el-menu-item .menu-item-icon {
+  margin-right: 0;
+}
+
+.el-menu--collapse .el-menu-item .menu-icon {
+  margin-right: 0;
+  margin-left: 0;
+}
+
 .el-menu {
-  border-right: 1px solid var(--el-border-color);
-  min-width: 65px;
+  border-right: none !important;
+  width: 100%;
+  min-width: 100%;
   flex: 1;
   display: flex;
   flex-direction: column;
   overflow: hidden;
 }
 
-/* Стили для темной темы */
-html.dark .el-menu {
-  border-right: 1px solid var(--el-border-color) !important;
+.menu-version {
+  margin-top: auto;
+  padding: 8px 12px;
+  background-color: var(--el-bg-color);
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 8px;
 }
 
-html.dark .el-menu-item {
-  color: #64748b !important;
+.menu-version.is-collapsed {
+  justify-content: flex-start;
+  padding-left: 12px;
+  padding-right: 12px;
+  flex-direction: row;
+  gap: 8px;
 }
 
-html.dark .el-menu-item:hover {
-  background-color: rgba(30, 41, 59, 0.3) !important;
-  color: #94a3b8 !important;
+.menu-version:not(.is-collapsed) .menu-update-btn {
+  margin-left: auto;
 }
 
-html.dark .el-menu-item.is-active {
-  background-color: transparent !important;
-  color: #ffd04b !important;
-  border-left: none !important;
-  box-shadow: none !important;
+.menu-version-label {
+  white-space: nowrap;
+  font-size: 11px;
+  line-height: 1;
 }
 
-html.dark .el-menu-item .el-icon {
-  color: #475569 !important;
+.menu-update-btn.el-button {
+  height: 20px;
+  padding: 0 10px;
+  font-size: 12px;
+  border-radius: 6px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
 }
 
-html.dark .el-menu-item:hover .el-icon {
-  color: #94a3b8 !important;
+.menu-update-icon {
+  font-size: 14px;
 }
 
-html.dark .el-menu-item.is-active .el-icon {
-  color: #ffd04b !important;
+.menu-version.is-collapsed .menu-update-btn {
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border-radius: 8px;
+  justify-content: center;
 }
 
-html.dark .el-menu-item.is-disabled {
-  color: var(--el-text-color-disabled) !important;
-}
-
-html.dark .el-menu-item.is-disabled .el-icon {
-  color: var(--el-text-color-disabled) !important;
-}
-
-/* Стили для подсказок (tooltips) меню в темной теме */
-html.dark .el-tooltip__popper {
-  background-color: #1f2937 !important;
-  border: 1px solid #374151 !important;
-}
-
-html.dark .el-tooltip__popper .el-tooltip__arrow::before {
-  background-color: #1f2937 !important;
-  border: 1px solid #374151 !important;
-}
-
-html.dark
-  .el-tooltip__popper[data-popper-placement^="right"]
-  .el-tooltip__arrow::before {
-  border-left-color: transparent !important;
-  border-top-color: transparent !important;
-}
-
-html.dark .el-tooltip__popper .el-popper__arrow {
-  border-right-color: #1f2937 !important;
-}
-
-html.dark .el-tooltip__popper {
-  color: #e5e7eb !important;
-}
-
-/* Оставляем черные подсказки для .el-popper.is-dark в темной теме */
-html.dark .el-popper.is-dark {
-  background-color: #303133 !important;
-  color: #e4e7ed !important;
-  border-color: #303133 !important;
-}
-
-html.dark .el-popper.is-dark .el-popper__arrow::before {
-  background-color: #303133 !important;
-  border-color: #303133 !important;
+.menu-version.is-collapsed .menu-update-text {
+  display: none;
 }
 
 /* Стили для переключателя темы вне меню */
@@ -211,15 +300,15 @@ html.dark .el-popper.is-dark .el-popper__arrow::before {
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  color: #fff;
-  border-right: 1px solid #545c64;
-  background-color: #545c64;
+  color: var(--el-text-color-regular);
+  border-right: 1px solid var(--el-border-color);
+  background-color: var(--el-bg-color);
   margin-top: auto;
   user-select: none;
 }
 
 .theme-toggle-standalone .el-icon {
-  color: #fff;
+  color: inherit;
   font-size: 18px;
   width: 18px;
   height: 18px;
@@ -230,7 +319,7 @@ html.dark .el-popper.is-dark .el-popper__arrow::before {
 }
 
 .theme-toggle-standalone:hover .el-icon {
-  color: #ffd04b;
+  color: var(--el-color-primary);
 }
 
 .theme-toggle-title {
@@ -261,27 +350,5 @@ html.dark .el-popper.is-dark .el-popper__arrow::before {
   opacity: 1;
   width: auto;
   margin-left: 0;
-}
-
-/* Стили для темной темы */
-html.dark .theme-toggle-standalone {
-  color: #64748b;
-  border-right: 1px solid var(--el-border-color);
-  background-color: var(--el-bg-color);
-}
-
-html.dark .theme-toggle-standalone .el-icon {
-  color: #64748b;
-  font-size: 18px;
-  width: 18px;
-  height: 18px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: color 0.3s ease;
-}
-
-html.dark .theme-toggle-standalone:hover .el-icon {
-  color: #ffd04b;
 }
 </style>
